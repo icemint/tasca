@@ -13,14 +13,14 @@ relay-tunnel-core = { path = "../relay-tunnel-core" }
 api-types = { path = "../api-types" }
 relay-types = { path = "../relay-types" }
 anyhow = "1.0"
-axum = { version = "0.8.4", features = ["macros", "multipart", "ws"] }
+axum = { version = "0.8.9", features = ["macros", "multipart", "ws"] }
 bytes = "1"
 futures = "0.3"
 futures-util = "0.3"
 http = "1"
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tokio-yamux = "0.3.17"
@@ -29,7 +29,7 @@ tracing = "0.1.43"
 axum-extra = { version = "0.10.3", features = ["typed-header"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 secrecy = "0.10.3"
 serde = { version = "1.0", features = ["derive"] }
