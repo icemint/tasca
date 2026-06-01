@@ -254,8 +254,8 @@ importers:
         specifier: ^15.16.0
         version: 15.18.0
       tailwind-merge:
-        specifier: ^2.2.0
-        version: 2.6.0
+        specifier: ^3.6.0
+        version: 3.6.0
       tailwind-scrollbar:
         specifier: ^3.1.0
         version: 3.1.0(tailwindcss@3.4.17)
@@ -402,8 +402,8 @@ importers:
         specifier: ^15.16.0
         version: 15.18.0
       tailwind-merge:
-        specifier: ^2.6.0
-        version: 2.6.0
+        specifier: ^3.6.0
+        version: 3.6.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -550,8 +550,8 @@ importers:
         specifier: ^4.14.0
         version: 4.14.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       tailwind-merge:
-        specifier: ^3.3.1
-        version: 3.3.1
+        specifier: ^3.6.0
+        version: 3.6.0
     devDependencies:
       '@types/react':
         specifier: ^18.2.43
@@ -818,8 +818,8 @@ importers:
         specifier: ^15.16.0
         version: 15.18.0
       tailwind-merge:
-        specifier: ^2.2.0
-        version: 2.6.0
+        specifier: ^3.6.0
+        version: 3.6.0
       tailwind-scrollbar:
         specifier: ^3.1.0
         version: 3.1.0(tailwindcss@3.4.17)
@@ -4634,11 +4634,8 @@ packages:
   tabbable@6.3.0:
     resolution: {integrity: sha512-EIHvdY5bPLuWForiR/AN2Bxngzpuwn1is4asboytXtpTgsArc+WmSJKVLlhdh71u7jFcryDqB2A8lQvj78MkyQ==}
 
-  tailwind-merge@2.6.0:
-    resolution: {integrity: sha512-P+Vu1qXfzediirmHOC3xKGAYeZtPcV9g76X+xg2FD4tYgR71ewMA35Y3sCz3zhiN/dwefRpJX0yBcgwi1fXNQA==}
-
-  tailwind-merge@3.3.1:
-    resolution: {integrity: sha512-gBXpgUm/3rp1lMZZrM/w7D8GKqshif0zAymAhbCyIt8KMe+0v9DQ7cdYLR4FHH/cKpdTXb+A/tKKU3eolfsI+g==}
+  tailwind-merge@3.6.0:
+    resolution: {integrity: sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==}
 
   tailwind-scrollbar@3.1.0:
     resolution: {integrity: sha512-pmrtDIZeHyu2idTejfV59SbaJyvp1VRjYxAjZBH0jnyrPRo6HL1kD5Glz8VPagasqr6oAx6M05+Tuw429Z8jxg==}
@@ -6479,7 +6476,7 @@ snapshots:
       lodash-es: 4.17.21
       lucide-react: 0.548.0(react@18.3.1)
       react: 18.3.1
-      tailwind-merge: 3.3.1
+      tailwind-merge: 3.6.0
       tailwindcss-animate: 1.0.7(tailwindcss@3.4.17)
       uuid: 13.0.0
     transitivePeerDependencies:
@@ -9316,9 +9313,7 @@ snapshots:
 
   tabbable@6.3.0: {}
 
-  tailwind-merge@2.6.0: {}
-
-  tailwind-merge@3.3.1: {}
+  tailwind-merge@3.6.0: {}
 
   tailwind-scrollbar@3.1.0(tailwindcss@3.4.17):
     dependencies:
