@@ -1,0 +1,134 @@
+/* ============================================================
+   TASCA — product mockups (board, routing ladder, PR widget)
+   Rendered in the brand language; used as marketing "product shots".
+   ============================================================ */
+
+/* ── App window frame ── */
+.app {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+  overflow: hidden;
+  box-shadow: 0 40px 120px -40px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.02);
+}
+.app-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 11px 16px; border-bottom: 1px solid var(--line);
+  background: var(--bg-sub);
+}
+.app-dots { display: flex; gap: 6px; }
+.app-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--surface-3); display: block; }
+.app-crumb { font-family: var(--f-mono); font-size: 12px; color: var(--fg-3); display: flex; align-items: center; gap: 7px; }
+.app-crumb .sep { color: var(--fg-faint); }
+.app-crumb b { color: var(--fg-2); font-weight: 500; }
+.app-bar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.app-tab { font-family: var(--f-mono); font-size: 11px; color: var(--fg-4); padding: 4px 9px; border-radius: 6px; }
+.app-tab.on { color: var(--fg); background: var(--surface-3); }
+
+/* ── Board ── */
+.board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); }
+.col { background: var(--surface); padding: 14px 12px; min-height: 320px; }
+.col-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 0 2px; }
+.col-head .name { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); white-space: nowrap; }
+.col-head .ct { font-family: var(--f-mono); font-size: 11px; color: var(--fg-4); margin-left: auto; }
+.col-line { height: 2px; border-radius: 2px; margin-bottom: 12px; }
+.cl-todo { background: var(--fg-faint); }
+.cl-prog { background: var(--signal); }
+.cl-review { background: var(--amber); }
+.cl-done { background: var(--green); }
+
+/* ── Kanban card ── */
+.kc {
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--r-md); padding: 11px 12px; margin-bottom: 10px;
+  transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.kc:hover { border-color: var(--line-3); transform: translateY(-1px); }
+.kc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.kc-id { font-family: var(--f-mono); font-size: 11px; color: var(--fg-4); white-space: nowrap; }
+.kc-title { font-size: 13.5px; line-height: 1.4; color: var(--fg); font-weight: 500; letter-spacing: -0.01em; }
+.kc-foot { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
+.kc-foot .spacer { margin-left: auto; }
+.kc-meta { font-family: var(--f-mono); font-size: 10.5px; color: var(--fg-4); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+
+/* tier dot inline (compact) */
+.tdot { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.tdot i { width: 6px; height: 6px; border-radius: 50%; }
+/* class-based variant (no inner <i>): dot inherits the tier color via currentColor */
+.tdot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.tdot i + ::before, .tdot:has(i)::before { display: none; }
+.tdot-basic  { color: var(--t-basic); }
+.tdot-low    { color: var(--t-low); }
+.tdot-medium { color: var(--t-medium); }
+.tdot-hard   { color: var(--t-hard); }
+.tdot-ultra  { color: var(--t-ultra); }
+/* human-initial avatar color variants (token-driven) */
+.av-violet { background: var(--violet); }
+.av-purple { background: var(--purple); }
+
+/* ── Routing ladder (tier table) ── */
+.ladder { border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; background: var(--surface); }
+.ladder-row { display: grid; grid-template-columns: 132px 1fr auto; gap: 18px; align-items: center;
+  padding: 18px 22px; border-bottom: 1px solid var(--line); transition: background var(--dur) var(--ease); }
+.ladder-row:last-child { border-bottom: none; }
+.ladder-row:hover { background: var(--surface-2); }
+.ladder-row .lr-desc { font-size: 14px; color: var(--fg-3); line-height: 1.5; }
+.ladder-row .lr-desc b { color: var(--fg-2); font-weight: 600; }
+.ladder-handlers { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 720px){
+  .ladder-row { grid-template-columns: 1fr; gap: 12px; padding: 18px; }
+  .ladder-handlers { justify-content: flex-start; }
+}
+.handler { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 11px;
+  padding: 4px 10px; border-radius: var(--r-tag); border: 1px solid var(--line-2); color: var(--fg-3); background: var(--surface-2); }
+.handler.local { color: var(--green); border-color: color-mix(in srgb, var(--green) 36%, transparent); }
+.handler.cloud { color: var(--signal-2); border-color: color-mix(in srgb, var(--signal) 40%, transparent); }
+.handler.human { color: var(--fg-2); }
+
+/* ── Routing flow diagram ── */
+.flow { display: grid; grid-template-columns: 1fr; gap: 0; }
+.flow-node {
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  padding: 14px 16px; position: relative;
+}
+.flow-node .fn-label { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-4); }
+.flow-node .fn-main { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+.flow-node .fn-title { font-size: 14px; color: var(--fg); font-weight: 500; }
+.flow-connect { height: 28px; width: 2px; margin: 0 auto; background: linear-gradient(var(--signal), transparent); position: relative; }
+.flow-connect::after { content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--signal); }
+
+/* ── PR widget ── */
+.pr-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.pr-head { padding: 16px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 11px; }
+.pr-git { width: 30px; height: 30px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); display: grid; place-items: center; color: var(--fg-2); flex: none; }
+.pr-git svg { width: 16px; height: 16px; }
+.pr-row { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+.pr-row:last-child { border-bottom: none; }
+.pr-num { font-family: var(--f-mono); font-size: 12px; color: var(--fg-4); }
+.pr-title { font-size: 14px; color: var(--fg); font-weight: 500; flex: 1; min-width: 0; }
+.pr-meta { font-family: var(--f-mono); font-size: 11px; color: var(--fg-4); }
+
+/* transition rules */
+.rules { display: flex; flex-direction: column; gap: 10px; }
+.rule { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.rule .from { font-family: var(--f-mono); font-size: 12px; color: var(--fg-3); }
+.rule .arrow { color: var(--fg-faint); flex: none; }
+.rule svg { width: 16px; height: 16px; }
+
+/* ── gradient signature panel (CTA / hero glow) ── */
+.glow-panel {
+  position: relative; border-radius: 20px; overflow: hidden;
+  background: var(--gradient-panel);
+  border: 1px solid var(--line-2);
+}
+
+/* code block */
+.code {
+  font-family: var(--f-mono); font-size: 13px; line-height: 1.7;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 16px 18px; color: var(--fg-2); overflow-x: auto;
+}
+.code .cm { color: var(--fg-4); }
+.code .pr { color: var(--green); }
+.code .tk { color: var(--signal-2); }

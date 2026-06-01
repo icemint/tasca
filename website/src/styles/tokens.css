@@ -245,6 +245,42 @@
   --ansi-bright-black:#6E7681; --ansi-bright-red:#FFA198; --ansi-bright-green:#56D364; --ansi-bright-yellow:#E3B341;
   --ansi-bright-blue:#79C0FF; --ansi-bright-magenta:#D2A8FF; --ansi-bright-cyan:#56D4DD; --ansi-bright-white:#FFFFFF;
 
+  /* ── SITE CONTRAST (marketing) ──────────────────────────────────────────
+        Ink on colored buttons, text/surfaces on the always-dark gradient
+        panels (home CTA / auth aside), brand mark, and the sticky header.
+        Theme-agnostic except --header-bg (overridden for light below). ──── */
+  --on-amber:   #1A1303;            /* ink on amber surfaces (btn-primary) */
+  --on-signal:  #04101F;            /* ink on signal surfaces (btn-signal) */
+  --selection-fg: #04080F;          /* text inside ::selection highlight   */
+  --avatar-fg:  #FFFFFF;            /* initials on colored avatar chips    */
+
+  /* On always-dark gradient panels (do not theme-flip) */
+  --on-dark:           #FFFFFF;
+  --on-dark-2:         rgba(255,255,255,0.82);
+  --on-dark-3:         rgba(255,255,255,0.66);
+  --on-dark-4:         rgba(255,255,255,0.50);
+  --on-dark-faint:     rgba(255,255,255,0.45);
+  --on-dark-line:      rgba(255,255,255,0.12);
+  --on-dark-line-2:    rgba(255,255,255,0.18);
+  --on-dark-surface:   rgba(255,255,255,0.06);
+  --on-dark-surface-2: rgba(255,255,255,0.04);
+  --on-dark-inset:     rgba(0,0,0,0.28);
+
+  /* Brand mark (logo) — fixed identity colors, theme-agnostic */
+  --brand-tile:        #0F1622;
+  --brand-tile-stroke: rgba(255,255,255,0.14);
+  --brand-bar-1:       var(--p-slate-500);   /* #5C6779 */
+  --brand-bar-2:       var(--p-blue-400);    /* #4D9CF6 */
+  --brand-bar-3:       var(--p-amber-400);   /* #FFC53D */
+
+  /* Sticky header scrim */
+  --header-bg: rgba(9,13,20,0.78);
+
+  /* Google sign-in button — brand-mandated white per Google identity guidelines */
+  --oauth-google-bg:       #FFFFFF;
+  --oauth-google-fg:       #1F1F1F;
+  --oauth-google-bg-hover: #EDEFF2;
+
   --fonts-display-loaded: 1; /* marker */
 }
 
@@ -278,6 +314,9 @@
   --red:    var(--p-red-600);
   --purple: var(--p-purple-700);
   --violet: var(--p-violet-700);
+
+  /* Sticky header scrim (light) */
+  --header-bg: rgba(255,255,255,0.80);
 
   --shadow-sm:  0 1px 2px rgba(15,23,42,0.06);
   --shadow-md:  0 4px 12px -2px rgba(15,23,42,0.10);

@@ -1,0 +1,125 @@
+/* ============================================================================
+   TASCA · Tailwind v4 @theme mapping
+   Mirrors tokens.css into Tailwind's theme namespace so utilities
+   (bg-*, text-*, border-*, rounded-*, font-*, shadow-*) generate from the
+   SAME custom properties. Import tokens.css first; light/dark is handled there
+   via :root / :root[data-theme="light"], so every utility is theme-reactive.
+
+   Usage (Astro / global.css):
+     @import "./tokens.css";
+     @import "tailwindcss";
+     @import "./tailwind-theme.css";
+   ============================================================================ */
+
+@theme {
+  /* ── Surfaces & lines (semantic, theme-reactive) ── */
+  --color-bg:         var(--bg);
+  --color-bg-sub:     var(--bg-sub);
+  --color-surface:    var(--surface);
+  --color-surface-2:  var(--surface-2);
+  --color-surface-3:  var(--surface-3);
+  --color-line:       var(--line);
+  --color-line-2:     var(--line-2);
+  --color-line-3:     var(--line-3);
+
+  /* ── Foreground ── */
+  --color-fg:         var(--fg);
+  --color-fg-2:       var(--fg-2);
+  --color-fg-3:       var(--fg-3);
+  --color-fg-4:       var(--fg-4);
+  --color-fg-faint:   var(--fg-faint);
+
+  /* ── Brand ── */
+  --color-signal:     var(--signal);
+  --color-signal-2:   var(--signal-2);
+  --color-signal-3:   var(--signal-3);
+  --color-amber:      var(--amber);
+  --color-amber-2:    var(--amber-2);
+
+  /* ── Status ── */
+  --color-green:      var(--green);
+  --color-red:        var(--red);
+  --color-purple:     var(--purple);
+  --color-violet:     var(--violet);
+
+  /* ── Complexity tiers ── */
+  --color-tier-basic:  var(--tier-basic);
+  --color-tier-low:    var(--tier-low);
+  --color-tier-medium: var(--tier-medium);
+  --color-tier-hard:   var(--tier-hard);
+  --color-tier-ultra:  var(--tier-ultra);
+
+  /* ── Review states ── */
+  --color-review-draft:    var(--review-draft);
+  --color-review-open:     var(--review-open);
+  --color-review-approved: var(--review-approved);
+  --color-review-changes:  var(--review-changes);
+  --color-review-merged:   var(--review-merged);
+
+  /* ── Execution states ── */
+  --color-exec-idle:    var(--exec-idle);
+  --color-exec-running: var(--exec-running);
+  --color-exec-pending: var(--exec-pending);
+  --color-exec-failed:  var(--exec-failed);
+  --color-exec-denied:  var(--exec-denied);
+
+  /* ── Diff & syntax ── */
+  --color-diff-add: var(--diff-add-fg);
+  --color-diff-del: var(--diff-del-fg);
+  --color-syntax-keyword:  var(--syntax-keyword);
+  --color-syntax-function: var(--syntax-function);
+  --color-syntax-constant: var(--syntax-constant);
+  --color-syntax-string:   var(--syntax-string);
+  --color-syntax-variable: var(--syntax-variable);
+  --color-syntax-comment:  var(--syntax-comment);
+  --color-syntax-type:     var(--syntax-type);
+
+  /* ── Typography ── */
+  --font-display: var(--font-display);
+  --font-sans:    var(--font-body);
+  --font-mono:    var(--font-mono);
+
+  --text-2xs: var(--fs-2xs);  --text-xs: var(--fs-xs);   --text-sm: var(--fs-sm);
+  --text-base: var(--fs-base); --text-md: var(--fs-md);  --text-lg: var(--fs-lg);
+  --text-xl: var(--fs-xl);    --text-2xl: var(--fs-2xl); --text-3xl: var(--fs-3xl);
+  --text-4xl: var(--fs-4xl);  --text-hero: var(--fs-hero);
+
+  --font-weight-regular: var(--weight-regular);
+  --font-weight-medium: var(--weight-medium);
+  --font-weight-semibold: var(--weight-semibold);
+  --font-weight-bold: var(--weight-bold);
+
+  --tracking-hero: var(--tracking-hero);
+  --tracking-tight: var(--tracking-tight);
+  --tracking-eyebrow: var(--tracking-eyebrow);
+
+  /* ── Radii ── */
+  --radius-xs:   var(--radius-xs);
+  --radius-tag:  var(--radius-tag);
+  --radius-sm:   var(--radius-sm);
+  --radius-md:   var(--radius-md);
+  --radius-lg:   var(--radius-lg);
+  --radius-card: var(--radius-card);
+  --radius-xl:   var(--radius-xl);
+  --radius-pill: var(--radius-pill);
+
+  /* ── Spacing (8-pt; Tailwind multiplies its --spacing base) ── */
+  --spacing: 4px;
+
+  /* ── Elevation ── */
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+
+  /* ── Z-index ── */
+  --z-index-sticky:    var(--z-sticky);
+  --z-index-scrim:     var(--z-scrim);
+  --z-index-drawer:    var(--z-drawer);
+  --z-index-popover:   var(--z-popover);
+  --z-index-toast:     var(--z-toast);
+
+  /* ── Motion ── */
+  --ease-standard: var(--ease);
+  --ease-emphasis: var(--ease-emphasis);
+}

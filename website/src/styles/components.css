@@ -1,0 +1,110 @@
+/* ============================================================================
+   TASCA COMPONENTS  ·  state-variant layer (spec §4)
+   Adds the missing states to existing components and defines new primitives.
+   Every value resolves from tokens.css. Load AFTER tasca.css + tokens.css.
+   States: default · hover · focus-visible · active · disabled · loading · error · selected
+   ============================================================================ */
+
+/* ── Skip link (a11y) ───────────────────────────────────────────────────── */
+.skip-link {
+  position: fixed; top: 10px; left: 10px; z-index: var(--z-toast);
+  background: var(--signal); color: #04101F; font-family: var(--font-body);
+  font-weight: 600; font-size: 14px; padding: 10px 16px; border-radius: var(--radius-sm);
+  transform: translateY(-150%); transition: transform var(--dur) var(--ease);
+}
+.skip-link:focus { transform: none; outline: none; box-shadow: var(--focus-ring); }
+
+/* ── Standardized focus ring on every interactive element ───────────────── */
+.btn:focus-visible, .chip:focus-visible, .icon-btn:focus-visible,
+.c-check:focus-within, .c-select:focus-within, .oauth-btn:focus-visible,
+.input:focus-visible, a.link:focus-visible, .tier:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Spinner ────────────────────────────────────────────────────────────── */
+@keyframes c-spin { to { transform: rotate(360deg); } }
+.spinner { width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor; animation: c-spin 0.7s linear infinite; }
+@media (prefers-reduced-motion: reduce){ .spinner { animation-duration: 1.4s; } }
+
+/* ── BUTTON states (augments .btn from tasca.css) ───────────────────────── */
+.btn { position: relative; }
+.btn:active { transform: translateY(1px); }
+.btn[disabled], .btn.is-disabled { opacity: var(--op-disabled); pointer-events: none; transform: none; }
+.btn.is-loading { color: transparent !important; pointer-events: none; }
+.btn.is-loading::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid rgba(0,0,0,0.25); border-top-color: rgba(0,0,0,0.7); animation: c-spin 0.7s linear infinite;
+}
+.btn-signal.is-loading::after, .btn-outline.is-loading::after { border-color: color-mix(in srgb, var(--fg) 25%, transparent); border-top-color: var(--fg); }
+.btn-danger { background: var(--red); color: #1A0606; }
+.btn-danger:hover { background: color-mix(in srgb, var(--red) 84%, white); transform: translateY(-1px); }
+
+/* ── INPUT states (augments .input) ─────────────────────────────────────── */
+.input:disabled, .input.is-disabled { opacity: var(--op-disabled); cursor: not-allowed; }
+.input.is-error, .input[aria-invalid="true"] { border-color: var(--red); }
+.input.is-error:focus, .input[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 22%, transparent); }
+.input.is-success { border-color: var(--green); }
+.field-msg { font-size: 12.5px; margin-top: 6px; line-height: 1.4; }
+.field-msg.error { color: var(--red); }
+.field-msg.hint  { color: var(--fg-4); }
+.field-wrap { position: relative; }
+.field-wrap .field-spin { position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--fg-4); }
+
+/* ── CHECKBOX (new) ─────────────────────────────────────────────────────── */
+.c-check { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; color: var(--fg-2); user-select: none; border-radius: var(--radius-sm); }
+.c-check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.c-check__box { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--line-3); background: var(--surface-2);
+  display: grid; place-items: center; flex: none; transition: background var(--dur), border-color var(--dur); color: #04140C; }
+.c-check__box svg { width: 12px; height: 12px; opacity: 0; transition: opacity var(--dur); }
+.c-check input:checked + .c-check__box { background: var(--signal); border-color: var(--signal); }
+.c-check input:checked + .c-check__box svg { opacity: 1; }
+.c-check input:indeterminate + .c-check__box { background: var(--signal); border-color: var(--signal); }
+.c-check input:indeterminate + .c-check__box::after { content: ""; width: 9px; height: 2px; border-radius: 1px; background: #04140C; }
+.c-check input:indeterminate + .c-check__box svg { opacity: 0; }
+.c-check.is-disabled { opacity: var(--op-disabled); cursor: not-allowed; }
+
+/* ── SELECT (new) ───────────────────────────────────────────────────────── */
+.c-select { position: relative; display: inline-flex; align-items: center; }
+.c-select select { appearance: none; -webkit-appearance: none; background: var(--surface-2); border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm); color: var(--fg); font-family: var(--font-body); font-size: 14px; padding: 9px 34px 9px 12px; width: 100%; cursor: pointer; transition: border-color var(--dur); }
+.c-select select:hover { border-color: var(--line-3); }
+.c-select select:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--signal); }
+.c-select select:disabled { opacity: var(--op-disabled); cursor: not-allowed; }
+.c-select::after { content: ""; position: absolute; right: 13px; top: 50%; width: 8px; height: 8px; border-right: 2px solid var(--fg-4); border-bottom: 2px solid var(--fg-4); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+
+/* ── CARD variants ──────────────────────────────────────────────────────── */
+.card.is-interactive { cursor: pointer; }
+.card.is-interactive:hover { border-color: var(--line-3); transform: translateY(-2px); }
+.card.is-interactive:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.card.is-selected { border-color: var(--signal); box-shadow: 0 0 0 1px var(--signal) inset; }
+.card.is-disabled { opacity: var(--op-disabled); pointer-events: none; }
+
+/* ── DIFF lines ─────────────────────────────────────────────────────────── */
+.diff { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); }
+.diff-line { display: grid; grid-template-columns: 38px 1fr; }
+.diff-line .gutter { color: var(--diff-gutter); text-align: right; padding: 0 10px; user-select: none; opacity: 0.7; }
+.diff-line .code { padding: 0 12px; white-space: pre; }
+.diff-line.add { background: var(--diff-add-bg); box-shadow: inset 2px 0 var(--diff-add-line); }
+.diff-line.add .code { color: var(--diff-add-fg); }
+.diff-line.del { background: var(--diff-del-bg); box-shadow: inset 2px 0 var(--diff-del-line); }
+.diff-line.del .code { color: var(--diff-del-fg); }
+.diff-line.ctx .code { color: var(--fg-3); }
+
+/* ── SYNTAX roles ───────────────────────────────────────────────────────── */
+.tok-keyword{color:var(--syntax-keyword);} .tok-function{color:var(--syntax-function);}
+.tok-constant{color:var(--syntax-constant);} .tok-string{color:var(--syntax-string);}
+.tok-variable{color:var(--syntax-variable);} .tok-comment{color:var(--syntax-comment);}
+.tok-number{color:var(--syntax-number);} .tok-type{color:var(--syntax-type);}
+.tok-punctuation{color:var(--syntax-punctuation);}
+
+/* ── ANSI roles ─────────────────────────────────────────────────────────── */
+.ansi-black{color:var(--ansi-black);} .ansi-red{color:var(--ansi-red);} .ansi-green{color:var(--ansi-green);}
+.ansi-yellow{color:var(--ansi-yellow);} .ansi-blue{color:var(--ansi-blue);} .ansi-magenta{color:var(--ansi-magenta);}
+.ansi-cyan{color:var(--ansi-cyan);} .ansi-white{color:var(--ansi-white);}
+.ansi-bright-black{color:var(--ansi-bright-black);} .ansi-bright-red{color:var(--ansi-bright-red);}
+.ansi-bright-green{color:var(--ansi-bright-green);} .ansi-bright-yellow{color:var(--ansi-bright-yellow);}
+.ansi-bright-blue{color:var(--ansi-bright-blue);} .ansi-bright-magenta{color:var(--ansi-bright-magenta);}
+.ansi-bright-cyan{color:var(--ansi-bright-cyan);} .ansi-bright-white{color:var(--ansi-bright-white);}

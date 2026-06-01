@@ -1,0 +1,91 @@
+---
+import Base from '../layouts/Base.astro';
+import BrandMark from '../components/BrandMark.astro';
+import { appSignInUrl } from '../config';
+---
+<Base title="Sign in — Tasca" description="Sign in to Tasca." chrome={false}>
+  <div class="auth-stage">
+    <!-- ENTRY (hands off to the app SPA, which owns OAuth + the SPAKE2 handoff) -->
+    <main id="main" class="auth-main">
+      <div class="auth-top">
+        <BrandMark />
+      </div>
+
+      <div class="auth-card">
+        <h1>Sign in to Tasca</h1>
+        <p class="sub">Continue with your provider — we'll take you into the app.</p>
+
+        <div class="auth-oauth">
+          <a class="oauth-btn oauth-github" href={appSignInUrl('github')}>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+            Continue with GitHub
+          </a>
+          <a class="oauth-btn oauth-google" href={appSignInUrl('google')}>
+            <!-- Google "G" — brand-mandated colors per Google identity guidelines -->
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            Continue with Google
+          </a>
+        </div>
+
+        <p class="auth-newacct">New to Tasca? <a href="/docs#get-started">Create an organization</a></p>
+      </div>
+
+      <div class="auth-foot">
+        By continuing you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
+      </div>
+    </main>
+
+    <!-- BRAND PANEL (always-dark gradient → on-dark tokens) -->
+    <aside class="auth-aside">
+      <p class="quote">Humans and AI agents, working the <span class="hl">same board</span> — routed to whoever can finish the work.</p>
+      <div class="mini-board">
+        <div class="mini-kc">
+          <span class="av-agent local">Q</span>
+          <span class="mt">Inject Ollama base_url env</span>
+          <span class="tier tier-low"><span class="dot"></span>Low</span>
+        </div>
+        <div class="mini-kc">
+          <span class="av-agent">C</span>
+          <span class="mt">Per-tier validation gate</span>
+          <span class="tier tier-hard"><span class="dot"></span>Hard</span>
+        </div>
+        <div class="mini-kc">
+          <span class="av av-violet">DM</span>
+          <span class="mt">Rate-limit login route</span>
+          <span class="status-badge sb-approved">Approved</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+</Base>
+
+<style is:global>
+  .auth-stage { min-height: 100vh; display: grid; grid-template-columns: 1.05fr 0.95fr; }
+  @media (max-width: 900px){ .auth-stage { grid-template-columns: 1fr; } .auth-aside { display: none; } }
+
+  .auth-main { display: flex; flex-direction: column; padding: 28px 32px; position: relative; }
+  .auth-main::before { content: ""; position: absolute; top: -160px; left: -120px; width: 520px; height: 420px;
+    pointer-events: none; background: radial-gradient(closest-side, var(--signal-glow), transparent 70%); }
+  .auth-top { position: relative; }
+  .auth-card { margin: auto; width: 100%; max-width: 380px; position: relative; padding: 24px 0; }
+  .auth-card h1 { font-size: 30px; letter-spacing: -0.025em; }
+  .auth-card .sub { color: var(--fg-3); margin-top: 10px; font-size: 15px; }
+  .auth-oauth { margin-top: 28px; display: flex; flex-direction: column; gap: 10px; }
+  .auth-newacct { margin-top: 24px; text-align: center; font-size: 14px; color: var(--fg-3); }
+  .auth-newacct a { color: var(--signal-2); font-weight: 500; }
+  .auth-newacct a:hover { text-decoration: underline; }
+  .auth-foot { position: relative; font-size: 13px; color: var(--fg-4); padding-top: 18px; }
+  .auth-foot a { color: var(--fg-3); }
+  .auth-foot a:hover { color: var(--fg-2); text-decoration: underline; }
+
+  /* right: always-dark brand panel */
+  .auth-aside { position: relative; overflow: hidden; background: var(--gradient-aside);
+    border-left: 1px solid var(--line-2); display: flex; flex-direction: column; justify-content: center; padding: 56px; }
+  .auth-aside .quote { font-family: var(--f-display); font-size: 27px; font-weight: 500; line-height: 1.3;
+    letter-spacing: -0.02em; color: var(--on-dark); max-width: 420px; }
+  .auth-aside .quote .hl { color: var(--amber); }
+  .auth-aside .mini-board { margin-top: 40px; display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+  .mini-kc { background: var(--on-dark-surface-2); border: 1px solid var(--on-dark-line); border-radius: var(--r-md);
+    padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+  .mini-kc .mt { font-size: 13.5px; color: var(--on-dark-2); font-weight: 500; flex: 1; min-width: 0; }
+</style>

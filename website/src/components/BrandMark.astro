@@ -1,0 +1,22 @@
+---
+// Tasca logo mark — three bars (slate / signal / amber) on a dark identity tile.
+// Colors are brand tokens (theme-agnostic), never hardcoded hex.
+interface Props {
+  /** pixel size of the square mark */
+  size?: number;
+  /** word-mark next to the mark */
+  word?: boolean;
+}
+const { size = 26, word = true } = Astro.props;
+---
+<a class="brand" href="/" aria-label="Tasca home">
+  <svg class="brand-mark" width={size} height={size} viewBox="0 0 26 26" fill="none" aria-hidden="true">
+    <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="var(--brand-tile)" stroke="var(--brand-tile-stroke)" />
+    <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="var(--brand-bar-1)" />
+    <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="var(--brand-bar-2)" />
+    <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="var(--brand-bar-3)" />
+  </svg>
+  {word && (
+    <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+  )}
+</a>

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Components — Tasca</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/components.css">
+<style>
+.ref-top { position: sticky; top: 0; z-index: 100; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+.ref-nav { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.theme-toggle { display: flex; gap: 3px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.theme-toggle button { font-family: var(--font-mono); font-size: 12px; padding: 6px 14px; border-radius: 6px; color: var(--fg-3); }
+.theme-toggle button.on { background: var(--surface-3); color: var(--fg); }
+.ref-wrap { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+.ref-head { padding: 52px 0 8px; }
+.ref-head h1 { font-size: clamp(32px,5vw,46px); letter-spacing: -0.03em; }
+.ref-head .lead { margin-top: 14px; max-width: 600px; }
+.ref-sec { padding: 44px 0; border-top: 1px solid var(--line); }
+.ref-eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--signal); }
+.ref-sec h2 { font-size: 23px; letter-spacing: -0.02em; margin-top: 10px; }
+.ref-sec .desc { color: var(--fg-3); margin-top: 8px; font-size: 14.5px; max-width: 620px; }
+
+/* state matrix */
+.matrix2 { display: grid; grid-template-columns: 120px repeat(5, 1fr); gap: 14px 16px; align-items: center; margin-top: 26px; }
+.matrix2 .colh, .matrix2 .rowh { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-4); }
+.matrix2 .rowh { text-transform: none; color: var(--fg-3); font-size: 12px; }
+.matrix2 .cell { display: flex; align-items: center; justify-content: flex-start; }
+@media (max-width: 820px){ .matrix2 { grid-template-columns: 1fr; } .matrix2 .colh { display: none; } .matrix2 .rowh { margin-top: 12px; } }
+
+.swrow { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 22px; }
+.lab { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); margin-bottom: 10px; }
+.grp { margin-top: 26px; }
+.note { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-4); margin-top: 16px; }
+.fieldbox { max-width: 320px; }
+.swatch-line { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.sw2 { font-family: var(--font-mono); font-size: 11px; padding: 7px 11px; border-radius: var(--radius-tag); border: 1px solid var(--line); background: var(--surface); }
+</style>
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to content</a>
+<header class="ref-top">
+  <div class="ref-wrap ref-nav">
+    <a class="brand" href="index.html" aria-label="Tasca home">
+      <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+        <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+        <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+        <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+      </svg>
+      <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+    </a>
+    <div class="theme-toggle" id="theme-toggle">
+      <button data-theme-set="dark" class="on">Dark</button>
+      <button data-theme-set="light">Light</button>
+    </div>
+  </div>
+</header>
+
+<main class="ref-wrap" id="main">
+  <div class="ref-head">
+    <h1>Components</h1>
+    <p class="lead">The §4 standard: every interactive component, every state. Hover and press are live — tab through to see the standardized focus ring. Toggle the theme to verify states in light and dark.</p>
+  </div>
+
+  <!-- BUTTONS -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Controls</span>
+    <h2>Button</h2>
+    <p class="desc">Five variants. Focus shows a 2px ring offset by the surface; press drops 1px; loading swaps the label for a spinner and blocks input.</p>
+    <div class="matrix2">
+      <span class="colh"></span><span class="colh">Default</span><span class="colh">Focus</span><span class="colh">Disabled</span><span class="colh">Loading</span><span class="colh">Selected</span>
+
+      <span class="rowh">Primary</span>
+      <span class="cell"><button class="btn btn-primary btn-sm">Get started</button></span>
+      <span class="cell"><button class="btn btn-primary btn-sm" style="box-shadow:var(--focus-ring)">Get started</button></span>
+      <span class="cell"><button class="btn btn-primary btn-sm" disabled>Get started</button></span>
+      <span class="cell"><button class="btn btn-primary btn-sm is-loading">Get started</button></span>
+      <span class="cell"><button class="btn btn-primary btn-sm" style="box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--amber)">Get started</button></span>
+
+      <span class="rowh">Signal</span>
+      <span class="cell"><button class="btn btn-signal btn-sm">Assign</button></span>
+      <span class="cell"><button class="btn btn-signal btn-sm" style="box-shadow:var(--focus-ring)">Assign</button></span>
+      <span class="cell"><button class="btn btn-signal btn-sm" disabled>Assign</button></span>
+      <span class="cell"><button class="btn btn-signal btn-sm is-loading">Assign</button></span>
+      <span class="cell"><span class="note" style="margin:0">n/a</span></span>
+
+      <span class="rowh">Outline</span>
+      <span class="cell"><button class="btn btn-outline btn-sm">Read docs</button></span>
+      <span class="cell"><button class="btn btn-outline btn-sm" style="box-shadow:var(--focus-ring)">Read docs</button></span>
+      <span class="cell"><button class="btn btn-outline btn-sm" disabled>Read docs</button></span>
+      <span class="cell"><button class="btn btn-outline btn-sm is-loading">Read docs</button></span>
+      <span class="cell"><button class="btn btn-outline btn-sm is-selected" style="border-color:var(--signal);color:var(--signal-2)">Read docs</button></span>
+
+      <span class="rowh">Ghost</span>
+      <span class="cell"><button class="btn btn-ghost2 btn-sm">Dismiss</button></span>
+      <span class="cell"><button class="btn btn-ghost2 btn-sm" style="box-shadow:var(--focus-ring)">Dismiss</button></span>
+      <span class="cell"><button class="btn btn-ghost2 btn-sm" disabled>Dismiss</button></span>
+      <span class="cell"><span class="note" style="margin:0">n/a</span></span>
+      <span class="cell"><span class="note" style="margin:0">n/a</span></span>
+
+      <span class="rowh">Danger</span>
+      <span class="cell"><button class="btn btn-danger btn-sm">Delete org</button></span>
+      <span class="cell"><button class="btn btn-danger btn-sm" style="box-shadow:var(--focus-ring)">Delete org</button></span>
+      <span class="cell"><button class="btn btn-danger btn-sm" disabled>Delete org</button></span>
+      <span class="cell"><button class="btn btn-danger btn-sm is-loading">Delete org</button></span>
+      <span class="cell"><span class="note" style="margin:0">n/a</span></span>
+    </div>
+  </section>
+
+  <!-- INPUT -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Controls</span>
+    <h2>Input</h2>
+    <p class="desc">Default, focus, error (with <span class="mono" style="color:var(--fg-2)">aria-invalid</span> + message), success, disabled, and an inline loading spinner.</p>
+    <div class="swrow" style="align-items:flex-start">
+      <div class="fieldbox"><div class="lab">default / focus (tab in)</div><input class="input" type="text" placeholder="you@company.com"></div>
+      <div class="fieldbox"><div class="lab">error</div><input class="input is-error" type="text" value="not-an-email" aria-invalid="true"><div class="field-msg error">That email address doesn’t look right.</div></div>
+      <div class="fieldbox"><div class="lab">success</div><input class="input is-success" type="text" value="you@company.com"><div class="field-msg hint">Looks good.</div></div>
+    </div>
+    <div class="swrow" style="align-items:flex-start">
+      <div class="fieldbox"><div class="lab">disabled</div><input class="input" type="text" value="sso-managed@corp.com" disabled></div>
+      <div class="fieldbox"><div class="lab">loading</div><div class="field-wrap"><input class="input" type="text" value="validating key…" style="padding-right:38px"><span class="field-spin"><span class="spinner"></span></span></div></div>
+    </div>
+  </section>
+
+  <!-- CHECKBOX + SELECT -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Controls</span>
+    <h2>Checkbox &amp; Select</h2>
+    <div class="grp">
+      <div class="lab">checkbox — unchecked / checked / indeterminate / disabled</div>
+      <div class="swrow">
+        <label class="c-check"><input type="checkbox"><span class="c-check__box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Require tier on create</label>
+        <label class="c-check"><input type="checkbox" checked><span class="c-check__box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Auto-sync from reviews</label>
+        <label class="c-check"><input type="checkbox" id="indet"><span class="c-check__box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Some agents enabled</label>
+        <label class="c-check is-disabled"><input type="checkbox" disabled><span class="c-check__box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Subscription OAuth (blocked)</label>
+      </div>
+    </div>
+    <div class="grp">
+      <div class="lab">select — default / disabled</div>
+      <div class="swrow">
+        <div class="c-select"><select><option>Default tier: Basic</option><option>Low</option><option>Medium</option></select></div>
+        <div class="c-select"><select disabled><option>Sprint 14 (locked)</option></select></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CARD -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Surfaces</span>
+    <h2>Card</h2>
+    <p class="desc">Borders are the elevation system. Interactive cards lift and ring on focus; selected cards take a signal border + inset ring.</p>
+    <div class="grid grid-4" style="margin-top:22px">
+      <div class="card"><div class="lab" style="margin:0">default</div><div class="h3" style="margin-top:10px;font-size:16px">Static surface</div></div>
+      <div class="card is-interactive" tabindex="0"><div class="lab" style="margin:0">interactive</div><div class="h3" style="margin-top:10px;font-size:16px">Hover / focus me</div></div>
+      <div class="card is-selected"><div class="lab" style="margin:0">selected</div><div class="h3" style="margin-top:10px;font-size:16px">Chosen option</div></div>
+      <div class="card is-disabled"><div class="lab" style="margin:0">disabled</div><div class="h3" style="margin-top:10px;font-size:16px">Unavailable</div></div>
+    </div>
+  </section>
+
+  <!-- DIFF -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Code surfaces</span>
+    <h2>Diff &amp; syntax</h2>
+    <p class="desc">Diff and the nine syntax roles are tokens now (<span class="mono" style="color:var(--fg-2)">--diff-add-bg</span>, <span class="mono" style="color:var(--fg-2)">--syntax-keyword</span>…), themed for light and dark.</p>
+    <div class="diff" style="margin-top:18px">
+      <div class="diff-line ctx"><span class="gutter">41</span><span class="code">  pub fn verify_password(hash: &str, candidate: &str) -> bool {</span></div>
+      <div class="diff-line del"><span class="gutter">42</span><span class="code">    candidate == stored.expose_secret()</span></div>
+      <div class="diff-line add"><span class="gutter">42</span><span class="code">    argon2.verify_password(candidate.as_bytes(), &parsed).is_ok()</span></div>
+      <div class="diff-line ctx"><span class="gutter">43</span><span class="code">  }</span></div>
+    </div>
+    <div class="diff" style="margin-top:14px;padding:14px 16px;background:var(--bg)">
+      <div><span class="tok-comment">// per-tier prompt wrapper</span></div>
+      <div><span class="tok-keyword">fn</span> <span class="tok-function">wrap_prompt</span>(<span class="tok-variable">tier</span>: <span class="tok-type">Tier</span>, <span class="tok-variable">body</span>: <span class="tok-type">&str</span>) -> <span class="tok-type">String</span> <span class="tok-punctuation">{</span></div>
+      <div>&nbsp;&nbsp;<span class="tok-keyword">let</span> <span class="tok-variable">max_turns</span> = <span class="tok-number">12</span>;</div>
+      <div>&nbsp;&nbsp;<span class="tok-function">format!</span>(<span class="tok-string">"implement exactly the spec; do not redesign"</span>)</div>
+      <div><span class="tok-punctuation">}</span></div>
+    </div>
+  </section>
+
+  <!-- ANSI -->
+  <section class="ref-sec" style="padding-bottom:90px">
+    <span class="ref-eyebrow">Terminal</span>
+    <h2>ANSI palette</h2>
+    <p class="desc">The 16 ANSI roles mapped to tokens for agent stdout / log surfaces.</p>
+    <div class="diff" style="margin-top:18px;padding:16px 18px;background:var(--bg)">
+      <div><span class="ansi-green">✓</span> <span class="ansi-bright-black">[10:42:06]</span> routing · claimed <span class="ansi-cyan">qwen3-coder</span> for <span class="ansi-yellow">TAS-1042</span></div>
+      <div><span class="ansi-blue">→</span> session started · tier=<span class="ansi-magenta">medium</span> · max_turns=<span class="ansi-bright-blue">12</span></div>
+      <div><span class="ansi-red">✗</span> <span class="ansi-bright-red">error</span>: gate failed — <span class="ansi-white">missing acceptance test</span></div>
+      <div><span class="ansi-bright-black">[10:43:11]</span> ticket → <span class="ansi-yellow">needs_attention</span></div>
+    </div>
+    <div class="swatch-line" id="ansi-sw"></div>
+  </section>
+</main>
+
+<script>
+(function(){
+  var ic = document.getElementById('indet'); if (ic) ic.indeterminate = true;
+  var names = ['black','red','green','yellow','blue','magenta','cyan','white','bright-black','bright-red','bright-green','bright-yellow','bright-blue','bright-magenta','bright-cyan','bright-white'];
+  document.getElementById('ansi-sw').innerHTML = names.map(function(n){ return '<span class="sw2"><span style="color:var(--ansi-'+n+')">●</span> '+n+'</span>'; }).join('');
+  document.getElementById('theme-toggle').addEventListener('click', function(e){
+    var b = e.target.closest('[data-theme-set]'); if(!b) return;
+    document.documentElement.setAttribute('data-theme', b.dataset.themeSet);
+    document.querySelectorAll('#theme-toggle button').forEach(function(x){ x.classList.toggle('on', x===b); });
+  });
+})();
+</script>
+</body>
+</html>
