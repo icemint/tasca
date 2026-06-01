@@ -1,0 +1,4 @@
+# The image only needs the built output + nginx config.
+*
+!dist
+!nginx.conf
