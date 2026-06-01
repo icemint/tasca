@@ -16,6 +16,9 @@ env:
   NODE_VERSION: "22"
   PNPM_VERSION: "10.13.1"
   RUST_TOOLCHAIN: "nightly-2025-12-04"
+  # Trim target/ size on disk-constrained runners (no debug symbols in CI).
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   frontend:
@@ -46,6 +49,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space (reclaim ~20GB of preinstalled bloat)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force 2>/dev/null || true
+          df -h /
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
