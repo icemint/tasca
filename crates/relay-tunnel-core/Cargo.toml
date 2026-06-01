@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-axum = { version = "0.8.4", features = ["macros", "multipart", "ws"] }
+axum = { version = "0.8.9", features = ["macros", "multipart", "ws"] }
 futures-util = "0.3"
 http = "1"
 hyper = { version = "1", features = ["client", "server", "http1"] }

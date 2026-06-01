@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-axum = { version = "0.8.4", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 futures-util = { version = "0.3", features = ["sink"] }
@@ -16,11 +16,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 thiserror = { workspace = true }
-tokio = { version = "1.0", features = ["net"] }
+tokio = { version = "1.52", features = ["net"] }
 tokio-tungstenite = { version = "0.26" }
-uuid = { version = "1.0" }
+uuid = { version = "1.23" }
 
 [dev-dependencies]
 futures-channel = { version = "0.3", features = ["sink"] }
 rand = "0.8"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread"] }

@@ -22,8 +22,8 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid = { version = "1.0", features = ["v4", "serde"] }
-rmcp = { version = "1.2.0", features = ["server", "transport-io"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }
+rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
 schemars = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
