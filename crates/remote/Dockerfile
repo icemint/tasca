@@ -42,12 +42,11 @@ ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV CARGO_TARGET_DIR=/app/target
 
-# Install build dependencies, plus git and openssh-client for private repo access
+# Install build dependencies. The public FEATURES="" build pulls only
+# crates.io + path deps (the private billing crate is stripped below), so no
+# SSH/private-repo access is needed.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates git openssh-client \
-  && mkdir -p -m 0700 /root/.ssh \
-  && ssh-keyscan github.com >> /root/.ssh/known_hosts \
-  && chmod 600 /root/.ssh/known_hosts \
+  && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -93,7 +92,6 @@ RUN if [ -z "${FEATURES}" ]; then \
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=remote-target,target=/app/target \
-    --mount=type=ssh \
     cargo build ${FEATURES:+--locked} --release --manifest-path crates/remote/Cargo.toml ${FEATURES:+--features ${FEATURES}} \
  && cp /app/target/release/${APP_NAME} /app/bin/${APP_NAME}
 

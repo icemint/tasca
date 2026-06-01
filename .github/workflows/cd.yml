@@ -1,0 +1,77 @@
+name: CD
+
+# Build the Tasca remote-server image, push it to GHCR, then tell Coolify to
+# redeploy. Runs only on pushes to main and on v*.*.* release tags — never on
+# pull requests, so opening a PR validates code via ci.yml without deploying.
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/icemint/tasca
+
+jobs:
+  build-and-deploy:
+    name: Build remote image → GHCR → Coolify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # latest        -> on main
+      # sha-<short>   -> every build
+      # <version>     -> on v*.*.* tags (e.g. v0.1.44 -> 0.1.44)
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+
+      - name: Build and push remote image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: crates/remote/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            FEATURES=
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Coolify pulls the freshly pushed image (private GHCR creds configured in
+      # Coolify) and redeploys. Skips gracefully until the secret is set, so an
+      # early merge to main pushes the image without failing on a missing webhook.
+      - name: Trigger Coolify deploy
+        if: ${{ env.COOLIFY_WEBHOOK_REMOTE != '' }}
+        env:
+          COOLIFY_WEBHOOK_REMOTE: ${{ secrets.COOLIFY_WEBHOOK_REMOTE }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          curl -fsS -X POST "${COOLIFY_WEBHOOK_REMOTE}" \
+            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}"
