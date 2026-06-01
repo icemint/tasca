@@ -80,8 +80,6 @@ services:
         # Telemetry severed: telemetry build args removed.
         VITE_RELAY_API_BASE_URL: ${VITE_RELAY_API_BASE_URL:-http://localhost:8082}
         VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY: ${VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY:-}
-      ssh:
-        - default
     depends_on:
       remote-db:
         condition: service_healthy
@@ -130,12 +128,6 @@ services:
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
-
-      # Billing (optional)
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_TEAM_SEAT_PRICE_ID: ${STRIPE_TEAM_SEAT_PRICE_ID:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      STRIPE_FREE_SEAT_LIMIT: ${STRIPE_FREE_SEAT_LIMIT:-1}
 
       # Attachments (optional)
       # Only set these when enabling the attachments profile or using external blob storage.

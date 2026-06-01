@@ -1,0 +1,103 @@
+name: CD
+
+# Build the Tasca remote-server image, push it to GHCR under an immutable
+# sha-<short> tag, then point Coolify at that exact tag and redeploy.
+#
+# Runs only on pushes to main and on v*.*.* release tags — never on pull
+# requests — so opening a PR is validated by ci.yml without deploying.
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/icemint/tasca
+
+jobs:
+  build-and-deploy:
+    name: Build remote image → GHCR → Coolify (SHA-pinned)
+    runs-on: ubuntu-24.04
+    # Job-level so the deploy step's `if:` can read COOLIFY_API_URL — step-level
+    # env is NOT available to that same step's `if:` condition.
+    env:
+      COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
+      COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # sha-<short>  -> immutable, every build (this is what we deploy)
+      # <version>    -> on v*.*.* tags only (e.g. v0.1.44 -> 0.1.44)
+      # No :latest — Coolify won't re-pull a mutable tag (coolify #5318).
+      - name: Compute image tags
+        id: vars
+        run: |
+          SHA_TAG="sha-$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          TAGS="${IMAGE}:${SHA_TAG}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAGS="${TAGS}"$'\n'"${IMAGE}:${GITHUB_REF#refs/tags/v}"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${TAGS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push remote image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: crates/remote/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            FEATURES=
+          push: true
+          tags: ${{ steps.vars.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Deploy by the immutable SHA tag — NOT :latest. Coolify does not re-pull a
+      # mutable tag (coolify #5318), so we PATCH the resource's image tag to the
+      # new sha-<short> via the v4 API, then trigger a deploy. Both endpoints are
+      # confirmed in the Coolify v4 OpenAPI spec:
+      #   PATCH /api/v1/applications/{uuid}   (docker_registry_image_name / _tag)
+      #   GET   /api/v1/deploy?uuid={uuid}
+      # Skips gracefully until COOLIFY_API_URL is set, so an early merge to main
+      # publishes the image without failing on missing deploy config.
+      - name: Deploy to Coolify (PATCH image tag → deploy)
+        if: ${{ env.COOLIFY_API_URL != '' }}
+        env:
+          SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_API_URL%/}"
+          # 1) Point the Coolify app at the new immutable image tag.
+          curl -fsS -X PATCH \
+            "${base}/api/v1/applications/${COOLIFY_RESOURCE_UUID}" \
+            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"docker_registry_image_name\":\"${IMAGE}\",\"docker_registry_image_tag\":\"${SHA_TAG}\"}"
+          # 2) Trigger the redeploy of that resource.
+          curl -fsS \
+            "${base}/api/v1/deploy?uuid=${COOLIFY_RESOURCE_UUID}" \
+            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}"
