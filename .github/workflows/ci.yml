@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.13.1"
+  RUST_TOOLCHAIN: "nightly-2025-12-04"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  frontend:
+    name: Frontend (lint + typecheck + build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint (web + ui + i18n unused + legacy-path guard)
+        run: pnpm run local-web:lint && pnpm run ui:lint && node scripts/check-unused-i18n-keys.mjs && pnpm run local-web:legacy-path-guard
+      - name: Typecheck (local-web + remote-web + web-core + ui)
+        run: pnpm run local-web:check && pnpm run remote-web:check && pnpm run web-core:check && pnpm run ui:check
+      - name: Build local-web + remote-web
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm --filter @vibe/local-web run build && pnpm --filter @vibe/remote-web run build
+
+  backend:
+    name: Backend workspace (fmt + clippy + check + generate-types + sqlx + test)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: backend-workspace
+          cache-all-crates: true
+          cache-on-failure: true
+      - name: rustfmt --check
+        run: cargo fmt --all -- --check
+      - name: Cargo lockfile is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: cargo check --workspace
+        run: cargo check --workspace
+      - name: Clippy (workspace, excluding tauri)
+        run: cargo clippy --workspace --all-targets --exclude tasca-tauri -- -D warnings
+      - name: Generated types are up to date
+        run: SQLX_OFFLINE=true pnpm run generate-types:check
+      - name: SQLx offline cache is up to date (local/SQLite)
+        run: pnpm run prepare-db:check
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: cargo test --workspace (via nextest, excluding tauri)
+        run: SQLX_OFFLINE=true cargo nextest run --workspace --exclude tasca-tauri
+
+  backend-remote:
+    name: Remote crate (fmt + clippy + check + generate-types + sqlx)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: backend-remote
+          cache-all-crates: true
+          cache-on-failure: true
+      - name: Remote + relay-tunnel lockfiles are up to date
+        run: |
+          cargo metadata --locked --format-version 1 --manifest-path crates/remote/Cargo.toml > /dev/null
+          cargo metadata --locked --format-version 1 --manifest-path crates/relay-tunnel/Cargo.toml > /dev/null
+      - name: rustfmt --check (remote + relay-tunnel)
+        run: |
+          cargo fmt --all --manifest-path crates/remote/Cargo.toml -- --check
+          cargo fmt --all --manifest-path crates/relay-tunnel/Cargo.toml -- --check
+      - name: cargo check (remote)
+        run: cargo check --manifest-path crates/remote/Cargo.toml
+      - name: Clippy (remote + relay-tunnel)
+        run: |
+          cargo clippy --all-targets --manifest-path crates/remote/Cargo.toml -- -D warnings
+          cargo clippy --all-targets --manifest-path crates/relay-tunnel/Cargo.toml -- -D warnings
+      - name: Remote generated types are up to date
+        run: SQLX_OFFLINE=true pnpm run remote:generate-types:check
+      - name: SQLx offline cache is up to date (remote + relay-tunnel/Postgres)
+        run: pnpm run remote:prepare-db:check

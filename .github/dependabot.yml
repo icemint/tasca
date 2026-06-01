@@ -1,0 +1,74 @@
+version: 2
+updates:
+  # Rust — root workspace (most crates)
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      cargo-root-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, rust]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Rust — excluded remote crate (own lockfile)
+  - package-ecosystem: cargo
+    directory: "/crates/remote"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      cargo-remote-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, rust, remote]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Rust — excluded relay-tunnel crate (own lockfile)
+  - package-ecosystem: cargo
+    directory: "/crates/relay-tunnel"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      cargo-relay-tunnel-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, rust, relay]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # JavaScript/TypeScript — pnpm workspace (root globs packages/*)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "vite"
+        update-types: [version-update:semver-major]
+    labels: [dependencies, javascript]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions used by the CI workflow
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "chore(ci)"
