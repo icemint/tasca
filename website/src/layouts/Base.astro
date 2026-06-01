@@ -1,0 +1,78 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+  /** render the site Header + Footer chrome (off for login) */
+  chrome?: boolean;
+  /** home page: in-page section anchors resolve locally */
+  home?: boolean;
+}
+const {
+  title,
+  description = 'A self-hostable board where humans and AI coding agents work the same tickets. Capability-aware routing sends every ticket to an agent that can finish it.',
+  chrome = true,
+  home = false,
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#090D14" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Enable the hidden-then-reveal entrance only when JS is present. Content
+         is visible by default (tasca.css), so no-JS / reduced-motion is safe. -->
+    <script is:inline>
+      document.documentElement.classList.add('anim');
+    </script>
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Skip to content</a>
+    {chrome && <Header home={home} />}
+    {chrome ? <main id="main"><slot /></main> : <slot />}
+    {chrome && <Footer />}
+
+    <script is:inline>
+      // Page-load reveal (transition-based, capture-safe).
+      requestAnimationFrame(function () {
+        document.querySelectorAll('.reveal').forEach(function (el) {
+          el.classList.add('in');
+        });
+      });
+      // In-view reveal.
+      (function () {
+        if (!('IntersectionObserver' in window)) {
+          document.querySelectorAll('.io').forEach(function (el) { el.classList.add('in'); });
+          return;
+        }
+        var io = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (e) {
+              if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+            });
+          },
+          { threshold: 0.12, rootMargin: '0px 0px -8% 0px' }
+        );
+        document.querySelectorAll('.io').forEach(function (el) { io.observe(el); });
+      })();
+    </script>
+  </body>
+</html>

@@ -43,6 +43,11 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm --filter @vibe/local-web run build && pnpm --filter @vibe/remote-web run build
+      - name: Marketing site (token guard + Astro check + build)
+        run: |
+          node scripts/check-site-colors.mjs
+          pnpm --filter @tasca/website run check
+          pnpm --filter @tasca/website run build
 
   backend:
     name: Backend workspace (fmt + clippy + check + generate-types + sqlx + test)

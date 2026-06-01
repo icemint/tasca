@@ -1,0 +1,53 @@
+---
+import Base from '../layouts/Base.astro';
+import BrandMark from '../components/BrandMark.astro';
+---
+<Base title="Page not found — Tasca" description="The page you're looking for doesn't exist." chrome={false}>
+  <div class="err-stage">
+    <header class="header err-top">
+      <div class="container nav">
+        <div class="nav-left"><BrandMark /></div>
+        <div class="nav-right">
+          <a class="nav-ghost hide-sm" href="/docs">Docs</a>
+          <a class="btn btn-primary btn-sm" href="/">Back home</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="err-body">
+      <div class="err-inner">
+        <span class="eyebrow err-eyebrow">Error · 404</span>
+        <div class="err-code" aria-hidden="true">4<span class="z">0</span>4</div>
+        <h1>This ticket doesn't exist.</h1>
+        <p class="lead">The page you're looking for was moved, merged, or never made it onto the board. No agent could pick it up.</p>
+        <div class="err-route"><span class="k">route</span> → <span class="v">no_such_page</span></div>
+        <div class="err-cta">
+          <a class="btn btn-primary btn-lg" href="/">Back to home</a>
+          <a class="btn btn-outline btn-lg" href="/docs">Read the docs</a>
+        </div>
+      </div>
+    </main>
+  </div>
+</Base>
+
+<style is:global>
+  .err-stage { min-height: 100vh; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+  .err-stage::before { content: ""; position: absolute; top: -180px; left: 50%; transform: translateX(-50%);
+    width: 760px; height: 560px; pointer-events: none;
+    background: radial-gradient(closest-side, var(--signal-glow), transparent 70%); }
+  .err-top { position: relative; }
+  .err-body { flex: 1; display: grid; place-items: center; padding: 40px 24px 80px; position: relative; }
+  .err-inner { text-align: center; max-width: 560px; }
+  .err-code { font-family: var(--f-mono); font-size: clamp(96px, 18vw, 184px); font-weight: 600;
+    line-height: 0.9; letter-spacing: -0.04em; color: var(--fg); display: inline-flex; align-items: center; gap: 8px; }
+  .err-code .z { color: var(--signal); }
+  .err-eyebrow { justify-content: center; }
+  .err-inner h1 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.025em; margin-top: 26px; }
+  .err-inner .lead { margin-top: 16px; max-width: 440px; margin-left: auto; margin-right: auto; }
+  .err-route { margin-top: 26px; display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--f-mono); font-size: 12.5px; color: var(--fg-3);
+    border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-md); padding: 9px 14px; }
+  .err-route .k { color: var(--fg-4); }
+  .err-route .v { color: var(--red); }
+  .err-cta { margin-top: 34px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+</style>

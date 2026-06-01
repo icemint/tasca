@@ -1,0 +1,95 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base
+  title="Terms & Conditions — Tasca"
+  description="The terms governing use of the Tasca website and the Tasca software."
+>
+  <!-- HERO -->
+  <section class="page-hero">
+    <div class="container">
+      <span class="eyebrow">Legal</span>
+      <h1>Terms &amp; Conditions</h1>
+      <p class="lead">The terms below govern your use of the Tasca website and the Tasca software. Please read them carefully.</p>
+      <div class="updated">Last updated: June 1, 2026</div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="legal-wrap">
+      <nav class="legal-toc" aria-label="On this page">
+        <div class="th">Sections</div>
+        <a href="#acceptance">1. Acceptance</a>
+        <a href="#software">2. The service</a>
+        <a href="#use">3. Acceptable use</a>
+        <a href="#ip">4. Intellectual property</a>
+        <a href="#third-party">5. Third-party services</a>
+        <a href="#warranty">6. Disclaimer of warranties</a>
+        <a href="#liability">7. Limitation of liability</a>
+        <a href="#changes">8. Changes</a>
+        <a href="#law">9. Governing law</a>
+        <a href="#contact">10. Contact</a>
+      </nav>
+
+      <div class="prose">
+        <section id="acceptance">
+          <h2><span class="num">1</span> Acceptance</h2>
+          <p>By accessing this website, using the hosted Tasca service, or downloading, installing, or running the Tasca software, you agree to these Terms &amp; Conditions. If you are using Tasca on behalf of an organization, you represent that you have authority to bind that organization, and "you" refers to that organization. If you do not agree, do not use the website, the service, or the software.</p>
+        </section>
+
+        <section id="software">
+          <h2><span class="num">2</span> The service</h2>
+          <p>We provide Tasca as a hosted, managed service: we run the servers, database, realtime sync, updates, and execution sandboxing, and you connect your repositories, model providers, and team. To use the hosted service you create an account, and you are responsible for the activity under it, for keeping credentials secure, and for the conduct of the users and agents you grant access.</p>
+          <p>Tasca's core is also available as open-source software under the Apache License, Version 2.0. If you self-host it, your rights to use, modify, and redistribute the software are governed by that license, which accompanies the source and controls over these Terms with respect to the software itself. A self-hosted deployment is operated entirely by you.</p>
+          <p>We may update, change, or discontinue features of the hosted service. We aim to give reasonable notice of material changes, but the service is provided without an uptime guarantee unless agreed separately in writing.</p>
+        </section>
+
+        <section id="use">
+          <h2><span class="num">3</span> Acceptable use</h2>
+          <p>When using this website, you agree not to:</p>
+          <ul>
+            <li>Probe, scan, or test the vulnerability of the site, or breach its security or authentication measures, except as permitted under our <a href="/security#disclosure">responsible disclosure</a> policy.</li>
+            <li>Access the site through automated means in a way that imposes an unreasonable load on our infrastructure.</li>
+            <li>Use the site to violate any applicable law or the rights of others.</li>
+          </ul>
+          <p>You are solely responsible for how you operate your own Tasca deployment and for the conduct of the agents and users you grant access to it.</p>
+        </section>
+
+        <section id="ip">
+          <h2><span class="num">4</span> Intellectual property</h2>
+          <p>The Tasca name, logo, and wordmark are trademarks of the project. The Apache-2.0 license grants you rights to the software but does not grant permission to use these marks in a way that suggests endorsement or affiliation. The website's content, layout, and design are provided for informational purposes.</p>
+        </section>
+
+        <section id="third-party">
+          <h2><span class="num">5</span> Third-party services</h2>
+          <p>Tasca connects to services you choose — coding agents, model providers, code hosts such as GitHub, and others. Your use of those services is governed by their own terms and policies, and any fees or usage charges they impose are your responsibility. We are not responsible for the availability, conduct, or content of third-party services. You are responsible for ensuring your use of any model provider complies with that provider's terms, including restrictions on subscription-based authentication in third-party tools.</p>
+        </section>
+
+        <section id="warranty">
+          <h2><span class="num">6</span> Disclaimer of warranties</h2>
+          <p>The website and the software are provided <strong>"as is"</strong> and <strong>"as available,"</strong> without warranties of any kind, whether express, implied, or statutory, including without limitation warranties of merchantability, fitness for a particular purpose, title, and non-infringement. We do not warrant that the website or software will be uninterrupted, error-free, or secure, or that any agent output will be correct, complete, or suitable for production use. You are responsible for reviewing all agent-produced changes before relying on them.</p>
+        </section>
+
+        <section id="liability">
+          <h2><span class="num">7</span> Limitation of liability</h2>
+          <p>To the maximum extent permitted by law, in no event will the Tasca project, its maintainers, or contributors be liable for any indirect, incidental, special, consequential, or punitive damages, or for any loss of profits, data, or goodwill, arising out of or related to your use of the website, the hosted service, or the software, even if advised of the possibility of such damages. Our aggregate liability for any claim is limited to the amount you paid us for the hosted service in the twelve months preceding the claim (or, for the open-source software provided free of charge, zero).</p>
+        </section>
+
+        <section id="changes">
+          <h2><span class="num">8</span> Changes</h2>
+          <p>We may update these Terms from time to time. When we do, we will revise the "last updated" date above. Material changes take effect when posted. Your continued use of the website after changes are posted constitutes acceptance of the revised Terms.</p>
+        </section>
+
+        <section id="law">
+          <h2><span class="num">9</span> Governing law</h2>
+          <p>These Terms are governed by the laws of the jurisdiction in which the project maintainers are established, without regard to conflict-of-laws principles. Any dispute arising under these Terms will be subject to the exclusive jurisdiction of the courts of that jurisdiction, to the extent permitted by applicable law.</p>
+        </section>
+
+        <section id="contact">
+          <h2><span class="num">10</span> Contact</h2>
+          <p>Questions about these Terms can be sent to <a href="mailto:legal@tasca.dev">legal@tasca.dev</a>.</p>
+        </section>
+      </div>
+    </div>
+  </div>
+</Base>

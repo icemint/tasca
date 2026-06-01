@@ -1,0 +1,43 @@
+---
+import BrandMark from './BrandMark.astro';
+import { GITHUB_URL } from '../config';
+const year = 2026;
+---
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <BrandMark />
+        <p class="body">The control plane for agentic delivery. Humans and AI agents, one board.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <ul>
+          <li><a href="/#routing">Capability routing</a></li>
+          <li><a href="/#github">Review automation</a></li>
+          <li><a href="/#security">Security model</a></li>
+          <li><a href="/docs#get-started">Get started</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="/docs">Docs</a></li>
+          <li><a href="/security">Security</a></li>
+          <li><a href={GITHUB_URL} target="_blank" rel="noopener">GitHub</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="/terms">Terms &amp; Conditions</a></li>
+          <li><a href="/privacy">Privacy Policy</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-legal">
+      <span>© {year} Tasca · Apache-2.0</span>
+      <span>Hosted &amp; managed · Open source</span>
+    </div>
+  </div>
+</footer>

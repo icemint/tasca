@@ -1,0 +1,19 @@
+/* ============================================================================
+   TASCA marketing site — global stylesheet
+   Single source of truth for color is the token system (tokens.css). Order:
+     1. tokens.css        — primitives + semantic (dark/light) + component scales
+     2. tailwindcss       — Tailwind v4 base/utilities
+     3. tailwind-theme    — maps tokens into Tailwind's @theme (utilities are
+                            token-driven + theme-reactive)
+     4. tasca.css         — semantic component classes (.btn, .card, .hero, …)
+     5. mockups.css       — board/PR mockup styling used on the home hero
+     6. components.css     — shared component library (buttons, cards, badges)
+   ============================================================================ */
+@import "./tokens.css";
+@import "tailwindcss";
+@import "./tailwind-theme.css";
+@import "./tasca.css";
+@import "./mockups.css";
+@import "./components.css";
+
+/* Site contrast tokens are defined in tokens.css (see "SITE CONTRAST" block). */
