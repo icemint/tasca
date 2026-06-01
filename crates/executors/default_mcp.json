@@ -41,7 +41,7 @@
     "vibe_kanban": {
       "name": "Vibe Kanban",
       "description": "Create, update and delete Vibe Kanban tasks",
-      "url": "https://github.com/icemint/dev",
+      "url": "https://github.com/icemint/tasca",
       "icon": "favicon-vk-light.svg"
     },
     "context7": {

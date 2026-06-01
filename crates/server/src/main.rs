@@ -13,12 +13,12 @@ use tower_http::validate_request::ValidateRequestHeaderLayer;
 use tracing_subscriber::{EnvFilter, prelude::*};
 use utils::{
     assets::asset_dir,
+    observability::{self as telemetry, TelemetrySource, tracing_noop_layer},
     port_file::write_port_file_with_proxy,
-    sentry::{self as sentry_utils, SentrySource, sentry_layer},
 };
 
 #[derive(Debug, Error)]
-pub enum VibeKanbanError {
+pub enum TascaError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -30,13 +30,13 @@ pub enum VibeKanbanError {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), VibeKanbanError> {
+async fn main() -> Result<(), TascaError> {
     // Install rustls crypto provider before any TLS operations
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    sentry_utils::init_once(SentrySource::Backend);
+    telemetry::init_once(TelemetrySource::Backend);
 
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     let filter_string = format!(
@@ -46,7 +46,7 @@ async fn main() -> Result<(), VibeKanbanError> {
     let env_filter = EnvFilter::try_new(filter_string).expect("Failed to create tracing filter");
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-        .with(sentry_layer())
+        .with(tracing_noop_layer())
         .init();
 
     // Create asset directory if it doesn't exist
@@ -70,7 +70,7 @@ async fn main() -> Result<(), VibeKanbanError> {
     let shutdown_token = CancellationToken::new();
 
     let deployment = DeploymentImpl::new(shutdown_token.clone()).await?;
-    deployment.update_sentry_scope().await?;
+    deployment.update_telemetry_scope().await?;
     deployment
         .container()
         .cleanup_orphan_executions()

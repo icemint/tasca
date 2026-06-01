@@ -34,7 +34,7 @@ use tracing_subscriber::{
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
-pub use utils::sentry::{SentrySource, init_once as sentry_init_once};
+pub use utils::observability::{TelemetrySource, init_once as telemetry_init_once};
 
 // Telemetry severed: remote distributed-tracing export removed.
 // Tracing now writes to stdout only and never connects to a remote collector.
@@ -54,12 +54,12 @@ pub fn init_tracing() {
         .with(tracing_subscriber::EnvFilter::new(env_filter))
         .with(ErrorLayer::default())
         .with(fmt_layer)
-        .with(utils::sentry::sentry_layer())
+        .with(utils::observability::tracing_noop_layer())
         .init();
 
     tracing::info!("Tracing initialized (stdout only)");
 }
 
 pub fn configure_user_scope(user_id: uuid::Uuid, username: Option<&str>, email: Option<&str>) {
-    utils::sentry::configure_user_scope(&user_id.to_string(), username, email);
+    utils::observability::configure_user_scope(&user_id.to_string(), username, email);
 }

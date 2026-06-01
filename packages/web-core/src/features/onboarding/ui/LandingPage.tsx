@@ -114,12 +114,12 @@ const SOCIAL_LINKS = [
   },
   {
     label: 'GitHub',
-    href: 'https://github.com/BloopAI/vibe-kanban',
+    href: 'https://github.com/icemint/tasca',
     icon: GithubLogoIcon,
   },
   {
     label: 'Docs',
-    href: 'https://www.vibekanban.com/docs',
+    href: 'https://www.tasca.dev/docs',
     icon: BookOpenIcon,
   },
 ];
@@ -356,7 +356,7 @@ export function LandingPage() {
                 <code>--yolo</code> by default. Always review what agents are
                 doing.{' '}
                 <a
-                  href="https://www.vibekanban.com/docs/getting-started#safety-notice"
+                  href="https://www.tasca.dev/docs/getting-started#safety-notice"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-brand hover:underline"
@@ -546,7 +546,7 @@ export function LandingPage() {
           <p className="text-xs text-low">
             By continuing you agree to the{' '}
             <a
-              href="https://www.vibekanban.com/terms"
+              href="https://www.tasca.dev/terms"
               target="_blank"
               rel="noopener noreferrer"
               className="text-brand hover:underline"
@@ -555,7 +555,7 @@ export function LandingPage() {
             </a>{' '}
             and{' '}
             <a
-              href="https://www.vibekanban.com/privacy"
+              href="https://www.tasca.dev/privacy"
               target="_blank"
               rel="noopener noreferrer"
               className="text-brand hover:underline"

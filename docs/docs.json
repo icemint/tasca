@@ -134,13 +134,13 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/BloopAI/vibe-kanban"
+        "href": "https://github.com/icemint/tasca"
       }
     ],
     "primary": {
       "type": "button",
       "label": "Get Started",
-      "href": "https://vibekanban.com/docs"
+      "href": "https://tasca.dev/docs"
     }
   },
   "contextual": {
@@ -167,7 +167,7 @@
   ],
   "footer": {
     "socials": {
-      "github": "https://github.com/BloopAI/vibe-kanban",
+      "github": "https://github.com/icemint/tasca",
       "x": "https://x.com/vibekanban"
     }
   }

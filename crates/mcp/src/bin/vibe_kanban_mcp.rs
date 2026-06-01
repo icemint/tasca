@@ -2,8 +2,8 @@ use mcp::task_server::McpServer;
 use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::{EnvFilter, prelude::*};
 use utils::{
+    observability::{self as telemetry, TelemetrySource, tracing_noop_layer},
     port_file::read_port_file,
-    sentry::{self as sentry_utils, SentrySource, sentry_layer},
 };
 
 const HOST_ENV: &str = "MCP_HOST";
@@ -138,7 +138,7 @@ fn init_process_logging(log_prefix: &str, version: &str) {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    sentry_utils::init_once(SentrySource::Mcp);
+    telemetry::init_once(TelemetrySource::Mcp);
 
     tracing_subscriber::registry()
         .with(
@@ -146,7 +146,7 @@ fn init_process_logging(log_prefix: &str, version: &str) {
                 .with_writer(std::io::stderr)
                 .with_filter(EnvFilter::new("debug")),
         )
-        .with(sentry_layer())
+        .with(tracing_noop_layer())
         .init();
 
     tracing::debug!(

@@ -17,7 +17,7 @@ Before you begin, ensure you have:
 ## Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/BloopAI/vibe-kanban.git
+git clone https://github.com/icemint/tasca.git
 cd vibe-kanban
 ```
 
@@ -66,7 +66,7 @@ Copy the output and create your `.env.remote`:
 
 ```env .env.remote
 # Required - JWT secret for authentication
-VIBEKANBAN_REMOTE_JWT_SECRET=<paste_your_generated_secret_here>
+TASCA_REMOTE_JWT_SECRET=<paste_your_generated_secret_here>
 
 # Optional - Password for ElectricSQL database role (electric_sync user)
 ELECTRIC_ROLE_PASSWORD=
@@ -141,7 +141,7 @@ To use the desktop client with your local server:
 
 ```bash
 # In a new terminal, from the repository root
-export VK_SHARED_API_BASE=http://localhost:3000
+export TASCA_SHARED_API_BASE=http://localhost:3000
 
 pnpm install
 pnpm run dev
@@ -152,9 +152,9 @@ The desktop client will now connect to your local Cloud instance instead of the 
 To test relay/tunnel mode end-to-end, add:
 
 ```bash
-export VK_SHARED_API_BASE=https://localhost:3001
-export VK_SHARED_RELAY_API_BASE=https://relay.localhost:3001
-export VK_TUNNEL=1
+export TASCA_SHARED_API_BASE=https://localhost:3001
+export TASCA_SHARED_RELAY_API_BASE=https://relay.localhost:3001
+export TASCA_TUNNEL=1
 ```
 
 This mode requires local HTTPS + Caddy routing (next step).

@@ -1,5 +1,5 @@
 {
-  "name": "vibe-kanban",
+  "name": "tasca",
   "private": false,
   "version": "0.1.44",
   "main": "index.js",
@@ -11,10 +11,10 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "keywords": [],
-  "author": "bloop",
+  "author": "icemint",
   "repository": {
     "type": "git",
-    "url": "https://github.com/BloopAI/vibe-kanban"
+    "url": "https://github.com/icemint/tasca"
   },
   "engines": {
     "node": ">=20.19.0"

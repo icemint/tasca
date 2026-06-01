@@ -157,7 +157,7 @@ impl EditorConfig {
         let mut cmd = std::process::Command::new(&executable);
         cmd.args(&args)
             .arg("--install-extension")
-            .arg("bloop.vibe-kanban");
+            .arg("icemint.tasca");
         let _ = cmd.no_window().spawn();
     }
 

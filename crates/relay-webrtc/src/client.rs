@@ -200,7 +200,7 @@ impl WebRtcClient {
         let api = crate::build_api();
 
         // STUN severed: no default third-party STUN. Configurable via
-        // ICEMINT_STUN_URLS (empty/unset => local-network ICE only).
+        // TASCA_STUN_URLS (empty/unset => local-network ICE only).
         let config = RTCConfiguration {
             ice_servers: crate::ice_servers_from_env(),
             ..Default::default()

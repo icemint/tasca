@@ -46,7 +46,7 @@ export function ProjectSunsetPage({ projectName }: ProjectSunsetPageProps) {
                 Export data
               </button>
               <a
-                href="https://vibekanban.com/shutdown"
+                href="https://tasca.dev/shutdown"
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center justify-center gap-2 rounded-sm border border-border bg-primary px-base py-half text-sm font-medium text-normal transition-colors hover:bg-tertiary"

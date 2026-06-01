@@ -154,7 +154,7 @@ pub async fn initialize_deployment(
 
     let deployment = DeploymentImpl::new(shutdown).await?;
     migrate_legacy_attachment_directories(&deployment).await?;
-    deployment.update_sentry_scope().await?;
+    deployment.update_telemetry_scope().await?;
     deployment
         .container()
         .cleanup_orphan_executions()

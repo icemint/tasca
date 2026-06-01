@@ -15,18 +15,18 @@ pub use proxy::{
 };
 pub use signaling::{IceCandidate, SdpAnswer, SdpOffer};
 
-/// ICE servers (STUN/TURN) for WebRTC, read from the `ICEMINT_STUN_URLS`
+/// ICE servers (STUN/TURN) for WebRTC, read from the `TASCA_STUN_URLS`
 /// environment variable (comma-separated). Empty/unset means no STUN server
 /// (local-network ICE only).
 ///
 /// The upstream hardcoded third-party STUN default (`stun.l.google.com`) has
 /// been severed: by default this fork makes no outbound STUN request. Self-host
 /// deployments that need NAT traversal across networks can set their own
-/// STUN/TURN URLs via `ICEMINT_STUN_URLS`.
+/// STUN/TURN URLs via `TASCA_STUN_URLS`.
 pub(crate) fn ice_servers_from_env() -> Vec<webrtc::ice_transport::ice_server::RTCIceServer> {
     use webrtc::ice_transport::ice_server::RTCIceServer;
 
-    match std::env::var("ICEMINT_STUN_URLS") {
+    match std::env::var("TASCA_STUN_URLS") {
         Ok(raw) if !raw.trim().is_empty() => {
             let urls: Vec<String> = raw
                 .split(',')

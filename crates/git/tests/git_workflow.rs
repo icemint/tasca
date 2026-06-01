@@ -115,8 +115,8 @@ fn initialize_repo_without_user_creates_initial_commit() {
     if has_global_git_identity() {
         assert!(name.is_some() && email.is_some());
     } else {
-        assert_eq!(name.as_deref(), Some("icemint"));
-        assert_eq!(email.as_deref(), Some("noreply@icemint.dev"));
+        assert_eq!(name.as_deref(), Some("Tasca"));
+        assert_eq!(email.as_deref(), Some("noreply@tasca.dev"));
     }
 }
 
@@ -425,7 +425,7 @@ fn squash_merge_libgit2_sets_author_without_user() {
     if has_global_git_identity() {
         assert!(name.is_some() && email.is_some());
     } else {
-        assert_eq!(name.as_deref(), Some("icemint"));
-        assert_eq!(email.as_deref(), Some("noreply@icemint.dev"));
+        assert_eq!(name.as_deref(), Some("Tasca"));
+        assert_eq!(email.as_deref(), Some("noreply@tasca.dev"));
     }
 }

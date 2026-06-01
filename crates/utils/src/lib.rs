@@ -12,11 +12,11 @@ pub mod http_headers;
 pub mod jwt;
 pub mod log_msg;
 pub mod msg_store;
+pub mod observability;
 pub mod path;
 pub mod port_file;
 pub mod process;
 pub mod response;
-pub mod sentry;
 pub mod shell;
 pub mod stream_lines;
 pub mod text;
@@ -50,10 +50,10 @@ pub fn is_wsl2() -> bool {
 
 pub fn cache_dir() -> std::path::PathBuf {
     let proj = if cfg!(debug_assertions) {
-        ProjectDirs::from("ai", "bloop-dev", env!("CARGO_PKG_NAME"))
+        ProjectDirs::from("dev", "tasca-dev", env!("CARGO_PKG_NAME"))
             .expect("OS didn't give us a home directory")
     } else {
-        ProjectDirs::from("ai", "bloop", env!("CARGO_PKG_NAME"))
+        ProjectDirs::from("dev", "tasca", env!("CARGO_PKG_NAME"))
             .expect("OS didn't give us a home directory")
     };
 

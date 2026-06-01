@@ -38,8 +38,8 @@ pub enum RelayApiError {
     Other(String),
 }
 
-const SPAKE2_CLIENT_ID: &[u8] = b"vibe-kanban-browser";
-const SPAKE2_SERVER_ID: &[u8] = b"vibe-kanban-server";
+const SPAKE2_CLIENT_ID: &[u8] = b"tasca-browser";
+const SPAKE2_SERVER_ID: &[u8] = b"tasca-server";
 
 #[derive(Clone)]
 pub struct RelayApiClient {

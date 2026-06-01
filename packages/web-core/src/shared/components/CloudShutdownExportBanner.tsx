@@ -33,7 +33,7 @@ export function CloudShutdownExportBanner({
     >
       Vibe Kanban Cloud is shutting down. Export your data within 30 days.{' '}
       <a
-        href="https://vibekanban.com/shutdown"
+        href="https://tasca.dev/shutdown"
         target="_blank"
         rel="noreferrer"
         onClick={handleLinkClick}

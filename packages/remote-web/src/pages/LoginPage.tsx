@@ -179,7 +179,7 @@ export default function LoginPage() {
           <p className="text-center text-sm text-low">
             Need help getting started?{" "}
             <a
-              href="https://www.vibekanban.com/docs"
+              href="https://www.tasca.dev/docs"
               target="_blank"
               rel="noopener noreferrer"
               className="text-normal underline decoration-border underline-offset-4 transition-colors hover:text-high"

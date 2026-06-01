@@ -36,7 +36,7 @@ RUN pnpm -C packages/remote-web build
 FROM rust:1.93-slim-bookworm AS builder
 ARG APP_NAME
 ARG FEATURES
-# Telemetry severed: PostHog/Sentry build args removed.
+# Telemetry severed: telemetry build args removed.
 
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true

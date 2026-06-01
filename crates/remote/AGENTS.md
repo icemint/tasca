@@ -26,7 +26,7 @@ ElectricSQL (port 3000, internal)
 pnpm run remote:dev
 
 # Run desktop client against local server
-export VK_SHARED_API_BASE=http://localhost:3000
+export TASCA_SHARED_API_BASE=http://localhost:3000
 pnpm run dev
 ```
 
@@ -111,7 +111,7 @@ This generates both the Axum router and TypeScript type metadata (via `HasJsonPa
 
 ## Authentication & Authorisation
 
-- **JWT** (`auth/jwt.rs`): Signed with `VIBEKANBAN_REMOTE_JWT_SECRET`. All protected routes use `require_session` middleware.
+- **JWT** (`auth/jwt.rs`): Signed with `TASCA_REMOTE_JWT_SECRET`. All protected routes use `require_session` middleware.
 - **OAuth** (`auth/provider.rs`): GitHub and Google. At least one must be configured. Empty env vars are treated as disabled.
 - **Membership**: All resource routes check organisation/project membership before DB access. Use `RequestContext` from the middleware to get user info.
 

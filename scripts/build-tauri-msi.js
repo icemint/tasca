@@ -53,7 +53,7 @@ while (parts.length < 3) parts.push('0');
 version = parts.slice(0, 3).join('.');
 
 // Manufacturer from identifier (reverse domain → organization)
-const manufacturer = 'Bloop';
+const manufacturer = 'Icemint Labs';
 
 // Stable upgrade code (UUID v5-style, derived from identifier — must never change)
 const upgradeCode = 'E8C15B4D-5F9A-4B3E-8C1A-7D2F6E9A3B8C';

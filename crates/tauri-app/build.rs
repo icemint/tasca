@@ -1,5 +1,5 @@
 fn main() {
-    // Telemetry severed: no Sentry build-time env capture.
+    // Telemetry severed: no telemetry build-time env capture.
     tauri_build::build();
 
     #[cfg(target_os = "windows")]

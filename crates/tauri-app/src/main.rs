@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*};
 use utils::{
     assets::config_path,
-    sentry::{self as sentry_utils, SentrySource, sentry_layer},
+    observability::{self as telemetry, TelemetrySource, tracing_noop_layer},
 };
 use uuid::Uuid;
 
@@ -112,16 +112,16 @@ fn main() {
 
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     let filter_string = format!(
-        "warn,server={level},services={level},db={level},executors={level},deployment={level},local_deployment={level},utils={level},vibe_kanban_tauri={level}",
+        "warn,server={level},services={level},db={level},executors={level},deployment={level},local_deployment={level},utils={level},tasca_tauri={level}",
         level = log_level
     );
     let env_filter = EnvFilter::try_new(filter_string).expect("Failed to create tracing filter");
 
-    sentry_utils::init_once(SentrySource::Desktop);
+    telemetry::init_once(TelemetrySource::Desktop);
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-        .with(sentry_layer())
+        .with(tracing_noop_layer())
         .init();
 
     // Shared token so we can tell the server to shut down when the app quits.
