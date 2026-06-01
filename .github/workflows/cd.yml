@@ -26,6 +26,12 @@ jobs:
   build-and-deploy:
     name: Build remote image → GHCR → Coolify (SHA-pinned)
     runs-on: ubuntu-24.04
+    # Job-level so the deploy step's `if:` can read COOLIFY_API_URL — step-level
+    # env is NOT available to that same step's `if:` condition.
+    env:
+      COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
+      COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,9 +87,6 @@ jobs:
       - name: Deploy to Coolify (PATCH image tag → deploy)
         if: ${{ env.COOLIFY_API_URL != '' }}
         env:
-          COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
-          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
           SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
         run: |
           set -euo pipefail
