@@ -28,7 +28,7 @@ pub(crate) fn provision_ssh_key(
     let key_hash = short_key_hash(signing);
     let alias = format!("vk-{host_id}");
 
-    let ssh_dir = vk_ssh_dir()?;
+    let ssh_dir = tasca_ssh_dir()?;
     let keys_dir = ssh_dir.join("keys");
     fs::create_dir_all(&keys_dir)?;
 
@@ -68,7 +68,7 @@ pub(crate) fn update_ssh_config(
     port: u16,
     key_path: &std::path::Path,
 ) -> Result<(), DesktopBridgeError> {
-    let ssh_dir = vk_ssh_dir()?;
+    let ssh_dir = tasca_ssh_dir()?;
     let config_path = ssh_dir.join("config");
     let null_known_hosts = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
@@ -107,7 +107,7 @@ pub(crate) fn ensure_ssh_include() -> Result<(), DesktopBridgeError> {
     Ok(())
 }
 
-fn vk_ssh_dir() -> Result<PathBuf, DesktopBridgeError> {
+fn tasca_ssh_dir() -> Result<PathBuf, DesktopBridgeError> {
     let home = dirs::home_dir().ok_or(DesktopBridgeError::NoHomeDirectory)?;
     Ok(home.join(".vk-ssh"))
 }

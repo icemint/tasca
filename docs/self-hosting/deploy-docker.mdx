@@ -1,9 +1,9 @@
 ---
 title: "Deploy with Docker Compose"
-description: "Deploy Vibe Kanban Cloud on any server using Docker Compose"
+description: "Deploy Tasca Cloud on any server using Docker Compose"
 ---
 
-This guide covers deploying Vibe Kanban Cloud on any Linux server using Docker Compose. This approach works with any cloud provider (AWS, DigitalOcean, Hetzner, etc.) or on-premises server.
+This guide covers deploying Tasca Cloud on any Linux server using Docker Compose. This approach works with any cloud provider (AWS, DigitalOcean, Hetzner, etc.) or on-premises server.
 
 ## Prerequisites
 
@@ -29,11 +29,11 @@ sudo usermod -aG docker $USER
 # Log out and back in for group changes to take effect
 ```
 
-Clone the Vibe Kanban repository:
+Clone the Tasca repository:
 
 ```bash
 git clone https://github.com/icemint/tasca.git
-cd vibe-kanban
+cd tasca
 ```
 
 ## Step 2: Configure Authentication
@@ -251,7 +251,7 @@ The first build takes 10-15 minutes. Subsequent deployments are faster as Docker
 ## Step 7: Verify Deployment
 
 1. Open `https://your-domain.com` in your browser
-2. You should see the Vibe Kanban Cloud login page
+2. You should see the Tasca Cloud login page
 3. Sign in with your configured auth method
 4. Create your first organisation and project
 
@@ -298,7 +298,7 @@ Standard ACME HTTP challenge does not issue wildcard certificates. For wildcard 
 To update to a new version:
 
 ```bash
-cd vibe-kanban
+cd tasca
 git pull origin main
 
 cd crates/remote

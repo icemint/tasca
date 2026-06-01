@@ -3,7 +3,7 @@
   "version": "0.1.44",
   "private": true,
   "bin": {
-    "vibe-kanban": "npx-cli/bin/cli.js"
+    "tasca": "npx-cli/bin/cli.js"
   },
   "files": [
     "npx-cli/bin/cli.js",

@@ -7,12 +7,12 @@ sidebarTitle: "Monitoring Task Execution"
 When you start a task, the main panel provides real-time visibility into everything happening during execution. Watch as agents think through problems, take actions, and respond to your feedback.
 
 <Frame>
-<img src="/images/vk-agent-log-main.png" alt="Task execution showing real-time agent logs with actions and responses" />
+<img src="/images/tasca-agent-log-main.png" alt="Task execution showing real-time agent logs with actions and responses" />
 </Frame>
 
 ## What Happens During Execution
 
-When you start a task attempt, Vibe Kanban orchestrates several steps to create an isolated environment and execute your task:
+When you start a task attempt, Tasca orchestrates several steps to create an isolated environment and execute your task:
 
 1. **Git Worktree Creation**: An isolated environment is created for this task attempt
 2. **Setup Scripts Run**: Any setup script defined in your project settings runs automatically
@@ -22,7 +22,7 @@ When you start a task attempt, Vibe Kanban orchestrates several steps to create 
 
 ### Git Worktrees
 
-Vibe Kanban uses Git worktrees to create isolated environments for each task attempt. These environments are ephemeral and automatically cleaned up after execution completes.
+Tasca uses Git worktrees to create isolated environments for each task attempt. These environments are ephemeral and automatically cleaned up after execution completes.
 
 <Info>
 Worktrees ensure task attempts don't interfere with each other or your main working directory.
@@ -59,7 +59,7 @@ Approvals are currently supported for Codex, with Claude Code coming soon.
 When an agent takes an action that requires human approval, a row appears below the action with approve/deny buttons.
 
 <Frame>
-<img src="/images/vk-approval.png" alt="Approval prompt showing tick and cross buttons to approve or deny an agent action" />
+<img src="/images/tasca-approval.png" alt="Approval prompt showing tick and cross buttons to approve or deny an agent action" />
 </Frame>
 
 Click the tick to approve or the cross to deny the action. The agent will proceed or adjust based on your decision.
@@ -70,7 +70,7 @@ After every agent turn, your cleanup script runs (if configured). This is useful
 
 ### 6. Commit Messages
 
-Vibe Kanban generates commit messages based on the last message sent by the agent. These automated messages may not always be the most descriptive.
+Tasca generates commit messages based on the last message sent by the agent. These automated messages may not always be the most descriptive.
 
 <Tip>
 When merging to your base branch, use GitHub's "squash & merge" option to rewrite commits with a summary of what actually changed. Alternatively, ask your coding agent to clean up commits manually.
@@ -89,7 +89,7 @@ When merging to your base branch, use GitHub's "squash & merge" option to rewrit
 Click the task title in the top left to navigate to the task view.
 
 <Frame>
-<img src="/images/vk-task-title.png" alt="Task title in top left corner, click to view full task details" />
+<img src="/images/tasca-task-title.png" alt="Task title in top left corner, click to view full task details" />
 </Frame>
 
 This lets you:
@@ -104,7 +104,7 @@ Message editing is supported by Claude Code, Amp, Codex, Gemini, and Qwen.
 </Note>
 
 <Frame>
-<img src="/images/vk-edit-message.png" alt="Editing a previous message with options to save or cancel changes" />
+<img src="/images/tasca-edit-message.png" alt="Editing a previous message with options to save or cancel changes" />
 </Frame>
 
 When supported by your coding agent, you can edit previous messages in the conversation. This will revert the agent's work to that point and replay the conversation with your edited message.
@@ -118,7 +118,7 @@ Editing a message reverts all subsequent agent work. Use this carefully when you
 Click the triple dot icon in the top right and select **View Processes** to see all running and completed processes.
 
 <Frame>
-<img src="/images/vk-processes-dropdown.png" alt="Processes dropdown showing coding agent and development server processes" />
+<img src="/images/tasca-processes-dropdown.png" alt="Processes dropdown showing coding agent and development server processes" />
 </Frame>
 
 This shows:

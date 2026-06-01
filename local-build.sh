@@ -43,8 +43,8 @@ echo "🔍 Detected platform: $PLATFORM"
 echo "🔧 Using target directory: $CARGO_TARGET_DIR"
 
 # Set API base URL for remote features
-export VK_SHARED_API_BASE="https://api.vibekanban.com"
-export VITE_VK_SHARED_API_BASE="https://api.vibekanban.com"
+export VK_SHARED_API_BASE="https://api.tasca.dev"
+export VITE_VK_SHARED_API_BASE="https://api.tasca.dev"
 
 echo "🧹 Cleaning previous builds..."
 rm -rf npx-cli/dist
@@ -55,33 +55,33 @@ echo "🔨 Building web app..."
 
 echo "🔨 Building Rust binaries..."
 cargo build --release --manifest-path Cargo.toml
-cargo build --release --bin vibe-kanban-mcp --manifest-path Cargo.toml
+cargo build --release --bin tasca-mcp --manifest-path Cargo.toml
 
 echo "📦 Creating distribution package..."
 
 # Copy the main binary
-cp ${CARGO_TARGET_DIR}/release/server vibe-kanban
-zip -q vibe-kanban.zip vibe-kanban
-rm -f vibe-kanban 
-mv vibe-kanban.zip npx-cli/dist/$PLATFORM/vibe-kanban.zip
+cp ${CARGO_TARGET_DIR}/release/server tasca
+zip -q tasca.zip tasca
+rm -f tasca 
+mv tasca.zip npx-cli/dist/$PLATFORM/tasca.zip
 
 # Copy the MCP binary
-cp ${CARGO_TARGET_DIR}/release/vibe-kanban-mcp vibe-kanban-mcp
-zip -q vibe-kanban-mcp.zip vibe-kanban-mcp
-rm -f vibe-kanban-mcp
-mv vibe-kanban-mcp.zip npx-cli/dist/$PLATFORM/vibe-kanban-mcp.zip
+cp ${CARGO_TARGET_DIR}/release/tasca-mcp tasca-mcp
+zip -q tasca-mcp.zip tasca-mcp
+rm -f tasca-mcp
+mv tasca-mcp.zip npx-cli/dist/$PLATFORM/tasca-mcp.zip
 
 # Copy the Review CLI binary
-cp ${CARGO_TARGET_DIR}/release/review vibe-kanban-review
-zip -q vibe-kanban-review.zip vibe-kanban-review
-rm -f vibe-kanban-review
-mv vibe-kanban-review.zip npx-cli/dist/$PLATFORM/vibe-kanban-review.zip
+cp ${CARGO_TARGET_DIR}/release/review tasca-review
+zip -q tasca-review.zip tasca-review
+rm -f tasca-review
+mv tasca-review.zip npx-cli/dist/$PLATFORM/tasca-review.zip
 
 echo "✅ CLI build complete!"
 echo "📁 Files created:"
-echo "   - npx-cli/dist/$PLATFORM/vibe-kanban.zip"
-echo "   - npx-cli/dist/$PLATFORM/vibe-kanban-mcp.zip"
-echo "   - npx-cli/dist/$PLATFORM/vibe-kanban-review.zip"
+echo "   - npx-cli/dist/$PLATFORM/tasca.zip"
+echo "   - npx-cli/dist/$PLATFORM/tasca-mcp.zip"
+echo "   - npx-cli/dist/$PLATFORM/tasca-review.zip"
 
 # Optionally build the Tauri desktop app
 if [[ "$1" == "--desktop" || "$1" == "--all" ]]; then

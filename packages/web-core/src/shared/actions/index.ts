@@ -861,7 +861,7 @@ export const Actions = {
       const repos = await workspacesApi.getRepos(workspaceId);
       const repo = repos.find((r) => r.id === repoId);
 
-      // Resolve vibe-kanban identifier from remote workspace + issue
+      // Resolve tasca identifier from remote workspace + issue
       let issueIdentifier: string | undefined;
       const remoteWs = ctx.remoteWorkspaces.find(
         (w) => w.local_workspace_id === workspaceId

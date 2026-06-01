@@ -31,7 +31,7 @@ export function CloudShutdownExportBanner({
         'text-sm font-medium text-on-brand hover:bg-brand-hover'
       )}
     >
-      Vibe Kanban Cloud is shutting down. Export your data within 30 days.{' '}
+      Tasca Cloud is shutting down. Export your data within 30 days.{' '}
       <a
         href="https://tasca.dev/shutdown"
         target="_blank"

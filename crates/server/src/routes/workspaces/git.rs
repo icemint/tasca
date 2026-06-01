@@ -148,10 +148,7 @@ pub fn router() -> Router<DeploymentImpl> {
         .route("/branch", axum::routing::put(rename_branch))
 }
 
-async fn resolve_vibe_kanban_identifier(
-    deployment: &DeploymentImpl,
-    local_workspace_id: Uuid,
-) -> String {
+async fn resolve_tasca_identifier(deployment: &DeploymentImpl, local_workspace_id: Uuid) -> String {
     if let Ok(client) = deployment.remote_client()
         && let Ok(remote_ws) = client.get_workspace_by_local_id(local_workspace_id).await
         && let Some(issue_id) = remote_ws.issue_id
@@ -220,8 +217,8 @@ pub async fn merge_workspace(
     let worktree_path = workspace_path.join(repo.name);
 
     let workspace_label = workspace.name.as_deref().unwrap_or(&workspace.branch);
-    let vk_id = resolve_vibe_kanban_identifier(&deployment, workspace.id).await;
-    let commit_message = format!("{} (vibe-kanban {})", workspace_label, vk_id);
+    let tasca_id = resolve_tasca_identifier(&deployment, workspace.id).await;
+    let commit_message = format!("{} (tasca {})", workspace_label, tasca_id);
 
     let merge_commit_id = deployment.git().merge_changes(
         &repo.path,

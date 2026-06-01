@@ -1,15 +1,15 @@
 {
-  "name": "Vibe Kanban",
+  "name": "Tasca",
   "short_name": "VK",
   "icons": [
     {
-      "src": "/favicon-vk-light.svg",
+      "src": "/favicon-tasca-light.svg",
       "sizes": "any",
       "purpose": "any",
       "type": "image/svg+xml"
     },
     {
-      "src": "/favicon-vk-light-maskable.svg",
+      "src": "/favicon-tasca-light-maskable.svg",
       "sizes": "any",
       "purpose": "maskable",
       "type": "image/svg+xml"

@@ -14,16 +14,16 @@ fn main() {
         println!("cargo:rerun-if-changed={}", env_file.display());
     }
 
-    if let Ok(vk_shared_api_base) = std::env::var("TASCA_SHARED_API_BASE") {
+    if let Ok(tasca_shared_api_base) = std::env::var("TASCA_SHARED_API_BASE") {
         println!(
             "cargo:rustc-env=TASCA_SHARED_API_BASE={}",
-            vk_shared_api_base
+            tasca_shared_api_base
         );
     }
-    if let Ok(vk_shared_relay_api_base) = std::env::var("TASCA_SHARED_RELAY_API_BASE") {
+    if let Ok(tasca_shared_relay_api_base) = std::env::var("TASCA_SHARED_RELAY_API_BASE") {
         println!(
             "cargo:rustc-env=TASCA_SHARED_RELAY_API_BASE={}",
-            vk_shared_relay_api_base
+            tasca_shared_relay_api_base
         );
     }
 

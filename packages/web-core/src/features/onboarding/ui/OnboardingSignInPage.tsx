@@ -107,9 +107,7 @@ export function OnboardingSignInPage() {
   );
 
   const logoSrc =
-    resolveTheme(theme) === 'dark'
-      ? '/vibe-kanban-logo-dark.svg'
-      : '/vibe-kanban-logo.svg';
+    resolveTheme(theme) === 'dark' ? '/tasca-logo-dark.svg' : '/tasca-logo.svg';
 
   const isLoggedIn = loginStatus?.status === 'loggedin';
 
@@ -270,11 +268,7 @@ export function OnboardingSignInPage() {
         <div className="rounded-sm border border-border bg-secondary p-double space-y-double">
           <header className="space-y-double text-center">
             <div className="flex justify-center">
-              <img
-                src={logoSrc}
-                alt="Vibe Kanban"
-                className="h-8 w-auto logo"
-              />
+              <img src={logoSrc} alt="Tasca" className="h-8 w-auto logo" />
             </div>
             {!isLoggedIn && (
               <p className="text-sm text-low">

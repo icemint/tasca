@@ -2,7 +2,7 @@
   'use strict';
   
   const SOURCE = 'vibe-devtools';
-  const COMMAND_SOURCE = 'vibe-kanban';
+  const COMMAND_SOURCE = 'tasca';
   
   // === Helper: Send message to parent ===
   function send(type, payload) {

@@ -286,11 +286,11 @@ export function PreviewBrowserContainer({
     // Loopback URLs need the preview proxy for origin isolation
     if (!previewProxyPort) return undefined;
 
-    // Don't proxy to Vibe Kanban's own ports (would create infinite loop)
-    const vibeKanbanPort = window.location.port || '80';
-    if (devServerPort === vibeKanbanPort) {
+    // Don't proxy to Tasca's own ports (would create infinite loop)
+    const tascaPort = window.location.port || '80';
+    if (devServerPort === tascaPort) {
       console.warn(
-        `[Preview] Ignoring dev server URL with same port as Vibe Kanban (${devServerPort}). ` +
+        `[Preview] Ignoring dev server URL with same port as Tasca (${devServerPort}). ` +
           'This usually means the dev server failed to start or reported the wrong port.'
       );
       return undefined;
@@ -827,7 +827,7 @@ export function PreviewBrowserContainer({
 
     iframe.contentWindow.postMessage(
       {
-        source: 'vibe-kanban',
+        source: 'tasca',
         command: visible ? 'show-eruda' : 'hide-eruda',
       },
       '*'

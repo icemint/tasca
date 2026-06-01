@@ -16,15 +16,15 @@ impl SessionManager {
     /// Create a new session manager with the given namespace
     pub fn new(namespace: impl Into<String>) -> Result<Self> {
         let namespace = namespace.into();
-        let mut vk_dir = dirs::home_dir()
+        let mut tasca_dir = dirs::home_dir()
             .ok_or_else(|| io::Error::other("Could not determine home directory"))?
-            .join(".vibe-kanban");
+            .join(".tasca");
 
         if cfg!(debug_assertions) {
-            vk_dir = vk_dir.join("dev");
+            tasca_dir = tasca_dir.join("dev");
         }
 
-        let base_dir = vk_dir.join(&namespace);
+        let base_dir = tasca_dir.join(&namespace);
 
         fs::create_dir_all(&base_dir)?;
 

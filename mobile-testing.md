@@ -136,7 +136,7 @@ Each developer needs their own GitHub OAuth app so they can sign in from their p
 
 1. Go to https://github.com/settings/applications/new
 2. Fill in the form:
-   - **Application name**: anything (e.g. `vibe-kanban-mobile-yourname`)
+   - **Application name**: anything (e.g. `tasca-mobile-yourname`)
    - **Homepage URL**: run `echo "https://$TS_HOSTNAME:3001"` and paste the output
    - **Authorization callback URL**: run `echo "https://$TS_HOSTNAME:3001/v1/oauth/github/callback"` and paste the output
 3. Click **Register application**

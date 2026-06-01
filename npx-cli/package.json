@@ -4,7 +4,7 @@
   "version": "0.1.44",
   "main": "index.js",
   "bin": {
-    "vibe-kanban": "bin/cli.js"
+    "tasca": "bin/cli.js"
   },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=cjs --outfile=bin/cli.js --external:adm-zip --banner:js=\"#!/usr/bin/env node\"",
@@ -20,7 +20,7 @@
     "node": ">=20.19.0"
   },
   "license": "",
-  "description": "NPX wrapper around vibe-kanban and vibe-kanban-mcp",
+  "description": "NPX wrapper around tasca and tasca-mcp",
   "devDependencies": {
     "esbuild": "^0.27.2"
   },

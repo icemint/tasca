@@ -1,9 +1,9 @@
 {
-  "vibe_kanban": {
+  "tasca": {
     "command": "npx",
     "args": [
       "-y",
-      "vibe-kanban@latest",
+      "tasca@latest",
       "--mcp"
     ]
   },
@@ -38,11 +38,11 @@
     ]
   },
   "meta": {
-    "vibe_kanban": {
-      "name": "Vibe Kanban",
-      "description": "Create, update and delete Vibe Kanban tasks",
+    "tasca": {
+      "name": "Tasca",
+      "description": "Create, update and delete Tasca tasks",
       "url": "https://github.com/icemint/tasca",
-      "icon": "favicon-vk-light.svg"
+      "icon": "favicon-tasca-light.svg"
     },
     "context7": {
       "name": "Context7",

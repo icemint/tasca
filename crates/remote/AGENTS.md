@@ -1,6 +1,6 @@
 # Remote Crate — Agent Guidelines
 
-The `remote` crate is the hosted Vibe Kanban Cloud server: an Axum HTTP API, a React SPA frontend, and real-time sync via ElectricSQL.
+The `remote` crate is the hosted Tasca Cloud server: an Axum HTTP API, a React SPA frontend, and real-time sync via ElectricSQL.
 
 > See also: [root AGENTS.md](../../AGENTS.md) for repo-wide conventions.
 
@@ -59,7 +59,7 @@ The billing crate (`vk-billing` feature) is a private dependency stripped at bui
 
 ## ElectricSQL Integration
 
-Vibe Kanban uses [ElectricSQL](https://electric-sql.com) as a read-path sync engine: Postgres → ElectricSQL → clients over HTTP shapes. Writes go through the REST API.
+Tasca uses [ElectricSQL](https://electric-sql.com) as a read-path sync engine: Postgres → ElectricSQL → clients over HTTP shapes. Writes go through the REST API.
 
 ### How It Works
 
