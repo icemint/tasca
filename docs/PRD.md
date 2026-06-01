@@ -78,7 +78,7 @@ agents (
 )
 ```
 - New model `crates/db/src/models/agent.rs` (`find_available_for_tier`, `claim`, `release`); one-line `pub mod agent;`.
-- Agent appears in the assignee picker by being modeled as an org member of type `agent` (reuse `issue_assignees`).
+- **Agent-as-assignee (decided):** each Agent gets a synthetic `users` row (`member_kind='agent'`) so the existing `issue_assignees (issue_id, user_id)` join is reused verbatim — **not** a parallel `agent_assignees` table. The `member_kind` flag excludes agents from human auth flows and member-list UIs. The assignment engine's "issue is unassigned" predicate counts agent assignees.
 
 ### 4.3 Sprints
 - v1: `sprint_id UUID NULL` on Issue + a `sprints (id, project_id, name, starts_at, ends_at, state)` table. (Chosen over saved-filter for assignment scoping fidelity.)
@@ -88,6 +88,7 @@ agents (
 
 ### 4.5 Review automation state
 - On Issue add `review_state TEXT NULL CHECK (review_state IN ('awaiting_review','changes_requested','approved','merged'))` + `auto_moved_at TIMESTAMP NULL`.
+- **`system_category` on `project_statuses` (decided):** project statuses are user-configurable free-text today, so the §9.3 webhook state machine must map transitions to a **stable `system_category TEXT` slug** (`todo`, `in_progress`, `in_review`, `ready_for_development`, `ready_to_merge`, `done`, `needs_attention`) rather than matching status display names. Additive column; seed canonical categories per project. This unblocks the entire §9.3 state machine and makes transitions string-stable.
 
 ---
 
@@ -97,7 +98,7 @@ agents (
 On ticket start (or sprint auto-dispatch), select an agent where: `agent.min_tier ≤ issue.complexity_tier ≤ agent.max_tier` AND `availability='free'` AND `active_sessions < concurrency_limit` AND issue is `unassigned` AND not blocked by an open `blocking` relationship AND in the active sprint. Seed the Session with that agent's `ExecutorConfig` (+`base_url`/credential). The HTTP-supplied `executor_config` becomes an explicit **manual override** (backward compatible).
 
 ### 5.2 Insertion point
-`crates/services/src/services/container.rs:1063`, before `Session::create`. New crate `crates/assignment-engine/` (deps: db, executors, services); single ~1-line call inserted upstream.
+The verified seam is `ContainerService::start_workspace` in `crates/services/src/services/container.rs` (≈`:1003`), immediately **before `Session::create` (≈`:1019`)** — **not** `:1063` as originally drafted (corrected after reading the post-`20251216142123` workspace/session refactor; re-confirm exact lines at build time per §13.8). New crate `crates/assignment-engine/` (deps: db, executors, services); a single ~1-line call inserted there. Keep the engine a **leaf** consumed by `services` (avoid a `services → assignment-engine → {db,executors}` cycle against the existing `services → db/executors` spine).
 
 ### 5.3 Escalation (human-gated v1)
 On attempt failure (executor error, validation gate fail, or max-turn exhaustion), the engine does **not** auto-bump tier. It flips the ticket to `needs_attention`, records the failure reason, and surfaces a one-click "escalate to tier+1 / reassign to cloud agent." (Auto-escalation is a v2 flag.)
@@ -170,7 +171,8 @@ Per-tier system-prompt wrappers stored as editable templates; injected via the e
 Per-org conversational Claude (Messages API, org-level API key — §"credentials"). Capabilities: (a) **decompose** a vague ticket into tier-appropriate subtasks with required §6.1 fields; (b) **suggest complexity tier** (`tier_source='assistant'`, human override wins); (c) **orchestrate** ("what's ready/unassigned," "which agent fits") via the MCP task API, scoped to the org. All assistant actions logged to the activity timeline.
 
 ### 8.2 Credentials
-- **Org-level shared key** (decided): encrypted, set/rotated by owner/admin only; `key_added_by`, `key_last_validated`. Validated on entry via cheap test call.
+- **Org-level shared key** (decided): encrypted, set/rotated by owner/admin only; `key_added_by`, `key_last_validated`. Validated on entry via a cheap 1-token Messages API call.
+- **Encryption key (decided):** the org Anthropic key — and the new password-reset/email-verify tokens (§7) — are encrypted with a **dedicated `SERVER_ENCRYPTION_KEY`** env, **not** the JWT-secret-derived AES key (existing `jwt.rs` `derive_key`). This decouples stored-secret validity from JWT rotation, so rotating `TASCA_REMOTE_JWT_SECRET` cannot lock out stored API keys.
 - Powers **PM-assistant only** (decided) — NOT worker agents. Worker spend (local Qwen = free; cloud agents = separate per-agent credentials) stays isolated for cost attribution + rate-limit isolation.
 - **Compliance note:** subscription OAuth (Pro/Max) is prohibited in third-party tools by Anthropic (policy effective 2026-02-19; enforced 2026-01-09). MUST use Console API keys (`sk-ant-api03-*`), pay-as-you-go, billed to the org. No "Connect Anthropic account" OAuth button is permitted.
 
@@ -227,6 +229,7 @@ GitHub webhook → server handler → ticket status transitions:
 VK executors default permissive (`dangerously_skip_permissions`, Codex `danger-full-access`, `yolo`) and run agents as host child processes. External-filed tickets = RCE risk on the headless Mac. Resolutions, layered:
 
 - **Trust tiers (v1):** `guest`/external = **propose-only** (file/comment); execution requires an internal human to promote ticket to `agent-ready`. Untrusted input never directly triggers execution.
+- **Gate location (decided): remote-side.** The team layer owns identity/roles; local mode has **zero app-user auth** (DISCOVERY §2.3), so the propose-only/promotion gate is the single authoritative check enforced in `crates/remote` **before any dispatch reaches a local executor** — it cannot be enforced at the local `container.rs` seam. In v1, local-only (no-remote) execution is treated as fully trusted/internal.
 - **Sandboxing (v1 for any external-touch execution):** each run in an ephemeral container/jail — no host FS, no secrets, egress-restricted; `sandbox_profile` on Agent. On macOS this likely means moving the runner into a Linux container/VM (open question §13).
 - **Permissive defaults flipped** to `Supervised`/approval for any non-trusted path.
 - **Prompt-injection containment:** review-comment re-dispatch (§9.3) disabled by default for tickets that have external comments.
