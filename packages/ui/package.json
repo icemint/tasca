@@ -1,7 +1,7 @@
 {
   "name": "@vibe/ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.44",
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
@@ -47,7 +47,7 @@
     "react-hotkeys-hook": "^5.1.0",
     "react-i18next": "^15.7.4",
     "react-virtuoso": "^4.14.0",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
