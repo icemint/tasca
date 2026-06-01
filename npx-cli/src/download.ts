@@ -267,9 +267,5 @@ export async function ensureDesktopBundle(
   };
 }
 
-export async function getLatestVersion(): Promise<string | undefined> {
-  const manifest = await fetchJson<BinaryManifest>(
-    `${R2_BASE_URL}/binaries/manifest.json`
-  );
-  return manifest.latest;
-}
+// Update-check severed: the upstream "latest version" lookup (R2 manifest
+// fetch) has been removed so the CLI makes no outbound update request.

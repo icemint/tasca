@@ -61,4 +61,3 @@ openssl = { version = "0.10", features = ["vendored"] }
 
 [features]
 default = []
-qa-mode = []

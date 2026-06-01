@@ -6,7 +6,6 @@ edition = "2024"
 [features]
 default = []
 cloud = []
-qa-mode = ["executors/qa-mode"]
 
 [dependencies]
 indicatif = "0.17"

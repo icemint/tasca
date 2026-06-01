@@ -1,8 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import posthog from "posthog-js";
-import { PostHogProvider } from "posthog-js/react";
 import { AppRouter } from "@remote/app/entry/App";
 import { RemoteAuthProvider } from "@remote/app/providers/RemoteAuthProvider";
 import { getIdentity } from "@remote/shared/lib/api";
@@ -20,11 +18,7 @@ import {
   openLocalApiWebSocketViaWebRtc,
 } from "@remote/shared/lib/webrtc";
 
-if (import.meta.env.VITE_PUBLIC_POSTHOG_KEY) {
-  posthog.init(import.meta.env.VITE_PUBLIC_POSTHOG_KEY, {
-    api_host: import.meta.env.VITE_PUBLIC_POSTHOG_HOST,
-  });
-}
+// Telemetry severed: PostHog analytics removed (no SDK init, no egress).
 
 setRemoteApiBase(import.meta.env.VITE_API_BASE_URL || window.location.origin);
 setRelayApiBase(
@@ -50,11 +44,9 @@ configureAuthRuntime({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <PostHogProvider client={posthog}>
-        <RemoteAuthProvider>
-          <AppRouter />
-        </RemoteAuthProvider>
-      </PostHogProvider>
+      <RemoteAuthProvider>
+        <AppRouter />
+      </RemoteAuthProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

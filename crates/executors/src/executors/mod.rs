@@ -14,8 +14,6 @@ use tokio::task::JoinHandle;
 use ts_rs::TS;
 use workspace_utils::msg_store::MsgStore;
 
-#[cfg(feature = "qa-mode")]
-use crate::executors::qa_mock::QaMockExecutor;
 use crate::{
     actions::{ExecutorAction, review::RepoReviewContext},
     approvals::ExecutorApprovalService,
@@ -39,8 +37,6 @@ pub mod cursor;
 pub mod droid;
 pub mod gemini;
 pub mod opencode;
-#[cfg(feature = "qa-mode")]
-pub mod qa_mock;
 pub mod qwen;
 pub mod utils;
 
@@ -119,8 +115,6 @@ pub enum CodingAgent {
     QwenCode,
     Copilot,
     Droid,
-    #[cfg(feature = "qa-mode")]
-    QaMock(QaMockExecutor),
 }
 
 impl CodingAgent {
@@ -194,8 +188,6 @@ impl CodingAgent {
             }
             Self::CursorAgent(_) => vec![BaseAgentCapability::SetupHelper],
             Self::Amp(_) | Self::Copilot(_) | Self::Droid(_) => vec![],
-            #[cfg(feature = "qa-mode")]
-            Self::QaMock(_) => vec![], // QA mock doesn't need special capabilities
         }
     }
 }

@@ -77,9 +77,7 @@ services:
       args:
         # Build-time image/frontend args.
         FEATURES: ${FEATURES:-}
-        POSTHOG_API_KEY: ${POSTHOG_API_KEY:-}
-        POSTHOG_API_ENDPOINT: ${POSTHOG_API_ENDPOINT:-}
-        SENTRY_DSN_REMOTE: ${SENTRY_DSN_REMOTE:-}
+        # Telemetry severed: PostHog/Sentry build args removed.
         VITE_RELAY_API_BASE_URL: ${VITE_RELAY_API_BASE_URL:-http://localhost:8082}
         VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY: ${VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY:-}
       ssh:
@@ -113,10 +111,11 @@ services:
 
       # Email / notifications (optional)
       LOOPS_EMAIL_API_KEY: ${LOOPS_EMAIL_API_KEY:-}
-      # Loops transactional email template IDs (override with your own Loops account templates)
-      LOOPS_INVITE_TEMPLATE_ID: ${LOOPS_INVITE_TEMPLATE_ID:-cmhvy2wgs3s13z70i1pxakij9}
-      LOOPS_REVIEW_READY_TEMPLATE_ID: ${LOOPS_REVIEW_READY_TEMPLATE_ID:-cmj47k5ge16990iylued9by17}
-      LOOPS_REVIEW_FAILED_TEMPLATE_ID: ${LOOPS_REVIEW_FAILED_TEMPLATE_ID:-cmj49ougk1c8s0iznavijdqpo}
+      # Loops transactional email template IDs. Upstream template IDs removed;
+      # set these to your own Loops account templates to enable email.
+      LOOPS_INVITE_TEMPLATE_ID: ${LOOPS_INVITE_TEMPLATE_ID:-}
+      LOOPS_REVIEW_READY_TEMPLATE_ID: ${LOOPS_REVIEW_READY_TEMPLATE_ID:-}
+      LOOPS_REVIEW_FAILED_TEMPLATE_ID: ${LOOPS_REVIEW_FAILED_TEMPLATE_ID:-}
       DIGEST_ENABLED: ${DIGEST_ENABLED:-false}
 
       # Review worker / artifact storage (optional)

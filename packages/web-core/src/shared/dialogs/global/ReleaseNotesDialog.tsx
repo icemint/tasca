@@ -12,7 +12,7 @@ import { defineModal, type NoProps } from '@/shared/lib/modals';
 import { useReleases } from '@/shared/hooks/useReleases';
 import { SimpleMarkdown } from '@/shared/components/SimpleMarkdown';
 
-const GITHUB_RELEASES_URL = 'https://github.com/BloopAI/vibe-kanban/releases';
+const GITHUB_RELEASES_URL = 'https://github.com/icemint/dev/releases';
 
 function formatDate(dateStr: string): string {
   try {

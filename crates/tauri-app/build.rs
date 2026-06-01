@@ -1,5 +1,5 @@
 fn main() {
-    println!("cargo:rerun-if-env-changed=SENTRY_DSN");
+    // Telemetry severed: no Sentry build-time env capture.
     tauri_build::build();
 
     #[cfg(target_os = "windows")]

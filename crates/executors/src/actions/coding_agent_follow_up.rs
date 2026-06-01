@@ -4,14 +4,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-#[cfg(not(feature = "qa-mode"))]
-use crate::profile::ExecutorConfigs;
 use crate::{
     actions::Executable,
     approvals::ExecutorApprovalService,
     env::ExecutionEnv,
     executors::{BaseCodingAgent, ExecutorError, SpawnedChild, StandardCodingAgentExecutor},
-    profile::ExecutorConfig,
+    profile::{ExecutorConfig, ExecutorConfigs},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
@@ -44,7 +42,6 @@ impl CodingAgentFollowUpRequest {
 
 #[async_trait]
 impl Executable for CodingAgentFollowUpRequest {
-    #[cfg_attr(feature = "qa-mode", allow(unused_variables))]
     async fn spawn(
         &self,
         current_dir: &Path,
@@ -53,42 +50,24 @@ impl Executable for CodingAgentFollowUpRequest {
     ) -> Result<SpawnedChild, ExecutorError> {
         let effective_dir = self.effective_dir(current_dir);
 
-        #[cfg(feature = "qa-mode")]
-        {
-            tracing::info!("QA mode: using mock executor for follow-up instead of real agent");
-            let executor = crate::executors::qa_mock::QaMockExecutor;
-            return executor
-                .spawn_follow_up(
-                    &effective_dir,
-                    &self.prompt,
-                    &self.session_id,
-                    self.reset_to_message_id.as_deref(),
-                    env,
-                )
-                .await;
+        let profile_id = self.executor_config.profile_id();
+        let mut agent = ExecutorConfigs::get_cached()
+            .get_coding_agent(&profile_id)
+            .ok_or(ExecutorError::UnknownExecutorType(profile_id.to_string()))?;
+
+        if self.executor_config.has_overrides() {
+            agent.apply_overrides(&self.executor_config);
         }
+        agent.use_approvals(approvals.clone());
 
-        #[cfg(not(feature = "qa-mode"))]
-        {
-            let profile_id = self.executor_config.profile_id();
-            let mut agent = ExecutorConfigs::get_cached()
-                .get_coding_agent(&profile_id)
-                .ok_or(ExecutorError::UnknownExecutorType(profile_id.to_string()))?;
-
-            if self.executor_config.has_overrides() {
-                agent.apply_overrides(&self.executor_config);
-            }
-            agent.use_approvals(approvals.clone());
-
-            agent
-                .spawn_follow_up(
-                    &effective_dir,
-                    &self.prompt,
-                    &self.session_id,
-                    self.reset_to_message_id.as_deref(),
-                    env,
-                )
-                .await
-        }
+        agent
+            .spawn_follow_up(
+                &effective_dir,
+                &self.prompt,
+                &self.session_id,
+                self.reset_to_message_id.as_deref(),
+                env,
+            )
+            .await
     }
 }

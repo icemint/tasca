@@ -1,106 +1,32 @@
-use std::time::Duration;
+//! Telemetry severed: analytics is an inert no-op shim.
+//!
+//! Upstream sent product analytics to a third-party SaaS endpoint from the
+//! remote server. This fork ships no telemetry: the HTTP client and the
+//! event-capture calls have been removed. The public types remain so call
+//! sites compile; `from_env` always returns `None`, so an `AnalyticsService`
+//! is never constructed.
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
-pub struct AnalyticsConfig {
-    pub posthog_api_key: String,
-    pub posthog_api_endpoint: String,
-}
+pub struct AnalyticsConfig;
 
 impl AnalyticsConfig {
+    /// Telemetry severed: analytics is never configured.
     pub fn from_env() -> Option<Self> {
-        Self::from_values(
-            option_env!("POSTHOG_API_KEY"),
-            option_env!("POSTHOG_API_ENDPOINT"),
-        )
-    }
-
-    fn from_values(api_key: Option<&str>, api_endpoint: Option<&str>) -> Option<Self> {
-        let api_key = api_key?.trim();
-        let api_endpoint = api_endpoint?.trim();
-
-        if api_key.is_empty() || api_endpoint.is_empty() {
-            return None;
-        }
-
-        Some(Self {
-            posthog_api_key: api_key.to_string(),
-            posthog_api_endpoint: api_endpoint.to_string(),
-        })
+        None
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct AnalyticsService {
-    config: AnalyticsConfig,
-    client: reqwest::Client,
-}
+pub struct AnalyticsService;
 
 impl AnalyticsService {
-    pub fn new(config: AnalyticsConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("failed to build analytics HTTP client");
-        Self { config, client }
+    pub fn new(_config: AnalyticsConfig) -> Self {
+        Self
     }
 
-    pub fn track(&self, user_id: Uuid, event_name: &str, properties: Value) {
-        let endpoint = format!(
-            "{}/capture/",
-            self.config.posthog_api_endpoint.trim_end_matches('/')
-        );
-
-        let payload = if event_name == "$identify" {
-            json!({
-                "api_key": self.config.posthog_api_key,
-                "event": event_name,
-                "distinct_id": user_id.to_string(),
-                "$set": properties,
-            })
-        } else {
-            let mut event_properties = properties;
-            if let Some(props) = event_properties.as_object_mut() {
-                props.insert(
-                    "timestamp".to_string(),
-                    json!(chrono::Utc::now().to_rfc3339()),
-                );
-                props.insert("version".to_string(), json!(env!("CARGO_PKG_VERSION")));
-                props.insert("source".to_string(), json!("remote"));
-            }
-            json!({
-                "api_key": self.config.posthog_api_key,
-                "event": event_name,
-                "distinct_id": user_id.to_string(),
-                "properties": event_properties,
-            })
-        };
-
-        let client = self.client.clone();
-        let event_name = event_name.to_string();
-
-        tokio::spawn(async move {
-            match client
-                .post(&endpoint)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .send()
-                .await
-            {
-                Ok(response) if !response.status().is_success() => {
-                    tracing::warn!(
-                        event = %event_name,
-                        status = %response.status(),
-                        "analytics event failed"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(event = %event_name, error = ?e, "analytics request failed");
-                }
-                _ => {}
-            }
-        });
-    }
+    /// No-op. Previously POSTed an event to a third-party analytics endpoint.
+    pub fn track(&self, _user_id: Uuid, _event_name: &str, _properties: Value) {}
 }

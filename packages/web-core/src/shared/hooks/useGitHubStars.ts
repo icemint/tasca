@@ -1,27 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 
+// Egress severed: this fork does not poll the upstream GitHub repo for a star
+// count. Returns null (no outbound request).
 async function fetchGitHubStars(): Promise<number | null> {
-  try {
-    const res = await fetch(
-      'https://api.github.com/repos/BloopAI/vibe-kanban',
-      { cache: 'no-store' }
-    );
-
-    if (!res.ok) {
-      console.warn(`GitHub API error: ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    if (typeof data?.stargazers_count === 'number') {
-      return data.stargazers_count;
-    }
-
-    return null;
-  } catch (error) {
-    console.warn('Failed to fetch GitHub stars:', error);
-    return null;
-  }
+  return null;
 }
 
 export function useGitHubStars() {

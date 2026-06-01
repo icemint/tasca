@@ -17,7 +17,6 @@ use webrtc::{
     data_channel::{RTCDataChannel, data_channel_message::DataChannelMessage as RtcDcMessage},
     ice_transport::{
         ice_connection_state::RTCIceConnectionState, ice_gatherer_state::RTCIceGathererState,
-        ice_server::RTCIceServer,
     },
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
@@ -200,11 +199,10 @@ impl WebRtcClient {
     pub async fn create_offer(session_id: String) -> Result<WebRtcOffer, WebRtcClientError> {
         let api = crate::build_api();
 
+        // STUN severed: no default third-party STUN. Configurable via
+        // ICEMINT_STUN_URLS (empty/unset => local-network ICE only).
         let config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_string()],
-                ..Default::default()
-            }],
+            ice_servers: crate::ice_servers_from_env(),
             ..Default::default()
         };
 

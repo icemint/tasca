@@ -1662,7 +1662,9 @@ export const relayApi = {
   },
 };
 
-// Releases API (GitHub releases proxy)
+// Releases API. Update/releases checking severed: this fork does not fetch
+// upstream releases and makes no outbound call. `list` returns an empty array
+// so existing callers keep working.
 export interface GitHubRelease {
   name: string;
   tag_name: string;
@@ -1670,15 +1672,9 @@ export interface GitHubRelease {
   body: string;
 }
 
-interface ReleasesResponse {
-  releases: GitHubRelease[];
-}
-
 export const releasesApi = {
   list: async (): Promise<GitHubRelease[]> => {
-    const response = await makeRequest('/api/releases');
-    const result = await handleApiResponse<ReleasesResponse>(response);
-    return result.releases;
+    return [];
   },
 };
 
