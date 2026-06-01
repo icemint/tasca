@@ -10,6 +10,16 @@ updates:
     groups:
       cargo-root-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Blocked on the coordinated digest 0.11 migration (icemint/tasca#83).
+      # Bumping these singly breaks the digest 0.10/0.11 trait split.
+      - dependency-name: "sha2"
+      - dependency-name: "hmac"
+      - dependency-name: "hkdf"
+      # rmcp 1.7 + rmcp-macros change the #[tool_handler]/#[tool_router] API
+      # used by crates/mcp; needs code changes before it can land.
+      - dependency-name: "rmcp"
+      - dependency-name: "rmcp-macros"
     labels: [dependencies, rust]
     commit-message:
       prefix: "chore(deps)"
@@ -24,6 +34,10 @@ updates:
     groups:
       cargo-remote-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Blocked on the coordinated digest 0.11 migration (icemint/tasca#83).
+      - dependency-name: "sha2"
+      - dependency-name: "hmac"
     labels: [dependencies, rust, remote]
     commit-message:
       prefix: "chore(deps)"
@@ -38,6 +52,9 @@ updates:
     groups:
       cargo-relay-tunnel-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Blocked on the coordinated digest 0.11 migration (icemint/tasca#83).
+      - dependency-name: "sha2"
     labels: [dependencies, rust, relay]
     commit-message:
       prefix: "chore(deps)"
