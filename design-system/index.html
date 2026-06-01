@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — the control plane for agentic delivery</title>
+<meta name="description" content="A self-hostable board where humans and AI coding agents work the same tickets. Deterministic, capability-aware routing sends every ticket to an agent that can actually finish it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>document.documentElement.className += ' anim';</script>
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/mockups.css">
+<style>
+/* ── Home-only layout ── */
+.hero { position: relative; padding: 76px 0 90px; overflow: hidden; }
+.hero::before { content: ""; position: absolute; top: -180px; left: 50%; transform: translateX(-30%);
+  width: 900px; height: 600px; pointer-events: none;
+  background: radial-gradient(closest-side, var(--signal-glow), transparent 70%); filter: blur(8px); }
+.hero-grid { display: grid; grid-template-columns: 1fr 1.04fr; gap: 56px; align-items: center; position: relative; }
+@media (max-width: 980px){ .hero-grid { grid-template-columns: 1fr; gap: 44px; } }
+.hero h1 { margin-top: 22px; }
+.hero .lead { margin-top: 22px; max-width: 520px; }
+.hero-cta { display: flex; gap: 12px; margin-top: 32px; flex-wrap: wrap; }
+.hero-meta { display: flex; gap: 8px; margin-top: 26px; flex-wrap: wrap; }
+.meta-pill { font-family: var(--f-mono); font-size: 12px; color: var(--fg-3); display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.meta-pill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+.meta-sep { color: var(--fg-faint); }
+
+.agents-strip { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.agents-strip .lbl { font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-4); }
+.agents-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.decision { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 22px; }
+.decision-line { font-family: var(--f-mono); font-size: 12.5px; display: flex; align-items: center; gap: 10px; padding: 7px 0; color: var(--fg-3); }
+.decision-line .ok { color: var(--green); margin-left: auto; }
+.decision-line .pred { color: var(--fg-2); }
+.decision-assign { margin-top: 14px; padding-top: 16px; border-top: 1px dashed var(--line-2); display: flex; align-items: center; gap: 10px; }
+
+.routing-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 880px){ .routing-grid { grid-template-columns: 1fr; } }
+
+.gh-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: center; }
+@media (max-width: 880px){ .gh-grid { grid-template-columns: 1fr; gap: 24px; } }
+
+.cta-panel { padding: 56px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 44px; align-items: center; }
+@media (max-width: 860px){ .cta-panel { grid-template-columns: 1fr; padding: 40px 28px; gap: 28px; } }
+.cta-panel h2 { color: #fff; }
+.cta-panel .lead { color: rgba(255,255,255,0.66); margin-top: 16px; }
+.cta-btns { display: flex; gap: 12px; margin-top: 28px; flex-wrap: wrap; }
+.incl { list-style: none; display: flex; flex-direction: column; gap: 13px; }
+.incl li { display: flex; align-items: center; gap: 11px; font-size: 14.5px; color: rgba(255,255,255,0.82); line-height: 1.4; }
+.incl svg { width: 18px; height: 18px; flex: none; color: var(--amber); }
+</style>
+<link rel="stylesheet" href="assets/tokens.css">
+</head>
+<body>
+
+<!-- ============ HEADER ============ -->
+<header class="header">
+  <div class="container nav">
+    <div class="nav-left">
+      <a class="brand" href="index.html" aria-label="Tasca home">
+        <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+          <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+          <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+          <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+        </svg>
+        <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="#routing">How it works</a></li>
+          <li><a href="#github">Automation</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="docs.html">Docs</a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="nav-right">
+      <a class="nav-ghost hide-sm" href="https://github.com" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+        GitHub
+      </a>
+      <a class="btn btn-primary btn-sm" href="login.html">Get started</a>
+    </div>
+  </div>
+</header>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="container hero-grid">
+    <div class="hero-copy">
+      <span class="eyebrow reveal d1">Control plane for agentic delivery</span>
+      <h1 class="display reveal d2">Humans and AI agents,<br>one <span class="signal-word">board.</span></h1>
+      <p class="lead reveal d3">Tasca is a managed delivery platform where people and coding agents work the same tickets. Deterministic, capability-aware routing sends every ticket to an agent that can <span class="amber-word">actually finish it</span> — and escalates the rest. We run the platform; you ship.</p>
+      <div class="hero-cta reveal d4">
+        <a class="btn btn-primary btn-lg" href="login.html">Get started</a>
+        <a class="btn btn-outline btn-lg" href="docs.html">Read the docs</a>
+      </div>
+      <div class="hero-meta reveal d5">
+        <span class="meta-pill">Hosted &amp; managed</span>
+        <span class="meta-sep">·</span>
+        <span class="meta-pill">Your agents, your keys</span>
+        <span class="meta-sep">·</span>
+        <span class="meta-pill">Open source core</span>
+      </div>
+    </div>
+
+    <!-- Board mockup -->
+    <div class="hero-board reveal d3">
+      <div class="app">
+        <div class="app-bar">
+          <div class="app-dots"><i></i><i></i><i></i></div>
+          <div class="app-crumb">icemint <span class="sep">/</span> <b>tasca</b> <span class="sep">/</span> Sprint 14</div>
+          <div class="app-bar-right">
+            <span class="app-tab on">Board</span>
+            <span class="app-tab">List</span>
+          </div>
+        </div>
+        <div class="board">
+          <!-- Ready -->
+          <div class="col">
+            <div class="col-line cl-todo"></div>
+            <div class="col-head"><span class="name">Ready</span><span class="ct">2</span></div>
+            <div class="kc">
+              <div class="kc-top"><span class="kc-id">TAS-1031</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+              <div class="kc-title">Inject Ollama base_url env for QwenCode</div>
+              <div class="kc-foot">
+                <span class="av-agent local" title="Qwen — local">Q</span>
+                <span class="kc-meta">qwen3-coder</span>
+                <span class="spacer"></span><span class="avail avail-free" title="Free"></span>
+              </div>
+            </div>
+            <div class="kc">
+              <div class="kc-top"><span class="kc-id">TAS-1044</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+              <div class="kc-title">Account lockout after N failed logins</div>
+              <div class="kc-foot"><span class="kc-meta">Unassigned</span><span class="spacer"></span><span class="chip" style="padding:2px 8px;font-size:10.5px">no_capable_agent</span></div>
+            </div>
+          </div>
+          <!-- In progress -->
+          <div class="col">
+            <div class="col-line cl-prog"></div>
+            <div class="col-head"><span class="name">In progress</span><span class="ct">2</span></div>
+            <div class="kc">
+              <div class="kc-top"><span class="kc-id">TAS-1042</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+              <div class="kc-title">argon2id hashing module + repo methods</div>
+              <div class="kc-foot">
+                <span class="av-agent local" title="Qwen — local">Q</span>
+                <span class="kc-meta">turn 6 / 12</span>
+                <span class="spacer"></span><span class="avail avail-busy" title="Busy"></span>
+              </div>
+            </div>
+            <div class="kc">
+              <div class="kc-top"><span class="kc-id">TAS-1009</span><span class="tdot" style="color:var(--t-hard)"><i style="background:var(--t-hard)"></i>Hard</span></div>
+              <div class="kc-title">Per-tier required-field validation gate</div>
+              <div class="kc-foot">
+                <span class="av-agent" title="Claude — cloud">C</span>
+                <span class="kc-meta">claude-sonnet</span>
+                <span class="spacer"></span><span class="avail avail-busy"></span>
+              </div>
+            </div>
+          </div>
+          <!-- In review -->
+          <div class="col">
+            <div class="col-line cl-review"></div>
+            <div class="col-head"><span class="name">In review</span><span class="ct">2</span></div>
+            <div class="kc">
+              <div class="kc-top"><span class="kc-id">TAS-0998</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+              <div class="kc-title">Replace plaintext login with argon2id</div>
+              <div class="kc-foot">
+                <span class="status-badge sb-changes">Changes</span>
+                <span class="spacer"></span>
+                <span class="av" style="background:var(--violet)">DM</span>
+              </div>
+            </div>
+            <div class="kc">
+              <div class="kc-top"><span class="kc-id">TAS-1055</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+              <div class="kc-title">Rate-limit /auth/local/login</div>
+              <div class="kc-foot">
+                <span class="status-badge sb-approved">Approved</span>
+                <span class="spacer"></span>
+                <span class="kc-meta">PR #221</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ AGENTS STRIP ============ -->
+<div class="section-sub" style="border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+  <div class="container" style="padding-top:34px; padding-bottom:34px;">
+    <div class="agents-strip io">
+      <span class="lbl">Routes across the agents you already run</span>
+      <div class="agents-chips">
+        <span class="chip">Claude Code</span>
+        <span class="chip">Codex</span>
+        <span class="chip">Gemini</span>
+        <span class="chip">Qwen</span>
+        <span class="chip">Copilot</span>
+        <span class="chip">Cursor</span>
+        <span class="chip">Amp</span>
+        <span class="chip">Opencode</span>
+        <span class="chip">Droid</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ROUTING (the differentiator) ============ -->
+<section class="section" id="routing">
+  <div class="container">
+    <div class="sec-head io">
+      <span class="eyebrow">Capability-aware routing</span>
+      <h2 class="h2">Every ticket carries a tier. Every agent declares what it can take.</h2>
+      <p class="lead">A local 30B model is a reliable teammate for fully-decomposed work and unreliable on open-ended work. Tasca encodes that boundary as a first-class tier system, then assigns work an agent can actually complete — prompted the way that agent needs.</p>
+    </div>
+
+    <div class="routing-grid" style="margin-top:44px;">
+      <!-- Tier ladder -->
+      <div class="ladder io">
+        <div class="ladder-row">
+          <span class="tier tier-basic"><span class="dot"></span>Basic</span>
+          <div class="lr-desc"><b>No reasoning, just coding.</b> Exact files, IO contract, every edge case enumerated.</div>
+          <div class="ladder-handlers"><span class="handler local">Local</span></div>
+        </div>
+        <div class="ladder-row">
+          <span class="tier tier-low"><span class="dot"></span>Low</span>
+          <div class="lr-desc"><b>Constrained surface.</b> Affected modules and a fixed tool list on top of basic.</div>
+          <div class="ladder-handlers"><span class="handler local">Local</span></div>
+        </div>
+        <div class="ladder-row">
+          <span class="tier tier-medium"><span class="dot"></span>Medium</span>
+          <div class="lr-desc"><b>Reasoning allowed.</b> A design note guides the work; local or cloud can own it.</div>
+          <div class="ladder-handlers"><span class="handler local">Local</span><span class="handler cloud">Cloud</span></div>
+        </div>
+        <div class="ladder-row">
+          <span class="tier tier-hard"><span class="dot"></span>Hard</span>
+          <div class="lr-desc"><b>Human-authored plan.</b> Cloud Claude recommended; the agent executes the plan.</div>
+          <div class="ladder-handlers"><span class="handler cloud">Cloud</span><span class="handler human">Human</span></div>
+        </div>
+        <div class="ladder-row">
+          <span class="tier tier-ultra"><span class="dot"></span>Ultra</span>
+          <div class="lr-desc"><b>Human owns it.</b> Cloud assists, doesn't drive. Reserved for the open-ended work.</div>
+          <div class="ladder-handlers"><span class="handler human">Human</span><span class="handler cloud">Cloud</span></div>
+        </div>
+      </div>
+
+      <!-- Decision panel -->
+      <div class="decision io">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;">
+          <span class="kc-id" style="font-size:12px">TAS-1042</span>
+          <span class="tier tier-medium"><span class="dot"></span>Medium</span>
+        </div>
+        <div class="decision-line"><span class="pred">min ≤ medium ≤ max</span><span class="ok">✓</span></div>
+        <div class="decision-line"><span class="pred">availability = free</span><span class="ok">✓</span></div>
+        <div class="decision-line"><span class="pred">active &lt; concurrency_limit</span><span class="ok">✓</span></div>
+        <div class="decision-line"><span class="pred">not blocked · in sprint</span><span class="ok">✓</span></div>
+        <div class="decision-assign">
+          <span class="av-agent local">Q</span>
+          <div style="line-height:1.3">
+            <div style="font-size:13px;color:var(--fg);font-weight:500;font-family:var(--f-mono)">claim qwen3-coder</div>
+            <div class="kc-meta">m1max.tailnet:11434</div>
+          </div>
+          <span class="spacer" style="margin-left:auto"></span>
+          <span class="status-badge sb-approved" style="background:color-mix(in srgb,var(--green) 13%,transparent)">Assigned</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- three supporting points -->
+    <div class="grid grid-3 io" style="margin-top:20px;">
+      <div class="card card-hover">
+        <div class="feature-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
+        </div>
+        <h3 class="h3">Per-tier prompt scaffolding</h3>
+        <p class="body">Low and basic templates constrain the tool surface, cap turns, and forbid open-ended planning: implement exactly the spec, don't redesign.</p>
+      </div>
+      <div class="card card-hover">
+        <div class="feature-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4v5c0 4.5-3.2 7.3-8 9-4.8-1.7-8-4.5-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+        </div>
+        <h3 class="h3">Atomic claim, no double-dispatch</h3>
+        <p class="body">A conditional update claims an agent only while it has free capacity. Two dispatchers race; one wins; the loser re-queries. The single GPU never over-commits.</p>
+      </div>
+      <div class="card card-hover">
+        <div class="feature-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01M10.3 4.3L2.6 18a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 4.3a2 2 0 00-3.4 0z"/></svg>
+        </div>
+        <h3 class="h3">Escalation, never silent failure</h3>
+        <p class="body">A failed attempt flips the ticket to <span class="mono" style="color:var(--fg-2)">needs_attention</span> with the reason and a one-click escalate to a higher tier or a cloud agent. No ticket is ever dropped.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ GITHUB AUTOMATION ============ -->
+<section class="section section-sub" id="github" style="border-top:1px solid var(--line);">
+  <div class="container">
+    <div class="sec-head io">
+      <span class="eyebrow">Review-driven automation</span>
+      <h2 class="h2">Reviews drive the board. Automatically.</h2>
+      <p class="lead">An agent opens a PR on the ticket's branch; it links back automatically. From there, GitHub review events move the ticket — event-sourced on PR state, idempotent, and reconciled if a webhook is ever missed.</p>
+    </div>
+
+    <div class="gh-grid io" style="margin-top:44px;">
+      <!-- PR widget -->
+      <div class="pr-card">
+        <div class="pr-head">
+          <div class="pr-git">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;color:var(--fg);font-weight:600">Linked pull requests</div>
+            <div class="pr-meta">icemint/tasca · 2 linked</div>
+          </div>
+          <span class="chip" style="font-size:11px">Link PR</span>
+        </div>
+        <div class="pr-row">
+          <span class="status-badge sb-changes">Changes</span>
+          <span class="pr-title">argon2id verification path</span>
+          <span class="pr-num">#214</span>
+        </div>
+        <div class="pr-row">
+          <span class="status-badge sb-approved">Approved</span>
+          <span class="pr-title">Rate-limit login + refresh</span>
+          <span class="pr-num">#221</span>
+        </div>
+        <div class="pr-row" style="background:var(--bg-sub)">
+          <span style="display:inline-flex;align-items:center;gap:9px;font-size:13px;color:var(--fg-3)">
+            <span style="width:34px;height:18px;border-radius:999px;background:var(--signal);position:relative;display:inline-block;flex:none">
+              <span style="position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff"></span>
+            </span>
+            Auto-sync issue status from PR reviews
+          </span>
+        </div>
+      </div>
+
+      <!-- transition rules -->
+      <div>
+        <div class="rules">
+          <div class="rule">
+            <span class="from">PR opened</span><span class="arrow">→</span>
+            <span class="status-badge sb-review">In review</span>
+          </div>
+          <div class="rule">
+            <span class="from">changes_requested</span><span class="arrow">→</span>
+            <span class="status-badge sb-changes" style="background:color-mix(in srgb,var(--red) 13%,transparent)">Ready for dev</span>
+          </div>
+          <div class="rule">
+            <span class="from">approved</span><span class="arrow">→</span>
+            <span class="status-badge sb-approved">Ready to merge</span>
+          </div>
+          <div class="rule">
+            <span class="from">merged</span><span class="arrow">→</span>
+            <span class="status-badge sb-merged">Done</span>
+          </div>
+        </div>
+        <p class="body" style="margin-top:24px;font-size:15px;">On <span class="mono" style="color:var(--red)">changes_requested</span>, Tasca can re-dispatch the same agent with the review comments injected as a follow-up — off by default for tickets with external comments, so review feedback never becomes a prompt-injection vector.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECURITY ============ -->
+<section class="section" id="security">
+  <div class="container">
+    <div class="sec-head io">
+      <span class="eyebrow">Trust &amp; isolation</span>
+      <h2 class="h2">External input never reaches a shell unguarded.</h2>
+      <p class="lead">Coding agents run real commands. Tasca treats untrusted, externally-filed work as a first-class threat and gates it at the team layer — before any dispatch reaches an executor.</p>
+    </div>
+
+    <div class="grid grid-3 io" style="margin-top:44px;">
+      <div class="card card-hover">
+        <div class="feature-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1A1.6 1.6 0 005 19.4a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 003.4 14a2 2 0 010-4h.1A1.6 1.6 0 005 7.3a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 0010 3.4V3a2 2 0 014 0v.1a1.6 1.6 0 002.7 1.1l.1-.1A2 2 0 1119.6 7l-.1.1a1.6 1.6 0 00.3 2.7"/></svg>
+        </div>
+        <h3 class="h3">Propose-only guests</h3>
+        <p class="body">External clients can file and comment, never execute. An internal human promotes a ticket to agent-ready before any run. Untrusted input can't trigger work on its own.</p>
+      </div>
+      <div class="card card-hover">
+        <div class="feature-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 9h6v6H9z"/></svg>
+        </div>
+        <h3 class="h3">Sandboxed runs</h3>
+        <p class="body">Any external-touch execution runs in an ephemeral container — no host filesystem, no secrets, egress-restricted. The GPU stays on the host; the sandbox reaches it over the network.</p>
+      </div>
+      <div class="card card-hover">
+        <div class="feature-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+        </div>
+        <h3 class="h3">Defaults flipped to supervised</h3>
+        <p class="body">Permissive agent defaults are switched to approval-gated on any non-trusted path. Self-hosted means your keys, your infra, your audit trail — every actor logged uniformly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA ============ -->
+<section class="section" style="padding-top:0;">
+  <div class="container">
+    <div class="glow-panel cta-panel io">
+      <div>
+        <h2 class="h2">We run it.<br>You ship.</h2>
+        <p class="lead">Tasca is fully managed — Postgres, realtime sync, updates, and sandboxing handled for you. Connect a repo and your models, and start routing work in minutes. Open source if you'd rather run it yourself.</p>
+        <div class="cta-btns">
+          <a class="btn btn-primary btn-lg" href="login.html">Get started</a>
+          <a class="btn btn-outline btn-lg" href="docs.html#self-host" style="background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.18);color:#fff">Self-host instead</a>
+        </div>
+      </div>
+      <div style="background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.1);border-radius:14px;padding:26px">
+        <div style="font-family:var(--f-mono);font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:18px">What's included</div>
+        <ul class="incl">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Managed Postgres + realtime sync</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Zero-downtime updates, handled</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Encrypted secrets — your keys</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Local + cloud agents, routed</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Self-host anytime · Apache-2.0</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="index.html" aria-label="Tasca home">
+          <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+            <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+            <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+            <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+            <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+          </svg>
+          <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+        </a>
+        <p class="body">The control plane for agentic delivery. Humans and AI agents, one board.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#routing">Capability routing</a></li>
+          <li><a href="#github">Review automation</a></li>
+          <li><a href="#security">Security model</a></li>
+          <li><a href="docs.html#get-started">Get started</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="docs.html">Docs</a></li>
+          <li><a href="security.html">Security</a></li>
+          <li><a href="tokens.html">Design tokens</a></li>
+          <li><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="terms.html">Terms &amp; Conditions</a></li>
+          <li><a href="privacy.html">Privacy Policy</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-legal">
+      <span>© 2026 Tasca · Apache-2.0</span>
+      <span>Hosted &amp; managed · Open source</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Page-load reveal (transition-based, capture-safe)
+requestAnimationFrame(function(){
+  document.querySelectorAll('.reveal').forEach(function(el){ el.classList.add('in'); });
+});
+// In-view reveal
+(function(){
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+  document.querySelectorAll('.io').forEach(function(el){ io.observe(el); });
+})();
+</script>
+</body>
+</html>

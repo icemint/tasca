@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docs — Tasca</title>
+<meta name="description" content="Self-host Tasca, add local and cloud coding agents, and configure capability-aware routing, GitHub automation, and the security model.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/mockups.css">
+<style>
+.docs-wrap { max-width: 1320px; margin: 0 auto; padding: 0 var(--pad);
+  display: grid; grid-template-columns: 232px minmax(0,1fr) 200px; gap: 48px; align-items: start; }
+@media (max-width: 1080px){ .docs-wrap { grid-template-columns: 220px minmax(0,1fr); } .docs-toc { display: none; } }
+@media (max-width: 760px){ .docs-wrap { grid-template-columns: 1fr; gap: 0; } .docs-nav { display: none; } }
+
+.docs-nav { position: sticky; top: 88px; padding: 40px 0; align-self: start; }
+.docs-nav .grp { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-4); margin: 22px 0 10px; }
+.docs-nav .grp:first-child { margin-top: 0; }
+.docs-nav a { display: block; font-size: 14px; color: var(--fg-3); padding: 6px 12px; border-radius: var(--r-sm);
+  border-left: 2px solid transparent; transition: color var(--dur), background var(--dur), border-color var(--dur); }
+.docs-nav a:hover { color: var(--fg); background: var(--surface); }
+.docs-nav a.active { color: var(--signal-2); border-left-color: var(--signal); background: color-mix(in srgb, var(--signal) 7%, transparent); }
+
+.docs-main { padding: 40px 0 100px; min-width: 0; }
+.docs-kicker { font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--signal); }
+.docs-main h1 { font-size: clamp(34px, 4.5vw, 46px); margin-top: 14px; letter-spacing: -0.03em; }
+.docs-lead { font-size: 18px; color: var(--fg-3); line-height: 1.6; margin-top: 16px; max-width: 640px; }
+.docs-sec { margin-top: 56px; scroll-margin-top: 88px; }
+.docs-sec h2 { font-size: 26px; letter-spacing: -0.02em; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.docs-sec h3 { font-size: 17px; margin-top: 28px; color: var(--fg); }
+.docs-sec p { color: var(--fg-3); line-height: 1.7; margin-top: 14px; }
+.docs-sec p a, .docs-sec li a { color: var(--signal-2); }
+.docs-sec p a:hover, .docs-sec li a:hover { text-decoration: underline; }
+.docs-sec ul { margin: 14px 0 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.docs-sec ul li { position: relative; padding-left: 20px; color: var(--fg-3); line-height: 1.6; }
+.docs-sec ul li::before { content: ""; position: absolute; left: 4px; top: 10px; width: 5px; height: 5px; border-radius: 1px; background: var(--signal); }
+.docs-sec .code { margin-top: 18px; }
+.kbd { font-family: var(--f-mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; color: var(--fg-2); }
+.note { margin-top: 20px; border: 1px solid var(--line); border-left: 2px solid var(--signal); background: color-mix(in srgb, var(--signal) 5%, var(--surface)); border-radius: var(--r-md); padding: 16px 18px; }
+.note .nh { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--signal-2); }
+.note p { margin-top: 6px; color: var(--fg-2); font-size: 14.5px; }
+
+.docs-toc { position: sticky; top: 88px; padding: 40px 0; }
+.docs-toc .th { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-4); margin-bottom: 12px; }
+.docs-toc a { display: block; font-size: 13px; color: var(--fg-4); padding: 5px 0; line-height: 1.4; transition: color var(--dur); }
+.docs-toc a:hover, .docs-toc a.active { color: var(--fg-2); }
+
+.tier-table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 14px; }
+.tier-table th { text-align: left; font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-4); padding: 0 14px 10px 0; font-weight: 500; border-bottom: 1px solid var(--line); }
+.tier-table td { padding: 14px 14px 14px 0; border-bottom: 1px solid var(--line); color: var(--fg-3); vertical-align: top; line-height: 1.5; }
+.docs-mobilebar { display: none; }
+@media (max-width: 760px){ .docs-mobilebar { display: flex; gap: 8px; overflow-x: auto; padding: 14px var(--pad); border-bottom: 1px solid var(--line); position: sticky; top: 64px; background: var(--bg); z-index: 40; }
+  .docs-mobilebar a { font-family: var(--f-mono); font-size: 12px; color: var(--fg-3); white-space: nowrap; padding: 5px 11px; border: 1px solid var(--line); border-radius: var(--r-tag); } }
+</style>
+<link rel="stylesheet" href="assets/tokens.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="container nav">
+    <div class="nav-left">
+      <a class="brand" href="index.html" aria-label="Tasca home">
+        <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+          <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+          <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+          <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+        </svg>
+        <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="index.html#routing">How it works</a></li>
+          <li><a href="index.html#github">Automation</a></li>
+          <li><a href="security.html">Security</a></li>
+          <li><a href="docs.html" style="color:var(--fg)">Docs</a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="nav-right">
+      <a class="nav-ghost hide-sm" href="https://github.com" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+        GitHub
+      </a>
+      <a class="btn btn-primary btn-sm" href="login.html">Get started</a>
+    </div>
+  </div>
+</header>
+
+<!-- mobile section bar -->
+<div class="docs-mobilebar">
+  <a href="#overview">Overview</a>
+  <a href="#get-started">Get started</a>
+  <a href="#add-agent">Add an agent</a>
+  <a href="#self-host">Self-host</a>
+  <a href="#tiers">Tiers</a>
+  <a href="#routing">Routing</a>
+  <a href="#github">GitHub</a>
+  <a href="#security">Security</a>
+</div>
+
+<div class="docs-wrap">
+  <!-- LEFT NAV -->
+  <aside class="docs-nav">
+    <div class="grp">Get started</div>
+    <a href="#overview" data-sec="overview">Overview</a>
+    <a href="#get-started" data-sec="get-started">Create a workspace</a>
+    <a href="#add-agent" data-sec="add-agent">Add an agent</a>
+    <a href="#self-host" data-sec="self-host">Self-host</a>
+    <div class="grp">Concepts</div>
+    <a href="#tiers" data-sec="tiers">Complexity tiers</a>
+    <a href="#routing" data-sec="routing">Capability routing</a>
+    <a href="#scaffolding" data-sec="scaffolding">Prompt scaffolding</a>
+    <div class="grp">Integrate</div>
+    <a href="#github" data-sec="github">GitHub automation</a>
+    <div class="grp">Operate</div>
+    <a href="#security" data-sec="security">Security &amp; roles</a>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="docs-main">
+    <span class="docs-kicker">Documentation</span>
+    <h1>Get started with Tasca</h1>
+    <p class="docs-lead">Everything you need to get a board running where humans and AI agents work the same tickets — hosted by us, with your repos, your keys, and your models.</p>
+
+    <section class="docs-sec" id="overview">
+      <h2>Overview</h2>
+      <p>Tasca is a managed, multi-tenant delivery platform. It runs on Postgres, talks to the coding agents you already use, and routes every ticket to whoever — human or agent — can actually complete it. We host and operate the platform; you connect your repos and models.</p>
+      <p>Three pieces make that work:</p>
+      <ul>
+        <li><b style="color:var(--fg-2)">Complexity tiers</b> — every ticket carries a tier from <span class="kbd">basic</span> to <span class="kbd">ultra</span> that describes how much reasoning it needs.</li>
+        <li><b style="color:var(--fg-2)">Agents</b> — each agent declares the tiers it can take, where it runs, and how many sessions it handles at once.</li>
+        <li><b style="color:var(--fg-2)">The assignment engine</b> — a deterministic <span class="kbd">decide()</span> that matches ready work to a capable, free agent and prompts it the way that agent needs.</li>
+      </ul>
+      <div class="note"><div class="nh">Heads up</div><p>This guide covers the hosted service. Prefer to run Tasca on your own infrastructure? Jump to <a href="#self-host">Self-host</a> — it's open source under Apache-2.0.</p></div>
+    </section>
+
+    <section class="docs-sec" id="get-started">
+      <h2>Create a workspace</h2>
+      <p>Hosted Tasca takes a few minutes to start — there's no infrastructure to provision. We run the server, the Postgres database, realtime sync, and execution sandboxing for you.</p>
+      <h3>The first five minutes</h3>
+      <ul>
+        <li>Create your organization and invite your team.</li>
+        <li>Connect a GitHub repo through the Tasca GitHub App.</li>
+        <li>Add your model providers, and optionally a local model endpoint over the network.</li>
+        <li>Tier your first tickets and let routing dispatch them to a capable agent.</li>
+      </ul>
+      <p>Your org's keys and secrets are encrypted at rest under a dedicated key. We never train on your data, and you can export or delete it at any time — see the <a href="security.html">security model</a> for the full picture.</p>
+    </section>
+
+    <section class="docs-sec" id="add-agent">
+      <h2>Add an agent</h2>
+      <p>An agent is any executor profile plus a capability declaration. Point one at a local model over the network, or at a cloud provider with its own credential.</p>
+      <h3>Local model via Ollama</h3>
+      <div class="code"><span class="cm"># a headless Mac running qwen3-coder, reachable on your tailnet</span>
+tasca agent add qwen3-coder \
+  <span class="tk">--executor</span> qwen \
+  <span class="tk">--base-url</span> http://m1max.tailnet:11434 \
+  <span class="tk">--min-tier</span> basic <span class="tk">--max-tier</span> medium \
+  <span class="tk">--concurrency</span> 1</div>
+      <p>The single GPU serializes inference, so local agents default to <span class="kbd">concurrency_limit=1</span>. Tasca's atomic claim guarantees two dispatchers never over-commit the same agent.</p>
+      <h3>Cloud Claude for hard work</h3>
+      <div class="code"><span class="cm"># cloud agent carries its own key, isolated for cost attribution</span>
+tasca agent add claude-sonnet \
+  <span class="tk">--executor</span> claude-code \
+  <span class="tk">--credential</span> anthropic:worker \
+  <span class="tk">--min-tier</span> medium <span class="tk">--max-tier</span> ultra</div>
+      <p>Worker credentials stay separate from the org's PM-assistant key, so model spend is attributed and rate-limited per agent.</p>
+    </section>
+
+    <section class="docs-sec" id="self-host">
+      <h2>Self-host (optional)</h2>
+      <p>Prefer to run Tasca on your own infrastructure? The full platform is open source under Apache-2.0 — you trade the managed conveniences for complete control, and the product is identical either way. It ships as a Docker Compose stack: the server, a Postgres database with logical replication, and the realtime sync service. No closed cloud relay, no telemetry.</p>
+      <h3>Requirements</h3>
+      <ul>
+        <li>Docker and Docker Compose</li>
+        <li>Postgres 15+ with <span class="kbd">wal_level=logical</span> (provisioned by the stack)</li>
+        <li>A reverse proxy terminating TLS (a sample <span class="kbd">Caddyfile</span> is included)</li>
+      </ul>
+      <h3>Bring up the stack</h3>
+      <div class="code"><span class="cm"># clone and start</span>
+git clone <span class="tk">github.com/icemint/tasca</span>
+cd tasca
+cp .env.example .env   <span class="cm"># set SERVER_ENCRYPTION_KEY + JWT secret</span>
+docker compose up <span class="tk">-d</span></div>
+      <p>The server comes up on <span class="kbd">:8080</span>. On first login the bootstrap operator account is seeded from your env secret; after that, credentials are per-user and argon2id-hashed.</p>
+      <div class="note"><div class="nh">Secrets</div><p>Set a dedicated <span class="kbd">SERVER_ENCRYPTION_KEY</span>. Stored secrets (org API keys, reset tokens) are encrypted with it — independently of the JWT secret — so rotating JWTs never locks out stored keys.</p></div>
+    </section>
+
+    <section class="docs-sec" id="tiers">
+      <h2>Complexity tiers</h2>
+      <p>The tier encodes how decomposed a ticket must be before an agent may pick it up. Lower tiers demand more up-front structure; higher tiers allow — and require — more reasoning.</p>
+      <table class="tier-table">
+        <thead><tr><th>Tier</th><th>Required before pickup</th><th>Typical owner</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tier tier-basic"><span class="dot"></span>Basic</span></td><td>Exact files, explicit IO contract, acceptance gate, every edge case enumerated.</td><td><span class="handler local">Local</span></td></tr>
+          <tr><td><span class="tier tier-low"><span class="dot"></span>Low</span></td><td>+ affected modules and a constrained tool list.</td><td><span class="handler local">Local</span></td></tr>
+          <tr><td><span class="tier tier-medium"><span class="dot"></span>Medium</span></td><td>+ a design note. Reasoning allowed.</td><td><span class="handler local">Local</span> <span class="handler cloud">Cloud</span></td></tr>
+          <tr><td><span class="tier tier-hard"><span class="dot"></span>Hard</span></td><td>+ a human-authored plan. Cloud recommended.</td><td><span class="handler cloud">Cloud</span></td></tr>
+          <tr><td><span class="tier tier-ultra"><span class="dot"></span>Ultra</span></td><td>Human owns it; the agent assists, doesn't drive.</td><td><span class="handler human">Human</span></td></tr>
+        </tbody>
+      </table>
+      <p>Validation blocks <span class="kbd">start</span> if the required fields for a ticket's tier are missing, and hands back a checklist of exactly what's absent. Raise a tier later and previously-satisfied fields are retained — only the newly-required ones are prompted.</p>
+    </section>
+
+    <section class="docs-sec" id="routing">
+      <h2>Capability routing</h2>
+      <p>When a ticket starts, the assignment engine selects an agent with a single, side-effect-free decision:</p>
+      <div class="code">min_tier ≤ <span class="tk">issue.tier</span> ≤ max_tier
+  <span class="pr">AND</span> availability = <span class="tk">free</span>
+  <span class="pr">AND</span> active_sessions &lt; concurrency_limit
+  <span class="pr">AND</span> issue is unassigned
+  <span class="pr">AND</span> not blocked by an open relationship
+  <span class="pr">AND</span> in the active sprint</div>
+      <p>The decision is one of five outcomes — never a silent no-op:</p>
+      <ul>
+        <li><b style="color:var(--fg-2)">Assigned</b> — claim the agent, seed the session with its config.</li>
+        <li><b style="color:var(--fg-2)">Queued</b> — all capable agents busy; FIFO by priority, picked up on release.</li>
+        <li><b style="color:var(--fg-2)">No capable agent</b> — ticket stays put, flagged, leads notified.</li>
+        <li><b style="color:var(--fg-2)">Blocked</b> — an open blocking relationship stops dispatch.</li>
+        <li><b style="color:var(--fg-2)">Manual override</b> — an explicit executor wins, tagged for audit.</li>
+      </ul>
+      <p>A failed attempt never auto-escalates. It flips the ticket to <span class="kbd">needs_attention</span> with the reason and offers a one-click bump to the next tier or a cloud agent.</p>
+    </section>
+
+    <section class="docs-sec" id="scaffolding">
+      <h2>Prompt scaffolding</h2>
+      <p>Each tier wraps the ticket prompt in a versioned, per-org template. Basic and low templates constrain the tool surface, cap <span class="kbd">max_turns</span>, and forbid open-ended planning — implement exactly the spec, don't redesign. Higher tiers relax those guards.</p>
+      <p>Templates are editable and versioned, so an org can pin or upgrade independently. Saving a template that references a tool an agent lacks warns at save time, not at runtime.</p>
+    </section>
+
+    <section class="docs-sec" id="github">
+      <h2>GitHub automation</h2>
+      <p>Connect a project to one or more repos through the GitHub App. When an agent opens a PR on the ticket's branch, it links back automatically and review events move the ticket:</p>
+      <div class="rules" style="margin-top:18px">
+        <div class="rule"><span class="from">PR opened</span><span class="arrow">→</span><span class="status-badge sb-review">In review</span></div>
+        <div class="rule"><span class="from">changes_requested</span><span class="arrow">→</span><span class="status-badge sb-changes" style="background:color-mix(in srgb,var(--red) 13%,transparent)">Ready for dev</span></div>
+        <div class="rule"><span class="from">approved</span><span class="arrow">→</span><span class="status-badge sb-approved">Ready to merge</span></div>
+        <div class="rule"><span class="from">merged</span><span class="arrow">→</span><span class="status-badge sb-merged">Done</span></div>
+      </div>
+      <p>Transitions are event-sourced on PR state and idempotent, so duplicate or out-of-order webhooks converge to the right status. A reconciliation poller catches anything a missed webhook would have dropped.</p>
+    </section>
+
+    <section class="docs-sec" id="security">
+      <h2>Security &amp; roles</h2>
+      <p>Tasca ships four roles. The propose-only guest tier exists so external clients can file work without ever triggering execution.</p>
+      <ul>
+        <li><b style="color:var(--fg-2)">Owner</b> — billing, org keys, delete org.</li>
+        <li><b style="color:var(--fg-2)">Admin</b> — members, projects, agents, sprints, org key.</li>
+        <li><b style="color:var(--fg-2)">Member</b> — create and assign tickets, review PRs, run agents.</li>
+        <li><b style="color:var(--fg-2)">Guest</b> — propose-only: file and comment, never execute.</li>
+      </ul>
+      <p>Any external-touch execution runs in an ephemeral sandbox with no host filesystem, no secrets, and restricted egress. See the full <a href="security.html">security model</a> for the threat model and isolation guarantees.</p>
+    </section>
+  </main>
+
+  <!-- TOC -->
+  <aside class="docs-toc">
+    <div class="th">On this page</div>
+    <a href="#overview">Overview</a>
+    <a href="#get-started">Create a workspace</a>
+    <a href="#add-agent">Add an agent</a>
+    <a href="#self-host">Self-host</a>
+    <a href="#tiers">Complexity tiers</a>
+    <a href="#routing">Capability routing</a>
+    <a href="#scaffolding">Prompt scaffolding</a>
+    <a href="#github">GitHub automation</a>
+    <a href="#security">Security &amp; roles</a>
+  </aside>
+</div>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="index.html" aria-label="Tasca home">
+          <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+            <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+            <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+            <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+            <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+          </svg>
+          <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+        </a>
+        <p class="body">The control plane for agentic delivery. Humans and AI agents, one board.</p>
+      </div>
+      <div><h4>Product</h4><ul>
+        <li><a href="index.html#routing">Capability routing</a></li>
+        <li><a href="index.html#github">Review automation</a></li>
+        <li><a href="index.html#security">Security model</a></li>
+        <li><a href="#get-started">Get started</a></li>
+      </ul></div>
+      <div><h4>Resources</h4><ul>
+        <li><a href="docs.html">Docs</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="tokens.html">Design tokens</a></li>
+        <li><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></li>
+      </ul></div>
+      <div><h4>Legal</h4><ul>
+        <li><a href="terms.html">Terms &amp; Conditions</a></li>
+        <li><a href="privacy.html">Privacy Policy</a></li>
+      </ul></div>
+    </div>
+    <div class="footer-legal">
+      <span>© 2026 Tasca · Apache-2.0</span>
+      <span>Hosted &amp; managed · Open source</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Scrollspy for left nav + TOC
+(function(){
+  var secs = [].slice.call(document.querySelectorAll('.docs-sec'));
+  var navLinks = [].slice.call(document.querySelectorAll('.docs-nav a'));
+  var tocLinks = [].slice.call(document.querySelectorAll('.docs-toc a'));
+  function setActive(id){
+    navLinks.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href') === '#'+id); });
+    tocLinks.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href') === '#'+id); });
+  }
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting){ setActive(e.target.id); } });
+  }, { rootMargin: '-20% 0px -70% 0px', threshold: 0 });
+  secs.forEach(function(s){ io.observe(s); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/mockups.css">
+<link rel="stylesheet" href="assets/app.css">
+<link rel="stylesheet" href="assets/tokens.css">
+</head>
+<body>
+
+<div class="mobile-warn">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#4D9CF6" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M15 3v18"/></svg>
+  <div class="h3">Open on a wider screen</div>
+  <p class="body" style="max-width:300px">The Tasca board prototype is built for desktop. Resize your window or view it on a larger display.</p>
+</div>
+
+<div class="shell">
+  <!-- RAIL -->
+  <nav class="rail">
+    <a class="rail-brand" href="index.html" title="Tasca home">
+      <svg viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+        <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+        <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+        <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+      </svg>
+    </a>
+    <button class="rail-btn active" title="Board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/></svg></button>
+    <button class="rail-btn" title="My issues"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+    <button class="rail-btn" title="Agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M9 7V4h6v3M9 13h.01M15 13h.01"/></svg></button>
+    <button class="rail-btn" title="Sprints"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg></button>
+    <button class="rail-btn" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1A1.6 1.6 0 005 19.4a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 003.4 14a2 2 0 010-4h.1A1.6 1.6 0 005 7.3a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 0010 3.4V3a2 2 0 014 0v.1a1.6 1.6 0 002.7 1.1l.1-.1A2 2 0 1119.6 7l-.1.1a1.6 1.6 0 00.3 2.7"/></svg></button>
+    <div class="rail-sep"></div>
+    <div class="rail-av" title="Dennis M.">DM</div>
+  </nav>
+
+  <!-- MAIN -->
+  <div class="main">
+    <!-- topbar -->
+    <div class="topbar">
+      <div class="tb-crumb">
+        <span class="pj">T</span>
+        <span class="nm">tasca</span>
+        <span class="sep">/</span>
+        <button class="sprint-sel">Sprint 14 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div class="tb-right">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <input type="text" placeholder="Search issues…">
+        </div>
+        <button class="icon-btn" title="Notifications"><span class="ping"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></button>
+        <button class="btn-asst" id="asst-toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4L12 3z"/><path d="M19 14l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2z"/></svg>PM Assistant</button>
+        <button class="btn btn-primary btn-sm" style="padding:8px 14px">+ New issue</button>
+      </div>
+    </div>
+
+    <!-- toolbar -->
+    <div class="toolbar">
+      <div class="tabs"><span class="tab on">Board</span><span class="tab">List</span></div>
+      <div class="tb-filter">
+        <span class="filter-lbl">Tier</span>
+        <div class="tfilter" id="tfilter">
+          <span class="tier tier-basic" data-t="basic"><span class="dot"></span>Basic</span>
+          <span class="tier tier-low" data-t="low"><span class="dot"></span>Low</span>
+          <span class="tier tier-medium" data-t="medium"><span class="dot"></span>Medium</span>
+          <span class="tier tier-hard" data-t="hard"><span class="dot"></span>Hard</span>
+          <span class="tier tier-ultra" data-t="ultra"><span class="dot"></span>Ultra</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- board -->
+    <div class="kanban" id="kanban">
+      <!-- Backlog -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-todo" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">Backlog</span><span class="ct">4</span><span class="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></span></div>
+        <div class="kcol-body">
+          <div class="kc" data-id="TAS-1031" data-title="Inject Ollama base_url env for QwenCode" data-tier="low" data-status="todo">
+            <div class="kc-top"><span class="kc-id">TAS-1031</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+            <div class="kc-title">Inject Ollama base_url env for QwenCode</div>
+            <div class="kc-foot"><span class="av-agent local">Q</span><span class="kc-meta">qwen3-coder</span><span class="spacer"></span><span class="avail avail-free"></span></div>
+          </div>
+          <div class="kc" data-id="TAS-1044" data-title="Account lockout after N failed logins" data-tier="low" data-status="todo">
+            <div class="kc-top"><span class="kc-id">TAS-1044</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+            <div class="kc-title">Account lockout after N failed logins</div>
+            <div class="kc-foot"><span class="kc-meta">Unassigned</span><span class="spacer"></span><span class="chip" style="padding:2px 8px;font-size:10.5px">no_capable_agent</span></div>
+          </div>
+          <div class="kc" data-id="TAS-1062" data-title="Add sprints table and sprint_id scoping" data-tier="medium" data-status="todo">
+            <div class="kc-top"><span class="kc-id">TAS-1062</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+            <div class="kc-title">Add sprints table and sprint_id scoping</div>
+            <div class="kc-foot"><span class="kc-meta">Unassigned</span><span class="spacer"></span><span class="kc-meta">3 pts</span></div>
+          </div>
+          <div class="kc" data-id="TAS-1071" data-title="Build email verification flow" data-tier="medium" data-status="todo">
+            <div class="kc-top"><span class="kc-id">TAS-1071</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+            <div class="kc-title">Build email verification flow</div>
+            <div class="kc-foot"><span class="kc-meta">Unassigned</span><span class="spacer"></span><span class="kc-meta">2 pts</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- In progress -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-prog" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">In progress</span><span class="ct">3</span><span class="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></span></div>
+        <div class="kcol-body">
+          <div class="kc" data-id="TAS-1042" data-title="argon2id hashing module and credential repo methods" data-tier="medium" data-status="prog">
+            <div class="kc-top"><span class="kc-id">TAS-1042</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+            <div class="kc-title">argon2id hashing module + repo methods</div>
+            <div class="kc-foot"><span class="av-agent local">Q</span><span class="kc-meta">turn 6 / 12</span><span class="spacer"></span><span class="avail avail-busy"></span></div>
+          </div>
+          <div class="kc" data-id="TAS-1009" data-title="Per-tier required-field validation gate" data-tier="hard" data-status="prog">
+            <div class="kc-top"><span class="kc-id">TAS-1009</span><span class="tdot" style="color:var(--t-hard)"><i style="background:var(--t-hard)"></i>Hard</span></div>
+            <div class="kc-title">Per-tier required-field validation gate</div>
+            <div class="kc-foot"><span class="av-agent">C</span><span class="kc-meta">claude-sonnet</span><span class="spacer"></span><span class="avail avail-busy"></span></div>
+          </div>
+          <div class="kc" data-id="TAS-1088" data-title="PM-assistant decompose and tier-suggest" data-tier="ultra" data-status="prog">
+            <div class="kc-top"><span class="kc-id">TAS-1088</span><span class="tdot" style="color:var(--t-ultra)"><i style="background:var(--t-ultra)"></i>Ultra</span></div>
+            <div class="kc-title">PM-assistant decompose + tier-suggest</div>
+            <div class="kc-foot"><span class="av" style="background:var(--violet)">DM</span><span class="kc-meta">Dennis M.</span><span class="spacer"></span><span class="status-badge sb-changes" style="background:color-mix(in srgb,var(--amber) 13%,transparent);color:var(--amber)">needs_attn</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- In review -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-review" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">In review</span><span class="ct">2</span><span class="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></span></div>
+        <div class="kcol-body">
+          <div class="kc" data-id="TAS-0998" data-title="Replace plaintext env login with argon2id" data-tier="medium" data-status="review">
+            <div class="kc-top"><span class="kc-id">TAS-0998</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+            <div class="kc-title">Replace plaintext login with argon2id</div>
+            <div class="kc-foot"><span class="status-badge sb-changes">Changes</span><span class="spacer"></span><span class="kc-meta">PR #214</span><span class="av" style="background:var(--violet)">AK</span></div>
+          </div>
+          <div class="kc" data-id="TAS-1055" data-title="Rate-limit /auth/local/login" data-tier="low" data-status="review">
+            <div class="kc-top"><span class="kc-id">TAS-1055</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+            <div class="kc-title">Rate-limit /auth/local/login</div>
+            <div class="kc-foot"><span class="status-badge sb-approved">Approved</span><span class="spacer"></span><span class="kc-meta">PR #221</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Done -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-done" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">Done</span><span class="ct">3</span><span class="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></span></div>
+        <div class="kcol-body">
+          <div class="kc" data-id="TAS-0980" data-title="complexity_tier columns migration" data-tier="basic" data-status="done">
+            <div class="kc-top"><span class="kc-id">TAS-0980</span><span class="tdot" style="color:var(--t-basic)"><i style="background:var(--t-basic)"></i>Basic</span></div>
+            <div class="kc-title">complexity_tier columns migration</div>
+            <div class="kc-foot"><span class="av-agent local">Q</span><span class="spacer"></span><span class="status-badge sb-merged">Merged</span></div>
+          </div>
+          <div class="kc" data-id="TAS-0991" data-title="Agent entity migration and claim/release" data-tier="medium" data-status="done">
+            <div class="kc-top"><span class="kc-id">TAS-0991</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div>
+            <div class="kc-title">Agent entity migration + claim/release</div>
+            <div class="kc-foot"><span class="av" style="background:var(--violet)">AK</span><span class="spacer"></span><span class="status-badge sb-merged">Merged</span></div>
+          </div>
+          <div class="kc" data-id="TAS-0975" data-title="Author secret-free CI workflow" data-tier="low" data-status="done">
+            <div class="kc-top"><span class="kc-id">TAS-0975</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div>
+            <div class="kc-title">Author secret-free CI workflow</div>
+            <div class="kc-foot"><span class="av-agent local">Q</span><span class="spacer"></span><span class="status-badge sb-merged">Merged</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCRIM -->
+<div class="scrim" id="scrim"></div>
+
+<!-- ISSUE DRAWER -->
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <span class="d-id" id="d-id">TAS-1042</span>
+    <span class="status-badge sb-open" id="d-status">In progress</span>
+    <div class="d-actions">
+      <button class="close-btn" title="Open on GitHub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><path d="M15 3h6v6M10 14L21 3"/></svg></button>
+      <button class="close-btn" id="drawer-close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <h2 class="d-title" id="d-title">argon2id hashing module + repo methods</h2>
+
+    <div class="d-grid">
+      <!-- content -->
+      <div>
+        <div class="d-section">
+          <div class="d-h">Description</div>
+          <div class="d-desc">
+            <p>Add the <span class="mono" style="color:var(--fg-2)">argon2</span> crate and an <span class="mono" style="color:var(--fg-2)">auth/password.rs</span> module exposing <span class="mono" style="color:var(--fg-2)">hash_password</span> / <span class="mono" style="color:var(--fg-2)">verify_password</span> using argon2id (m=19456, t=2, p=1).</p>
+            <p>Extend <span class="mono" style="color:var(--fg-2)">UserRepository</span> with the hash get/set and lockout-counter mutators. Primitive layer only — routes consume it later.</p>
+          </div>
+        </div>
+
+        <div class="d-section">
+          <div class="d-h">Required fields · Medium tier</div>
+          <div class="reqs">
+            <div class="req done"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Affected modules &amp; relations</div>
+            <div class="req done"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Constrained tool list</div>
+            <div class="req done"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Design note</div>
+            <div class="req done"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>Acceptance gate</div>
+          </div>
+        </div>
+
+        <div class="d-section">
+          <div class="d-h">Linked pull requests</div>
+          <div class="pr-card">
+            <div class="pr-row">
+              <span class="status-badge sb-review">In review</span>
+              <span class="pr-title">argon2id hashing module</span>
+              <span class="pr-num">#218</span>
+            </div>
+            <div class="pr-row" style="background:var(--bg-sub)">
+              <span style="display:inline-flex;align-items:center;gap:10px;font-size:13px;color:var(--fg-3)">
+                <span class="toggle on" id="autosync"></span>
+                Auto-sync status from PR reviews
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="d-section">
+          <div class="d-h">Activity</div>
+          <div class="d-desc" style="font-size:13.5px">
+            <p><span class="mono" style="color:var(--signal-2)">routing</span> · assigned to qwen3-coder (local) — eligible for medium · claimed atomically.</p>
+            <p><span class="mono" style="color:var(--fg-4)">10:42</span> · session started, prompt wrapped with the medium-tier template.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- meta -->
+      <div>
+        <div class="meta-row">
+          <div class="meta-k">Status</div>
+          <div class="meta-v"><span class="status-badge sb-open">In progress</span></div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-k">Complexity tier</div>
+          <div class="meta-v">
+            <div class="tierpick" id="tierpick">
+              <span class="tier tier-basic" data-t="basic"><span class="dot"></span>Basic</span>
+              <span class="tier tier-low" data-t="low"><span class="dot"></span>Low</span>
+              <span class="tier tier-medium sel" data-t="medium"><span class="dot"></span>Medium</span>
+              <span class="tier tier-hard" data-t="hard"><span class="dot"></span>Hard</span>
+              <span class="tier tier-ultra" data-t="ultra"><span class="dot"></span>Ultra</span>
+            </div>
+            <div class="tier-src" id="tier-src">source: assistant · 0.82</div>
+          </div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-k">Assignee</div>
+          <div class="meta-v">
+            <div class="picker" id="picker">
+              <div class="assignee" id="assignee-btn">
+                <span class="av-agent local">Q</span>
+                <div style="line-height:1.25"><div class="nm" id="as-name">qwen3-coder</div><div class="meta" id="as-meta">local · up to medium</div></div>
+                <span class="caret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>
+              </div>
+              <div class="picker-pop" id="picker-pop">
+                <div class="picker-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input type="text" placeholder="Assign to…"></div>
+                <div class="picker-grp">People</div>
+                <div class="pick-item" data-kind="human" data-av="DM" data-name="Dennis M." data-meta="owner"><span class="av" style="background:var(--violet)">DM</span><span class="nm">Dennis M.</span><span class="spacer"></span><span class="meta">owner</span></div>
+                <div class="pick-item" data-kind="human" data-av="AK" data-name="Ana K." data-meta="member"><span class="av" style="background:#0EA5A0">AK</span><span class="nm">Ana K.</span><span class="spacer"></span><span class="meta">member</span></div>
+                <div class="picker-grp">Agents</div>
+                <div class="pick-item" data-kind="agent-local" data-av="Q" data-name="qwen3-coder" data-meta="local · up to medium"><span class="av-agent local">Q</span><span class="nm">qwen3-coder</span><span class="spacer"></span><span class="avail avail-free"></span></div>
+                <div class="pick-item" data-kind="agent-cloud" data-av="C" data-name="claude-sonnet" data-meta="cloud · up to ultra"><span class="av-agent">C</span><span class="nm">claude-sonnet</span><span class="spacer"></span><span class="avail avail-free"></span></div>
+                <div class="picker-grp">—</div>
+                <div class="pick-item" data-kind="none" data-av="" data-name="Unassigned" data-meta="no agent"><span class="av" style="background:var(--surface-3);color:var(--fg-4)">∅</span><span class="nm">Unassigned</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-k">Sprint</div>
+          <div class="meta-v" style="font-size:14px;color:var(--fg-2)">Sprint 14</div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-k">Priority</div>
+          <div class="meta-v"><span class="chip" style="color:var(--amber);border-color:color-mix(in srgb,var(--amber) 34%,transparent)">High</span></div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-k">Labels</div>
+          <div class="meta-v" style="display:flex;gap:6px;flex-wrap:wrap"><span class="chip" style="font-size:11px">security</span><span class="chip" style="font-size:11px">auth</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- PM ASSISTANT -->
+<aside class="assistant" id="assistant" aria-hidden="true">
+  <div class="asst-head">
+    <span class="ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4L12 3z"/></svg></span>
+    <span class="ttl">PM Assistant</span>
+    <span class="spacer" style="margin-left:auto"></span>
+    <button class="close-btn" id="asst-close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+  </div>
+  <div class="asst-body">
+    <div class="msg msg-bot"><div class="who">Assistant</div><div class="bub">I can decompose tickets, suggest a tier, or tell you what's ready and which agent fits. What do you need?</div></div>
+    <div class="msg msg-user"><div class="who">You</div><div class="bub">Decompose TAS-1062 — "Add sprints table and scoping".</div></div>
+    <div class="msg msg-bot">
+      <div class="who">Assistant</div>
+      <div class="bub">
+        Here's a draft breakdown. Each subtask carries the fields its tier needs — nothing reaches the board until you confirm.
+        <div class="draft">
+          <div class="dlabel">3 proposed drafts</div>
+          <div class="ditem"><span class="tier tier-low" style="font-size:10px"><span class="dot"></span>Low</span> Migration: sprints table + sprint_id</div>
+          <div class="ditem"><span class="tier tier-low" style="font-size:10px"><span class="dot"></span>Low</span> Sprint model + active_for_project()</div>
+          <div class="ditem"><span class="tier tier-medium" style="font-size:10px"><span class="dot"></span>Medium</span> Scope assignment pickup to sprint</div>
+          <div class="draft-actions">
+            <button class="btn btn-primary btn-sm">Confirm 3 drafts</button>
+            <button class="btn btn-ghost2 btn-sm">Dismiss</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="asst-input">
+    <div class="asst-inwrap">
+      <input type="text" placeholder="Ask about sprint planning, tiers, what's ready…">
+      <button class="asst-send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+    </div>
+    <div class="asst-deg">Org Anthropic key connected · key_last_validated 2h ago</div>
+  </div>
+</aside>
+
+<script>
+(function(){
+  var scrim = document.getElementById('scrim');
+  var drawer = document.getElementById('drawer');
+  var assistant = document.getElementById('assistant');
+  var dId = document.getElementById('d-id');
+  var dTitle = document.getElementById('d-title');
+  var dStatus = document.getElementById('d-status');
+  var tierpick = document.getElementById('tierpick');
+  var picker = document.getElementById('picker');
+
+  var STATUS = {
+    todo:   {cls:'sb-open',   txt:'Backlog'},
+    prog:   {cls:'sb-open',   txt:'In progress'},
+    review: {cls:'sb-review', txt:'In review'},
+    done:   {cls:'sb-merged', txt:'Done'}
+  };
+
+  function openDrawer(card){
+    assistant.classList.remove('open');
+    dId.textContent = card.dataset.id;
+    dTitle.textContent = card.dataset.title;
+    var st = STATUS[card.dataset.status] || STATUS.prog;
+    dStatus.className = 'status-badge ' + st.cls;
+    dStatus.textContent = st.txt;
+    // set tier selection
+    tierpick.querySelectorAll('.tier').forEach(function(t){ t.classList.toggle('sel', t.dataset.t === card.dataset.tier); });
+    scrim.classList.add('open');
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden','false');
+  }
+  function closeAll(){
+    scrim.classList.remove('open');
+    drawer.classList.remove('open');
+    assistant.classList.remove('open');
+    drawer.setAttribute('aria-hidden','true');
+    assistant.setAttribute('aria-hidden','true');
+    picker.classList.remove('open');
+  }
+
+  document.querySelectorAll('.kanban .kc').forEach(function(c){
+    c.addEventListener('click', function(){ openDrawer(c); });
+  });
+  document.getElementById('drawer-close').addEventListener('click', closeAll);
+  document.getElementById('asst-close').addEventListener('click', closeAll);
+  scrim.addEventListener('click', closeAll);
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeAll(); });
+
+  // PM assistant toggle
+  document.getElementById('asst-toggle').addEventListener('click', function(){
+    var open = assistant.classList.contains('open');
+    closeAll();
+    if(!open){ scrim.classList.add('open'); assistant.classList.add('open'); assistant.setAttribute('aria-hidden','false'); }
+  });
+
+  // tier picker (single select) in drawer
+  tierpick.addEventListener('click', function(e){
+    var t = e.target.closest('.tier'); if(!t) return;
+    tierpick.querySelectorAll('.tier').forEach(function(x){ x.classList.remove('sel'); });
+    t.classList.add('sel');
+    document.getElementById('tier-src').textContent = 'source: manual override';
+  });
+
+  // assignee picker
+  var assigneeBtn = document.getElementById('assignee-btn');
+  assigneeBtn.addEventListener('click', function(e){ e.stopPropagation(); picker.classList.toggle('open'); });
+  document.querySelectorAll('#picker-pop .pick-item').forEach(function(it){
+    it.addEventListener('click', function(){
+      var kind = it.dataset.kind, av = it.dataset.av;
+      var avEl = assigneeBtn.querySelector('.av, .av-agent');
+      var newAv;
+      if(kind === 'agent-local'){ newAv = '<span class="av-agent local">'+av+'</span>'; }
+      else if(kind === 'agent-cloud'){ newAv = '<span class="av-agent">'+av+'</span>'; }
+      else if(kind === 'human'){ newAv = '<span class="av" style="background:var(--violet)">'+av+'</span>'; }
+      else { newAv = '<span class="av" style="background:var(--surface-3);color:var(--fg-4)">∅</span>'; }
+      avEl.outerHTML = newAv;
+      document.getElementById('as-name').textContent = it.dataset.name;
+      document.getElementById('as-meta').textContent = it.dataset.meta || '';
+      picker.classList.remove('open');
+    });
+  });
+  document.addEventListener('click', function(e){ if(!picker.contains(e.target)) picker.classList.remove('open'); });
+
+  // autosync toggle
+  document.getElementById('autosync').addEventListener('click', function(){ this.classList.toggle('on'); });
+
+  // tier filter
+  var active = {basic:true, low:true, medium:true, hard:true, ultra:true};
+  document.getElementById('tfilter').addEventListener('click', function(e){
+    var t = e.target.closest('.tier'); if(!t) return;
+    var k = t.dataset.t; active[k] = !active[k];
+    t.classList.toggle('off', !active[k]);
+    document.querySelectorAll('.kanban .kc').forEach(function(c){
+      c.style.display = active[c.dataset.tier] ? '' : 'none';
+    });
+  });
+
+  // view tabs
+  document.querySelectorAll('.tabs .tab').forEach(function(tab){
+    tab.addEventListener('click', function(){ document.querySelectorAll('.tabs .tab').forEach(function(x){x.classList.remove('on');}); tab.classList.add('on'); });
+  });
+})();
+</script>
+</body>
+</html>

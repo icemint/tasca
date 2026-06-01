@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — Tasca</title>
+<meta name="description" content="Sign in to Tasca.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<style>
+.auth-stage { min-height: 100vh; display: grid; grid-template-columns: 1.05fr 0.95fr; }
+@media (max-width: 900px){ .auth-stage { grid-template-columns: 1fr; } .auth-aside { display: none; } }
+
+/* left: form */
+.auth-main { display: flex; flex-direction: column; padding: 28px 32px; position: relative; }
+.auth-main::before { content: ""; position: absolute; top: -160px; left: -120px; width: 520px; height: 420px;
+  pointer-events: none; background: radial-gradient(closest-side, var(--signal-glow), transparent 70%); }
+.auth-top { position: relative; }
+.auth-card { margin: auto; width: 100%; max-width: 380px; position: relative; padding: 24px 0; }
+.auth-card h1 { font-size: 30px; letter-spacing: -0.025em; }
+.auth-card .sub { color: var(--fg-3); margin-top: 10px; font-size: 15px; }
+.auth-oauth { margin-top: 28px; display: flex; flex-direction: column; gap: 10px; }
+.auth-actions { margin-top: 20px; }
+.auth-submit { width: 100%; }
+.auth-row { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+.auth-or span { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-4); white-space: nowrap; }
+.auth-link { font-size: 13px; color: var(--signal-2); white-space: nowrap; }
+.auth-link:hover { text-decoration: underline; }
+.auth-foot { position: relative; font-size: 13px; color: var(--fg-4); padding-top: 18px; }
+.auth-foot a { color: var(--fg-3); } .auth-foot a:hover { color: var(--fg-2); text-decoration: underline; }
+.auth-newacct { margin-top: 22px; text-align: center; font-size: 14px; color: var(--fg-3); }
+.auth-newacct a { color: var(--signal-2); font-weight: 500; }
+.auth-newacct a:hover { text-decoration: underline; }
+
+/* right: brand panel */
+.auth-aside { position: relative; overflow: hidden;
+  background: var(--gradient-aside);
+  border-left: 1px solid var(--line-2); display: flex; flex-direction: column; justify-content: center; padding: 56px; }
+.auth-aside .quote { font-family: var(--f-display); font-size: 27px; font-weight: 500; line-height: 1.3; letter-spacing: -0.02em; color: #fff; max-width: 420px; }
+.auth-aside .quote .hl { color: var(--amber); }
+.auth-aside .mini-board { margin-top: 40px; display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+.mini-kc { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+.mini-kc .mid { font-family: var(--f-mono); font-size: 11px; color: rgba(255,255,255,0.45); }
+.mini-kc .mt { font-size: 13.5px; color: rgba(255,255,255,0.9); font-weight: 500; flex: 1; min-width: 0; }
+</style>
+<link rel="stylesheet" href="assets/tokens.css">
+</head>
+<body>
+<div class="auth-stage">
+  <!-- FORM -->
+  <main class="auth-main">
+    <div class="auth-top">
+      <a class="brand" href="index.html" aria-label="Tasca home">
+        <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+          <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+          <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+          <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+        </svg>
+        <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+    </div>
+
+    <div class="auth-card">
+      <h1>Sign in to Tasca</h1>
+      <p class="sub">Welcome back. Pick how you'd like to continue.</p>
+
+      <div id="err" class="alert alert-error" role="alert" style="margin-top:22px; display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+        <span id="err-msg"></span>
+      </div>
+
+      <div class="auth-oauth">
+        <button class="oauth-btn oauth-google" type="button" data-oauth="google">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Continue with Google
+        </button>
+        <button class="oauth-btn oauth-github" type="button" data-oauth="github">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          Continue with GitHub
+        </button>
+      </div>
+
+      <div class="auth-or"><span>or with email</span></div>
+
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label class="label" for="email">Work email</label>
+          <input class="input" id="email" name="email" type="email" placeholder="you@company.com" autocomplete="email">
+        </div>
+        <div class="field">
+          <label class="label" for="password">Password</label>
+          <input class="input" id="password" name="password" type="password" placeholder="••••••••••" autocomplete="current-password">
+        </div>
+        <div class="auth-actions">
+          <button class="btn btn-primary auth-submit" type="submit">Sign in</button>
+        </div>
+        <div class="auth-row">
+          <a class="auth-link" href="#">Forgot password?</a>
+          <a class="auth-link" href="#">Use SSO</a>
+        </div>
+      </form>
+
+      <div class="auth-newacct">New to Tasca? <a href="docs.html#get-started">Create an organization</a></div>
+    </div>
+
+    <div class="auth-foot">
+      By continuing you agree to our <a href="terms.html">Terms</a> and <a href="privacy.html">Privacy Policy</a>.
+    </div>
+  </main>
+
+  <!-- BRAND PANEL -->
+  <aside class="auth-aside">
+    <div class="quote">Humans and AI agents, working the <span class="hl">same board</span> — routed to whoever can finish the work.</div>
+    <div class="mini-board">
+      <div class="mini-kc">
+        <span class="av-agent local" style="border-color:rgba(52,211,153,0.5);background:rgba(52,211,153,0.16);color:#34D399">Q</span>
+        <span class="mt">Inject Ollama base_url env</span>
+        <span class="tier tier-low"><span class="dot"></span>Low</span>
+      </div>
+      <div class="mini-kc">
+        <span class="av-agent" style="border-color:rgba(77,156,246,0.5);background:rgba(77,156,246,0.16);color:#6FB3FF">C</span>
+        <span class="mt">Per-tier validation gate</span>
+        <span class="tier tier-hard"><span class="dot"></span>Hard</span>
+      </div>
+      <div class="mini-kc">
+        <span class="av" style="background:#8B7BF0">DM</span>
+        <span class="mt">Rate-limit login route</span>
+        <span class="status-badge sb-approved">Approved</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  var form = document.getElementById('login-form');
+  var err = document.getElementById('err');
+  var errMsg = document.getElementById('err-msg');
+  function showErr(msg){ errMsg.textContent = msg; err.style.display = 'flex'; }
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var email = document.getElementById('email').value.trim();
+    var pw = document.getElementById('password').value;
+    if(!email || !pw){ showErr('Enter your email and password to continue.'); return; }
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ showErr('That email address doesn\u2019t look right.'); return; }
+    // demo: non-enumerating failure
+    showErr('We couldn\u2019t sign you in. Check your details and try again.');
+  });
+  document.querySelectorAll('[data-oauth]').forEach(function(b){
+    b.addEventListener('click', function(){ window.location.href = 'app.html'; });
+  });
+})();
+</script>
+</body>
+</html>

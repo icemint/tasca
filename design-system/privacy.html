@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — Tasca</title>
+<meta name="description" content="How the Tasca website handles data. The self-hosted product sends nothing to us.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<style>
+.privacy-callout { margin-top: 28px; border: 1px solid var(--line); border-left: 2px solid var(--green);
+  background: color-mix(in srgb, var(--green) 6%, var(--surface)); border-radius: var(--r-md); padding: 18px 20px; max-width: 720px; }
+.privacy-callout .ch { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--green); }
+.privacy-callout p { margin-top: 7px; color: var(--fg-2); font-size: 14.5px; line-height: 1.65; }
+</style>
+<link rel="stylesheet" href="assets/tokens.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="container nav">
+    <div class="nav-left">
+      <a class="brand" href="index.html" aria-label="Tasca home">
+        <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+          <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+          <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+          <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+        </svg>
+        <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="index.html#routing">How it works</a></li>
+          <li><a href="index.html#github">Automation</a></li>
+          <li><a href="security.html">Security</a></li>
+          <li><a href="docs.html">Docs</a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="nav-right">
+      <a class="nav-ghost hide-sm" href="https://github.com" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+        GitHub
+      </a>
+      <a class="btn btn-primary btn-sm" href="login.html">Get started</a>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="page-hero">
+  <div class="container">
+    <span class="eyebrow">Legal</span>
+    <h1>Privacy Policy</h1>
+    <p class="lead">Tasca is a hosted service. To run it for you, we process the data your team puts into it — and nothing more. This policy explains what we collect and why.</p>
+    <div class="updated">Last updated: June 1, 2026</div>
+    <div class="privacy-callout">
+      <div class="ch">The short version</div>
+      <p>We host Tasca for you, so we process your account and workspace data to provide the service. We don't sell it, and we don't train models on it. Prefer to keep everything in-house? Self-host instead and this policy doesn't apply.</p>
+    </div>
+  </div>
+</section>
+
+<div class="container">
+  <div class="legal-wrap">
+    <aside class="legal-toc">
+      <div class="th">Sections</div>
+      <a href="#scope">1. Scope</a>
+      <a href="#product">2. The hosted service</a>
+      <a href="#website">3. The website</a>
+      <a href="#cookies">4. Cookies</a>
+      <a href="#third-party">5. Subprocessors</a>
+      <a href="#retention">6. Retention</a>
+      <a href="#rights">7. Your rights</a>
+      <a href="#selfhost">8. Self-host</a>
+      <a href="#changes">9. Changes</a>
+      <a href="#contact">10. Contact</a>
+    </aside>
+
+    <div class="prose">
+      <section id="scope">
+        <h2><span class="num">1</span> Scope</h2>
+        <p>This Privacy Policy covers the hosted Tasca service and this marketing website. It does not apply to a self-hosted Tasca deployment you run yourself — that runs on your own infrastructure and is governed by your own privacy practices.</p>
+      </section>
+
+      <section id="product">
+        <h2><span class="num">2</span> The hosted service</h2>
+        <p>To provide hosted Tasca, we process the data your organization puts into the platform:</p>
+        <ul>
+          <li><strong>Account data</strong> — names, emails, and authentication details for the people on your team.</li>
+          <li><strong>Workspace content</strong> — projects, tickets, comments, sprints, and the repository metadata and pull-request state we sync from GitHub.</li>
+          <li><strong>Execution data</strong> — agent runs, logs, and diffs produced while work is dispatched on the board.</li>
+          <li><strong>Secrets</strong> — model-provider keys and tokens, stored encrypted at rest under a dedicated key and never shown back in plaintext.</li>
+        </ul>
+        <p>We use this data only to operate the service for you. We <strong>do not sell it</strong>, and we <strong>do not use your code, tickets, or prompts to train models</strong>. Data you send to coding agents or model providers you configure is additionally handled under those providers' policies.</p>
+      </section>
+
+      <section id="website">
+        <h2><span class="num">3</span> What the website collects</h2>
+        <p>We aim to collect as little as possible from visitors to this site.</p>
+        <ul>
+          <li><strong>Server logs.</strong> Our web server may record standard request metadata — IP address, user agent, requested path, and timestamp — for security and operational purposes. These logs are retained briefly and not used to build profiles.</li>
+          <li><strong>Contact email.</strong> If you email us (for example, security or legal inquiries), we receive the contents of that message and your email address, and use them only to respond.</li>
+          <li><strong>No advertising or behavioral analytics.</strong> We do not run third-party advertising, fingerprinting, or cross-site tracking on this site.</li>
+        </ul>
+      </section>
+
+      <section id="cookies">
+        <h2><span class="num">4</span> Cookies</h2>
+        <p>This website does not set advertising or analytics cookies. Any cookies used are strictly necessary for the site to function (for example, remembering a theme preference). You can block or delete cookies in your browser without losing access to the site's content.</p>
+      </section>
+
+      <section id="third-party">
+        <h2><span class="num">5</span> Subprocessors</h2>
+        <p>We rely on a small set of providers to deliver the hosted service — cloud infrastructure and hosting, our database and email delivery, and the model and code-host integrations you connect (such as GitHub and your chosen model providers). Each processes data only as needed to provide its part of the service. The site also links to third-party destinations like our source repository; those have their own policies.</p>
+      </section>
+
+      <section id="retention">
+        <h2><span class="num">6</span> Retention</h2>
+        <p>We retain your workspace data for as long as your organization keeps its account. When you delete data or close your account, we remove it from active systems and from backups in line with our routine deletion schedule. Server logs are kept briefly for security and operations, then deleted or anonymized.</p>
+      </section>
+
+      <section id="rights">
+        <h2><span class="num">7</span> Your rights</h2>
+        <p>Depending on where you live, you may have rights to access, correct, export, or delete the personal data we hold about you, or to object to certain processing. Admins can export or delete organization data directly from the app; for anything else, contact us at the address below and we will respond as required by applicable law.</p>
+      </section>
+
+      <section id="selfhost">
+        <h2><span class="num">8</span> Self-host</h2>
+        <p>If you choose to self-host Tasca instead of using our hosted service, this policy does not apply to that deployment. The software runs on your own infrastructure, processes data under your control, and bundles no analytics or telemetry that report back to us — you become the controller of the data it handles.</p>
+      </section>
+
+      <section id="changes">
+        <h2><span class="num">9</span> Changes</h2>
+        <p>We may update this policy from time to time. When we do, we will revise the "last updated" date above. We encourage you to review this page periodically.</p>
+      </section>
+
+      <section id="contact">
+        <h2><span class="num">10</span> Contact</h2>
+        <p>Questions about this policy or a privacy request can be sent to <a href="mailto:privacy@tasca.dev">privacy@tasca.dev</a>.</p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="index.html" aria-label="Tasca home">
+          <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+            <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+            <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+            <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+            <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+          </svg>
+          <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+        </a>
+        <p class="body">The control plane for agentic delivery. Humans and AI agents, one board.</p>
+      </div>
+      <div><h4>Product</h4><ul>
+        <li><a href="index.html#routing">Capability routing</a></li>
+        <li><a href="index.html#github">Review automation</a></li>
+        <li><a href="index.html#security">Security model</a></li>
+        <li><a href="docs.html#get-started">Get started</a></li>
+      </ul></div>
+      <div><h4>Resources</h4><ul>
+        <li><a href="docs.html">Docs</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="tokens.html">Design tokens</a></li>
+        <li><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></li>
+      </ul></div>
+      <div><h4>Legal</h4><ul>
+        <li><a href="terms.html">Terms &amp; Conditions</a></li>
+        <li><a href="privacy.html">Privacy Policy</a></li>
+      </ul></div>
+    </div>
+    <div class="footer-legal">
+      <span>© 2026 Tasca · Apache-2.0</span>
+      <span>Hosted &amp; managed · Open source</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var secs = [].slice.call(document.querySelectorAll('.prose section'));
+  var links = [].slice.call(document.querySelectorAll('.legal-toc a'));
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting){
+      links.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href') === '#'+e.target.id); });
+    }});
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  secs.forEach(function(s){ io.observe(s); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Tokens — Tasca</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+body { overflow-x: hidden; }
+.ref-top { position: sticky; top: 0; z-index: 100; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+.ref-nav { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.theme-toggle { display: flex; gap: 3px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.theme-toggle button { font-family: var(--font-mono); font-size: 12px; padding: 6px 14px; border-radius: 6px; color: var(--fg-3); }
+.theme-toggle button.on { background: var(--surface-3); color: var(--fg); }
+
+.ref-wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+.ref-head { padding: 52px 0 8px; }
+.ref-head h1 { font-size: clamp(32px, 5vw, 46px); letter-spacing: -0.03em; }
+.ref-head .lead { margin-top: 14px; max-width: 620px; }
+
+.ref-sec { padding: 48px 0; border-top: 1px solid var(--line); }
+.ref-sec:first-of-type { border-top: none; }
+.ref-eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--signal); }
+.ref-sec h2 { font-size: 24px; letter-spacing: -0.02em; margin-top: 10px; }
+.ref-sec .desc { color: var(--fg-3); margin-top: 8px; font-size: 14.5px; max-width: 640px; }
+.ref-grp { margin-top: 26px; }
+.ref-grp h3 { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-4); margin-bottom: 14px; }
+
+/* swatches */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; }
+.sw { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); }
+.sw .chip { height: 58px; }
+.sw .meta { padding: 9px 11px; }
+.sw .nm { font-family: var(--font-mono); font-size: 11px; color: var(--fg-2); }
+.sw .val { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4); margin-top: 2px; text-transform: uppercase; }
+
+/* tier scale row */
+.tier-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+@media (max-width: 720px){ .tier-grid { grid-template-columns: repeat(2,1fr); } }
+.tier-card { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 18px; background: var(--surface); }
+.tier-card .lvl { font-family: var(--font-mono); font-size: 10px; color: var(--fg-4); margin-bottom: 12px; }
+.tier-card .bars { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
+.tier-bar { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-4); }
+.tier-bar .b { width: 22px; height: 22px; border-radius: 6px; flex: none; }
+
+/* contrast matrix */
+.matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+.matrix th, .matrix td { padding: 11px 12px; border: 1px solid var(--line); text-align: center; }
+.matrix th { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; color: var(--fg-4); font-weight: 500; }
+.matrix th.rowh, .matrix td.rowh { text-align: left; }
+.matrix td .ratio { font-family: var(--font-mono); font-weight: 600; color: var(--fg); display: block; }
+.matrix .aa { font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-top: 4px; display: inline-block; }
+.aa-pass { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.aa-large { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.aa-fail  { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.matrix .demo { display: inline-block; font-family: var(--font-mono); font-weight: 600; font-size: 12px; padding: 2px 7px; border-radius: 5px; }
+.matrix-note { font-size: 13px; color: var(--fg-4); margin-top: 14px; font-family: var(--font-mono); }
+
+/* type specimen */
+.spec-row { display: flex; align-items: baseline; gap: 18px; padding: 12px 0; border-top: 1px solid var(--line); }
+.spec-row:first-child { border-top: none; }
+.spec-row .tag { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); width: 110px; flex: none; }
+.spec-row .smp { color: var(--fg); line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* spacing */
+.space-row { display: flex; align-items: center; gap: 14px; padding: 6px 0; }
+.space-row .lab { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); width: 120px; flex: none; }
+.space-bar { height: 14px; background: var(--signal); border-radius: 3px; }
+
+/* radii + elevation */
+.box-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+.rbox { height: 88px; border: 1px solid var(--line-2); background: var(--surface-2); display: grid; place-items: end center; padding-bottom: 10px; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4); }
+.ebox { height: 88px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius-md); display: grid; place-items: end center; padding-bottom: 10px; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4); }
+
+.spec-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 10px; }
+.spec-item { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 13px 15px; background: var(--surface); }
+.spec-item .k { font-family: var(--font-mono); font-size: 11px; color: var(--fg-2); }
+.spec-item .v { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); margin-top: 4px; }
+
+.dots { display: flex; gap: 18px; flex-wrap: wrap; }
+.dotrow { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 12px; color: var(--fg-2); }
+.dotrow .d { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+<header class="ref-top">
+  <div class="ref-wrap ref-nav">
+    <a class="brand" href="index.html" aria-label="Tasca home">
+      <svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/>
+        <rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/>
+        <rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/>
+        <rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/>
+      </svg>
+      <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+    </a>
+    <div class="theme-toggle" id="theme-toggle">
+      <button data-theme-set="dark" class="on">Dark</button>
+      <button data-theme-set="light">Light</button>
+    </div>
+  </div>
+</header>
+
+<div class="ref-wrap">
+  <div class="ref-head">
+    <h1>Design tokens</h1>
+    <p class="lead">The Tasca foundation: primitives → semantic roles → component scales, themed for dark and light. Every value here is a CSS custom property in <span class="mono" style="color:var(--fg-2)">tokens.css</span> — components never hard-code.</p>
+  </div>
+
+  <!-- PRIMITIVES -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Layer 1</span>
+    <h2>Primitive palette</h2>
+    <p class="desc">Raw, theme-agnostic values. Semantic roles reference these — they are never used directly in components.</p>
+
+    <div class="ref-grp"><h3>Ink ramp</h3><div class="swatches" id="sw-ink"></div></div>
+    <div class="ref-grp"><h3>Slate ramp</h3><div class="swatches" id="sw-slate"></div></div>
+    <div class="ref-grp"><h3>Signal blue · Amber</h3><div class="swatches" id="sw-brand"></div></div>
+    <div class="ref-grp"><h3>Status &amp; accent</h3><div class="swatches" id="sw-status"></div></div>
+  </section>
+
+  <!-- SEMANTIC -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Layer 2</span>
+    <h2>Semantic roles</h2>
+    <p class="desc">Role aliases that flip with the theme. Toggle dark/light above — these swatches and their resolved hex update live.</p>
+    <div class="ref-grp"><h3>Surfaces</h3><div class="swatches" id="sw-surface"></div></div>
+    <div class="ref-grp"><h3>Text &amp; lines</h3><div class="swatches" id="sw-text"></div></div>
+    <div class="ref-grp"><h3>Brand &amp; status (themed)</h3><div class="swatches" id="sw-sembrand"></div></div>
+  </section>
+
+  <!-- TIER SCALE -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Layer 3 · complexity</span>
+    <h2>Tier scale</h2>
+    <p class="desc">basic → low → medium → hard → ultra. Cool-to-warm encodes rising complexity. Light-theme values are darkened so tier text clears AA on white.</p>
+    <div class="tier-grid" id="tier-grid"></div>
+  </section>
+
+  <!-- CONTRAST -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Accessibility</span>
+    <h2>WCAG 2.2 contrast matrix</h2>
+    <p class="desc">Computed contrast ratio of each tier / key foreground against each surface in the active theme. AA = 4.5:1 (text), AA Large / non-text UI = 3:1.</p>
+    <div style="overflow-x:auto; margin-top:22px;">
+      <table class="matrix" id="matrix"></table>
+    </div>
+    <div class="matrix-note" id="matrix-note"></div>
+  </section>
+
+  <!-- REVIEW / EXEC -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Layer 3 · workflow</span>
+    <h2>Review &amp; execution states</h2>
+    <p class="desc">Dedicated tokens for PR review states and agent execution states — color plus an always-present label, never color alone.</p>
+    <div class="ref-grp"><h3>Review state</h3>
+      <div class="dots">
+        <span class="status-badge sb-open">Open</span>
+        <span class="status-badge sb-review">In review</span>
+        <span class="status-badge sb-approved">Approved</span>
+        <span class="status-badge sb-changes">Changes</span>
+        <span class="status-badge sb-merged">Merged</span>
+      </div>
+    </div>
+    <div class="ref-grp"><h3>Execution state</h3>
+      <div class="dots" id="exec-dots"></div>
+    </div>
+  </section>
+
+  <!-- TYPE -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Typography</span>
+    <h2>Type scale</h2>
+    <p class="desc">Display <span class="mono" style="color:var(--fg-2)">Space Grotesk</span> · body <span class="mono" style="color:var(--fg-2)">Hanken Grotesk</span> · mono <span class="mono" style="color:var(--fg-2)">JetBrains Mono</span>.</p>
+    <div class="ref-grp">
+      <div style="font-family:var(--font-display); font-size:var(--fs-hero); font-weight:700; letter-spacing:var(--tracking-hero); line-height:var(--lh-hero); color:var(--fg);">Humans and AI agents</div>
+      <div style="font-family:var(--font-mono); font-size:11px; color:var(--fg-4); margin-top:8px;">--fs-hero · 70px · Space Grotesk 700 · tracking -0.035em</div>
+    </div>
+    <div class="ref-grp" id="type-spec"></div>
+  </section>
+
+  <!-- SPACING -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Layout</span>
+    <h2>Spacing scale</h2>
+    <p class="desc">8-point grid. Used for padding, gaps, and section rhythm.</p>
+    <div class="ref-grp" id="space-spec" style="margin-top:18px;"></div>
+  </section>
+
+  <!-- RADII -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Shape</span>
+    <h2>Corner radii</h2>
+    <div class="ref-grp box-grid" id="radii-spec"></div>
+  </section>
+
+  <!-- ELEVATION -->
+  <section class="ref-sec">
+    <span class="ref-eyebrow">Depth</span>
+    <h2>Elevation</h2>
+    <p class="desc">Borders are the primary elevation system. Shadows are reserved for floating layers — drawers, popovers, the hero product shot.</p>
+    <div class="ref-grp box-grid" id="elev-spec"></div>
+  </section>
+
+  <!-- SYSTEM SCALES -->
+  <section class="ref-sec" style="padding-bottom:90px;">
+    <span class="ref-eyebrow">System</span>
+    <h2>Z-index · opacity · motion</h2>
+    <div class="ref-grp"><h3>Z-index layers</h3><div class="spec-list" id="z-spec"></div></div>
+    <div class="ref-grp"><h3>Opacity</h3><div class="spec-list" id="op-spec"></div></div>
+    <div class="ref-grp"><h3>Motion</h3><div class="spec-list" id="motion-spec"></div></div>
+  </section>
+</div>
+
+<span id="probe" style="position:absolute;visibility:hidden;pointer-events:none;"></span>
+
+<script>
+(function(){
+  var probe = document.getElementById('probe');
+  function resolve(varName){
+    probe.style.color = 'var(' + varName + ')';
+    var c = getComputedStyle(probe).color;
+    var m = c.match(/[\d.]+/g);
+    return m ? [ +m[0], +m[1], +m[2] ] : [0,0,0];
+  }
+  function toHex(rgb){ return '#' + rgb.slice(0,3).map(function(v){ return ('0'+Math.round(v).toString(16)).slice(-2); }).join('').toUpperCase(); }
+  function lum(rgb){ var a = rgb.slice(0,3).map(function(v){ v/=255; return v<=0.03928? v/12.92 : Math.pow((v+0.055)/1.055,2.4); }); return 0.2126*a[0]+0.7152*a[1]+0.0722*a[2]; }
+  function ratio(a,b){ var L1=lum(a), L2=lum(b); var hi=Math.max(L1,L2), lo=Math.min(L1,L2); return (hi+0.05)/(lo+0.05); }
+
+  // ── PRIMITIVE swatches (static hex) ──
+  var prim = {
+    'sw-ink': [['--p-ink-950','#070A11'],['--p-ink-900','#090D14'],['--p-ink-850','#0B1019'],['--p-ink-800','#0F1622'],['--p-ink-700','#141D2C'],['--p-ink-600','#1A2434']],
+    'sw-slate': [['--p-slate-50','#F3F6FB'],['--p-slate-100','#E2E8F0'],['--p-slate-200','#C4CDDA'],['--p-slate-300','#94A3B8'],['--p-slate-400','#8B97A8'],['--p-slate-500','#5C6779'],['--p-slate-600','#475569'],['--p-slate-700','#334155'],['--p-slate-800','#1E293B'],['--p-slate-900','#0F172A']],
+    'sw-brand': [['--p-blue-300','#6FB3FF'],['--p-blue-400','#4D9CF6'],['--p-blue-500','#2C6FD6'],['--p-blue-700','#0052B5'],['--p-amber-400','#FFC53D'],['--p-amber-700','#B45309']],
+    'sw-status': [['--p-green-400','#34D399'],['--p-red-400','#FF6B6B'],['--p-purple-400','#A78BFA'],['--p-violet-400','#8B7BF0'],['--p-teal-400','#2DD4BF'],['--p-slate-tier','#8893A5']]
+  };
+  Object.keys(prim).forEach(function(id){
+    document.getElementById(id).innerHTML = prim[id].map(function(p){
+      return '<div class="sw"><div class="chip" style="background:'+p[1]+'"></div><div class="meta"><div class="nm">'+p[0]+'</div><div class="val">'+p[1]+'</div></div></div>';
+    }).join('');
+  });
+
+  // ── SEMANTIC swatches (themed — resolved live) ──
+  var sem = {
+    'sw-surface': ['--bg','--bg-sub','--surface','--surface-2','--surface-3'],
+    'sw-text': ['--fg','--fg-2','--fg-3','--fg-4','--line','--line-2'],
+    'sw-sembrand': ['--signal','--signal-2','--amber','--green','--red','--purple']
+  };
+  function renderSemantic(){
+    Object.keys(sem).forEach(function(id){
+      document.getElementById(id).innerHTML = sem[id].map(function(v){
+        return '<div class="sw"><div class="chip" style="background:var('+v+')"></div><div class="meta"><div class="nm">'+v+'</div><div class="val">'+toHex(resolve(v))+'</div></div></div>';
+      }).join('');
+    });
+  }
+
+  // ── TIER cards ──
+  var tiers = [['basic','--tier-basic'],['low','--tier-low'],['medium','--tier-medium'],['hard','--tier-hard'],['ultra','--tier-ultra']];
+  function renderTiers(){
+    document.getElementById('tier-grid').innerHTML = tiers.map(function(t){
+      var hex = toHex(resolve(t[1]));
+      return '<div class="tier-card"><div class="lvl">tier · '+t[0]+'</div>'+
+        '<span class="tier tier-'+t[0]+'"><span class="dot"></span>'+t[0]+'</span>'+
+        '<div class="bars"><div class="tier-bar"><span class="b" style="background:var('+t[1]+')"></span>'+hex+'</div></div></div>';
+    }).join('');
+  }
+
+  // ── EXEC dots ──
+  var execs = [['idle','--exec-idle'],['running','--exec-running'],['pending','--exec-pending'],['failed','--exec-failed'],['denied','--exec-denied']];
+  function renderExec(){
+    document.getElementById('exec-dots').innerHTML = execs.map(function(e){
+      return '<span class="dotrow"><span class="d" style="background:var('+e[1]+')"></span>'+e[0]+'</span>';
+    }).join('');
+  }
+
+  // ── CONTRAST MATRIX ──
+  var fgs = [['tier-basic','--tier-basic'],['tier-low','--tier-low'],['tier-medium','--tier-medium'],['tier-hard','--tier-hard'],['tier-ultra','--tier-ultra'],['fg (body)','--fg'],['fg-3 (muted)','--fg-3'],['signal','--signal'],['amber','--amber']];
+  var surfs = [['--bg','bg'],['--surface','surface'],['--surface-2','surface-2']];
+  function badge(r){
+    if (r >= 4.5) return '<span class="aa aa-pass">AA</span>';
+    if (r >= 3)   return '<span class="aa aa-large">AA·lg</span>';
+    return '<span class="aa aa-fail">fail</span>';
+  }
+  function renderMatrix(){
+    var head = '<tr><th class="rowh">foreground \\ surface</th>' + surfs.map(function(s){ return '<th>'+s[1]+'<br><span style="color:var(--fg-faint);font-weight:400">'+toHex(resolve(s[0]))+'</span></th>'; }).join('') + '</tr>';
+    var rows = fgs.map(function(f){
+      var frgb = resolve(f[1]);
+      var cells = surfs.map(function(s){
+        var r = ratio(frgb, resolve(s[0]));
+        return '<td><span class="demo" style="color:var('+f[1]+');background:var('+s[0]+')">Aa</span><span class="ratio" style="margin-top:5px">'+r.toFixed(2)+'</span>'+badge(r)+'</td>';
+      }).join('');
+      return '<tr><td class="rowh" style="font-family:var(--font-mono);font-size:12px;color:var(--fg-2)">'+f[0]+'</td>'+cells+'</tr>';
+    }).join('');
+    document.getElementById('matrix').innerHTML = head + rows;
+    document.getElementById('matrix-note').textContent = 'Theme: ' + (document.documentElement.getAttribute('data-theme')) + ' · ratios recomputed from resolved token values.';
+  }
+
+  // ── TYPE specimen ──
+  var typeSteps = [['--fs-4xl','42px'],['--fs-3xl','34px'],['--fs-2xl','26px'],['--fs-xl','20px'],['--fs-lg','18px'],['--fs-md','16px'],['--fs-base','15px'],['--fs-sm','13px'],['--fs-xs','12px']];
+  document.getElementById('type-spec').innerHTML = typeSteps.map(function(t){
+    return '<div class="spec-row"><span class="tag">'+t[0]+'</span><span class="smp" style="font-size:var('+t[0]+');font-family:var(--font-body);font-weight:500">The control plane for agentic delivery</span></div>';
+  }).join('') + '<div class="spec-row"><span class="tag">mono</span><span class="smp" style="font-size:14px;font-family:var(--font-mono);color:var(--fg-2)">TAS-1042 · qwen3-coder · tier=medium</span></div>';
+
+  // ── SPACING ──
+  var spaces = [['--sp-1','4'],['--sp-2','8'],['--sp-3','12'],['--sp-4','16'],['--sp-6','24'],['--sp-8','32'],['--sp-10','40'],['--sp-12','48'],['--sp-16','64'],['--sp-20','80']];
+  document.getElementById('space-spec').innerHTML = spaces.map(function(s){
+    return '<div class="space-row"><span class="lab">'+s[0]+' · '+s[1]+'px</span><span class="space-bar" style="width:'+s[1]+'px"></span></div>';
+  }).join('');
+
+  // ── RADII ──
+  var radii = [['--radius-xs','4px'],['--radius-tag','6px'],['--radius-sm','8px'],['--radius-md','10px'],['--radius-card','14px'],['--radius-xl','20px']];
+  document.getElementById('radii-spec').innerHTML = radii.map(function(r){
+    return '<div class="rbox" style="border-radius:var('+r[0]+')">'+r[0]+'</div>';
+  }).join('');
+
+  // ── ELEVATION ──
+  var elevs = [['--shadow-sm','sm'],['--shadow-md','md'],['--shadow-lg','lg'],['--shadow-xl','xl']];
+  document.getElementById('elev-spec').innerHTML = elevs.map(function(e){
+    return '<div class="ebox" style="box-shadow:var('+e[0]+')">'+e[0]+'</div>';
+  }).join('');
+
+  // ── SYSTEM ──
+  document.getElementById('z-spec').innerHTML = [['--z-sticky','100'],['--z-scrim','200'],['--z-drawer','210'],['--z-assistant','215'],['--z-popover','300'],['--z-toast','400']].map(function(x){ return '<div class="spec-item"><div class="k">'+x[0]+'</div><div class="v">'+x[1]+'</div></div>'; }).join('');
+  document.getElementById('op-spec').innerHTML = [['--op-disabled','0.4'],['--op-muted','0.6'],['--op-faint','0.32'],['--op-hover','0.08']].map(function(x){ return '<div class="spec-item"><div class="k">'+x[0]+'</div><div class="v">'+x[1]+'</div></div>'; }).join('');
+  document.getElementById('motion-spec').innerHTML = [['--dur-fast','120ms'],['--dur','220ms'],['--dur-slow','320ms'],['--ease','cubic-bezier(.2,.6,.2,1)']].map(function(x){ return '<div class="spec-item"><div class="k">'+x[0]+'</div><div class="v">'+x[1]+'</div></div>'; }).join('');
+
+  function renderThemed(){ renderSemantic(); renderTiers(); renderExec(); renderMatrix(); }
+  renderThemed();
+
+  // theme toggle
+  document.getElementById('theme-toggle').addEventListener('click', function(e){
+    var b = e.target.closest('[data-theme-set]'); if(!b) return;
+    document.documentElement.setAttribute('data-theme', b.dataset.themeSet);
+    document.querySelectorAll('#theme-toggle button').forEach(function(x){ x.classList.toggle('on', x===b); });
+    renderThemed();
+  });
+})();
+</script>
+<template id="__bundler_thumbnail" data-bg-color="#090D14">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#090D14"/>
+    <rect x="430" y="250" width="60" height="230" rx="10" fill="#5C6779"/>
+    <rect x="525" y="250" width="60" height="170" rx="10" fill="#4D9CF6"/>
+    <rect x="620" y="250" width="60" height="120" rx="10" fill="#2DD4BF"/>
+    <rect x="715" y="250" width="60" height="120" rx="10" fill="#FFC53D"/>
+    <text x="600" y="585" font-family="'JetBrains Mono', monospace" font-size="44" font-weight="600" fill="#F3F6FB" text-anchor="middle" letter-spacing="2">TOKENS</text>
+  </svg>
+</template>
+</body>
+</html>
