@@ -1,110 +1,53 @@
 ---
 import Base from '../layouts/Base.astro';
----
+import { Content, getHeadings } from '../legal/privacy.md';
 
+// Top-level sections (## …) drive the sticky table of contents.
+const sections = getHeadings().filter((h) => h.depth === 2);
+const updated = 'June 1, 2026';
+---
 <Base
   title="Privacy Policy — Tasca"
-  description="How the Tasca website handles data. The self-hosted product sends nothing to us."
+  description="How the Tasca website and hosted service handle data. The self-hosted product sends nothing to us."
 >
   <section class="page-hero">
     <div class="container">
       <span class="eyebrow">Legal</span>
       <h1>Privacy Policy</h1>
-      <p class="lead">Tasca is a hosted service. To run it for you, we process the data your team puts into it — and nothing more. This policy explains what we collect and why.</p>
-      <div class="updated">Last updated: June 1, 2026</div>
-      <div class="privacy-callout">
-        <div class="ch">The short version</div>
-        <p>We host Tasca for you, so we process your account and workspace data to provide the service. We don't sell it, and we don't train models on it. Prefer to keep everything in-house? Self-host instead and this policy doesn't apply.</p>
-      </div>
+      <p class="lead">How the Tasca website and the Company-operated hosted service handle your data.</p>
+      <p class="updated">Last updated {updated}</p>
     </div>
   </section>
 
-  <div class="container">
-    <div class="legal-wrap">
-      <nav class="legal-toc" aria-label="On this page">
-        <div class="th">Sections</div>
-        <a href="#scope">1. Scope</a>
-        <a href="#product">2. The hosted service</a>
-        <a href="#website">3. The website</a>
-        <a href="#cookies">4. Cookies</a>
-        <a href="#third-party">5. Subprocessors</a>
-        <a href="#retention">6. Retention</a>
-        <a href="#rights">7. Your rights</a>
-        <a href="#selfhost">8. Self-host</a>
-        <a href="#changes">9. Changes</a>
-        <a href="#contact">10. Contact</a>
-      </nav>
-
-      <div class="prose">
-        <section id="scope">
-          <h2><span class="num">1</span> Scope</h2>
-          <p>This Privacy Policy covers the hosted Tasca service and this marketing website. It does not apply to a self-hosted Tasca deployment you run yourself — that runs on your own infrastructure and is governed by your own privacy practices.</p>
-        </section>
-
-        <section id="product">
-          <h2><span class="num">2</span> The hosted service</h2>
-          <p>To provide hosted Tasca, we process the data your organization puts into the platform:</p>
-          <ul>
-            <li><strong>Account data</strong> — names, emails, and authentication details for the people on your team.</li>
-            <li><strong>Workspace content</strong> — projects, tickets, comments, sprints, and the repository metadata and pull-request state we sync from GitHub.</li>
-            <li><strong>Execution data</strong> — agent runs, logs, and diffs produced while work is dispatched on the board.</li>
-            <li><strong>Secrets</strong> — model-provider keys and tokens, stored encrypted at rest under a dedicated key and never shown back in plaintext.</li>
-          </ul>
-          <p>We use this data only to operate the service for you. We <strong>do not sell it</strong>, and we <strong>do not use your code, tickets, or prompts to train models</strong>. Data you send to coding agents or model providers you configure is additionally handled under those providers' policies.</p>
-        </section>
-
-        <section id="website">
-          <h2><span class="num">3</span> What the website collects</h2>
-          <p>We aim to collect as little as possible from visitors to this site.</p>
-          <ul>
-            <li><strong>Server logs.</strong> Our web server may record standard request metadata — IP address, user agent, requested path, and timestamp — for security and operational purposes. These logs are retained briefly and not used to build profiles.</li>
-            <li><strong>Contact email.</strong> If you email us (for example, security or legal inquiries), we receive the contents of that message and your email address, and use them only to respond.</li>
-            <li><strong>No advertising or behavioral analytics.</strong> We do not run third-party advertising, fingerprinting, or cross-site tracking on this site.</li>
-          </ul>
-        </section>
-
-        <section id="cookies">
-          <h2><span class="num">4</span> Cookies</h2>
-          <p>This website does not set advertising or analytics cookies. Any cookies used are strictly necessary for the site to function (for example, remembering a theme preference). You can block or delete cookies in your browser without losing access to the site's content.</p>
-        </section>
-
-        <section id="third-party">
-          <h2><span class="num">5</span> Subprocessors</h2>
-          <p>We rely on a small set of providers to deliver the hosted service — cloud infrastructure and hosting, our database and email delivery, and the model and code-host integrations you connect (such as GitHub and your chosen model providers). Each processes data only as needed to provide its part of the service. The site also links to third-party destinations like our source repository; those have their own policies.</p>
-        </section>
-
-        <section id="retention">
-          <h2><span class="num">6</span> Retention</h2>
-          <p>We retain your workspace data for as long as your organization keeps its account. When you delete data or close your account, we remove it from active systems and from backups in line with our routine deletion schedule. Server logs are kept briefly for security and operations, then deleted or anonymized.</p>
-        </section>
-
-        <section id="rights">
-          <h2><span class="num">7</span> Your rights</h2>
-          <p>Depending on where you live, you may have rights to access, correct, export, or delete the personal data we hold about you, or to object to certain processing. Admins can export or delete organization data directly from the app; for anything else, contact us at the address below and we will respond as required by applicable law.</p>
-        </section>
-
-        <section id="selfhost">
-          <h2><span class="num">8</span> Self-host</h2>
-          <p>If you choose to self-host Tasca instead of using our hosted service, this policy does not apply to that deployment. The software runs on your own infrastructure, processes data under your control, and bundles no analytics or telemetry that report back to us — you become the controller of the data it handles.</p>
-        </section>
-
-        <section id="changes">
-          <h2><span class="num">9</span> Changes</h2>
-          <p>We may update this policy from time to time. When we do, we will revise the "last updated" date above. We encourage you to review this page periodically.</p>
-        </section>
-
-        <section id="contact">
-          <h2><span class="num">10</span> Contact</h2>
-          <p>Questions about this policy or a privacy request can be sent to <a href="mailto:privacy@tasca.dev">privacy@tasca.dev</a>.</p>
-        </section>
-      </div>
-    </div>
+  <div class="container legal-wrap">
+    <nav class="legal-toc" aria-label="On this page">
+      <div class="th">On this page</div>
+      {sections.map((s) => <a href={`#${s.slug}`}>{s.text}</a>)}
+    </nav>
+    <article class="prose legal-prose">
+      <Content />
+    </article>
   </div>
 </Base>
 
 <style is:global>
-  .privacy-callout { margin-top: 28px; border: 1px solid var(--line); border-left: 2px solid var(--green);
-    background: color-mix(in srgb, var(--green) 6%, var(--surface)); border-radius: var(--r-md); padding: 18px 20px; max-width: 720px; }
-  .privacy-callout .ch { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--green); }
-  .privacy-callout p { margin-top: 7px; color: var(--fg-2); font-size: 14.5px; line-height: 1.65; }
+  /* Markdown-rendered legal prose — covers elements beyond the base .prose set. */
+  .legal-prose > :first-child { margin-top: 0; }
+  .legal-prose h2 { margin-top: 44px; scroll-margin-top: 88px; }
+  .legal-prose h3 { scroll-margin-top: 88px; }
+  .legal-prose blockquote {
+    margin-top: 16px; padding: 12px 16px;
+    border-left: 3px solid var(--line-3); background: var(--surface-2);
+    border-radius: var(--r-sm); color: var(--fg-3);
+  }
+  .legal-prose blockquote p { margin-top: 0; }
+  .legal-prose blockquote p + p { margin-top: 10px; }
+  .legal-prose code {
+    font-family: var(--f-mono); font-size: 0.9em; color: var(--fg-2);
+    background: var(--surface-2); border: 1px solid var(--line-2);
+    border-radius: 5px; padding: 1px 6px;
+  }
+  .legal-prose table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14.5px; }
+  .legal-prose th, .legal-prose td { text-align: left; padding: 9px 12px; border: 1px solid var(--line-2); color: var(--fg-3); }
+  .legal-prose th { color: var(--fg-2); background: var(--surface-2); font-weight: 600; }
 </style>
