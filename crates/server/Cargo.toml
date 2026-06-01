@@ -33,7 +33,7 @@ desktop-bridge = { path = "../desktop-bridge" }
 preview-proxy = { path = "../preview-proxy" }
 trusted-key-auth = { path = "../trusted-key-auth" }
 tokio = { workspace = true }
-shlex = "1.3.0"
+shlex = "2.0.1"
 tokio-util = { version = "0.7", features = ["io"] }
 axum = { workspace = true }
 serde = { workspace = true }
