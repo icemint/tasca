@@ -1,7 +1,7 @@
 ---
 import BrandMark from './BrandMark.astro';
 import { GITHUB_URL } from '../config';
-const year = 2026;
+const year = new Date().getFullYear();
 ---
 <footer class="footer">
   <div class="container footer-inner">
@@ -37,7 +37,7 @@ const year = 2026;
     </div>
     <div class="footer-legal">
       <span>© {year} Tasca · Apache-2.0</span>
-      <span>Hosted &amp; managed · Open source</span>
+      <span>Icemint LLC, © {year}</span>
     </div>
   </div>
 </footer>
