@@ -1,7 +1,7 @@
 {
   "name": "@vibe/web-core",
   "private": true,
-  "version": "0.1.18",
+  "version": "0.1.44",
   "type": "module",
   "exports": {
     "./project-fallback-page": "./src/project-routes/ProjectFallbackPage.tsx",
