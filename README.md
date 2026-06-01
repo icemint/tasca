@@ -1,163 +1,228 @@
 <p align="center">
-  <a href="https://vibekanban.com">
+  <a href="https://tasca.dev">
     <picture>
-      <source srcset="packages/public/vibe-kanban-logo-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/public/vibe-kanban-logo.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/public/vibe-kanban-logo.svg" alt="Vibe Kanban Logo">
+      <source srcset="packages/public/tasca-logo-dark.svg" media="(prefers-color-scheme: dark)">
+      <source srcset="packages/public/tasca-logo.svg" media="(prefers-color-scheme: light)">
+      <img src="packages/public/tasca-logo.svg" alt="Tasca Logo">
     </picture>
   </a>
 </p>
 
-<p align="center">Get 10X more out of Claude Code, Gemini CLI, Codex, Amp and other coding agents...</p>
+<p align="center"><strong>The board where humans and AI agents ship together.</strong></p>
+<p align="center">A self-hosted, multi-tenant project tracker that assigns tickets to coding agents — local or cloud — based on what each agent can actually deliver.</p>
+
 <p align="center">
-  <a href="https://www.npmjs.com/package/vibe-kanban"><img alt="npm" src="https://img.shields.io/npm/v/vibe-kanban?style=flat-square" /></a>
-  <a href="https://github.com/BloopAI/vibe-kanban/blob/main/.github/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/BloopAI/vibe-kanban/.github%2Fworkflows%2Fpublish.yml" /></a>
-  <a href="https://deepwiki.com/BloopAI/vibe-kanban"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+  <a href="https://github.com/icemint/tasca/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/icemint/tasca/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <img alt="Rust" src="https://img.shields.io/badge/rust-stable-000000?logo=rust&logoColor=white">
+  <img alt="Node" src="https://img.shields.io/badge/node-20-339933?logo=node.js&logoColor=white">
 </p>
 
-<h1 align="center">
-  <strong>Vibe Kanban is sunsetting.</strong>
-  <a href="https://www.vibekanban.com/blog/shutdown">Read the announcement.</a>
-</h1>
+> **Status: v0.1.0** — sanitized fork foundation. Built on the open-source [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) execution core (Apache-2.0), with all upstream telemetry, auto-update, and back-channel egress severed. The team layer, capability-aware routing, PM assistant, and GitHub automation ship in subsequent releases (see [Roadmap](#roadmap)).
 
-![](packages/public/vibe-kanban-screenshot-overview.png)
+---
 
-## Overview
+## Table of contents
 
-In a world where software engineers spend most of their time planning and reviewing coding agents, the most impactful way to ship more is to get faster at planning and review.
+- [Why Tasca](#why-tasca)
+- [How it works](#how-it-works)
+- [Capability-aware routing](#capability-aware-routing)
+- [Supported agents](#supported-agents)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Quickstart](#quickstart)
+- [Repository layout](#repository-layout)
+- [Development](#development)
+- [Security model](#security-model)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License & attribution](#license--attribution)
 
-Vibe Kanban is built for this. Use kanban issues to plan work, either privately or with your team. When you're ready to begin, create workspaces where coding agents can execute.
+---
 
-- **Plan with kanban issues** — create, prioritise, and assign issues on a kanban board
-- **Run coding agents in workspaces** — each workspace gives an agent a branch, a terminal, and a dev server
-- **Review diffs and leave inline comments** — send feedback directly to the agent without leaving the UI
-- **Preview your app** — built-in browser with devtools, inspect mode, and device emulation
-- **Switch between 10+ coding agents** — Claude Code, Codex, Gemini CLI, GitHub Copilot, Amp, Cursor, OpenCode, Droid, CCR, and Qwen Code
-- **Create pull requests and merge** — open PRs with AI-generated descriptions, review on GitHub, and merge
+## Why Tasca
 
-![](packages/public/vibe-kanban-screenshot-workspace.png)
+Coding agents are getting good enough to do real work — but the tools around them assume one model fits every task. Point a heavyweight orchestrator at a local model and a trivial ticket drowns in coordination round-trips; point it at a frontier model for everything and the bill (and the latency) is absurd.
 
-One command. Describe the work, review the diff, ship it.
+Tasca takes a different stance: **a ticket carries a complexity tier, an agent declares the tiers it can handle, and the board assigns work an agent can actually finish** — prompted the way that agent needs. A local 30B model on your own hardware handles fully-decomposed, low-reasoning tickets for free; cloud Claude takes the hard ones. Humans and agents share one board, one set of issues, one review flow.
 
-```bash
-npx vibe-kanban
+The result is a Linear/Shortcut-style tracker that treats agents as teammates with honest, declared capabilities — not as magic that works everywhere or nowhere.
+
+## How it works
+
+1. **Plan on the board** — create, prioritise, tier, and assign issues across a kanban board, organised by project and sprint.
+2. **Decompose with the PM assistant** — an org-connected Claude breaks vague tickets into tier-appropriate, fully-specified work (edge cases, IO contracts, acceptance gates).
+3. **Agents pick up what they can** — the routing engine matches an unassigned, unblocked ticket to a free agent whose capability tier covers it, seeding an isolated git worktree.
+4. **Review the diff** — agents open PRs with AI-generated descriptions; you review inline, on the board or on GitHub.
+5. **Status follows the work** — GitHub webhooks move tickets automatically: a PR opened → in review, `changes_requested` → back to ready-for-development (optionally re-dispatched to the agent with the review comments), merged → done.
+
+## Capability-aware routing
+
+Every ticket gets one of five complexity tiers. Every agent declares the highest tier it may take. Assignment is deterministic — no leader-agent burning tokens to decide who works.
+
+| Tier | Meaning | Typical agent |
+| --- | --- | --- |
+| **basic** | Fully specified; exact files, IO contract, all edge cases, acceptance test | Local model (e.g. Qwen3-Coder) |
+| **low** | + modules/relations named, tool list constrained | Local model |
+| **medium** | Design note included; some reasoning allowed | Local or cloud |
+| **hard** | Human-authored plan required | Cloud (Claude) recommended |
+| **ultra** | Human + cloud own it; agent assists | Cloud, supervised |
+
+Lower tiers require more decomposition *before* an agent may start — the board enforces the "decompose until there's no reasoning left, just coding" discipline that makes local models reliable. Failed attempts surface for one-click escalation to a higher tier or a cloud agent.
+
+## Supported agents
+
+Tasca runs coding agents as isolated subprocesses, each in its own git worktree. Any agent can be pointed at a custom endpoint — including a **local model served over your network** (e.g. Claude Code → Ollama on an Apple Silicon rig) via per-agent environment overrides.
+
+Claude Code · Codex · Gemini CLI · GitHub Copilot · Amp · Cursor · OpenCode · Droid · Qwen Code — switchable per agent profile, mixable on one board.
+
+## Architecture
+
+```
+            ┌─────────────┐
+            │ Cloudflare  │   DNS · edge TLS · WAF
+            └──────┬──────┘
+                   │  origin TLS
+            ┌──────▼──────┐
+            │   Traefik   │   routing · TLS termination
+            └──────┬──────┘
+        ┌──────────┼──────────┐
+        ▼          ▼          ▼
+    frontend    backend    routing engine
+   (React/Vite) (Axum/Rust) (tier × capability)
+                   │
+        ┌──────────┼───────────────┐
+        ▼          ▼               ▼
+   PostgreSQL   git worktrees   agent runner
+   (org/issue)  (per attempt)   (sandboxed)
+                                     │
+                          ┌──────────┴──────────┐
+                          ▼                     ▼
+                   local models           cloud agents
+                  (Ollama / LAN)        (Claude, …)
+
+  tasca.dev        → landing surface
+  app.tasca.dev    → board surface          (hostname-routed)
+ *.tasca.dev       → team vanity domains
+  api.tasca.dev    → backend
 ```
 
+Each project connects to one or more GitHub repos; PRs link back to their tickets, and review events drive ticket status. The agent runner executes untrusted/external work in ephemeral, egress-restricted sandboxes (see [Security model](#security-model)).
 
-## Installation
+## Tech stack
 
-Make sure you have authenticated with your favourite coding agent. A full list of supported coding agents can be found in the [docs](https://vibekanban.com/docs/supported-coding-agents). Then in your terminal run:
+| Layer | Choice |
+| --- | --- |
+| Frontend | React · Vite · TypeScript · Tailwind · shadcn/ui · `@dnd-kit` |
+| Backend | Rust · Axum · Tokio · SQLx |
+| Datastore | SQLite (local mode) · PostgreSQL (team/remote mode) |
+| Agent execution | Subprocess executors · git worktree isolation · MCP task API |
+| Type sync | `ts-rs` (Rust structs → TypeScript) |
+| Auth | JWT + refresh rotation · OAuth PKCE (GitHub/Google) |
+| PM assistant | Anthropic Messages API (org-level key, BYO) |
+| Realtime | WebSocket (event stream → live board) |
 
-```bash
-npx vibe-kanban
-```
-
-## Documentation
-
-Head to the [website](https://vibekanban.com/docs) for the latest documentation and user guides.
-
-## Self-Hosting
-
-Want to host your own Vibe Kanban Cloud instance? See our [self-hosting guide](https://vibekanban.com/docs/self-hosting/deploy-docker).
-
-## Support
-
-We use [GitHub Discussions](https://github.com/BloopAI/vibe-kanban/discussions) for feature requests. Please open a discussion to create a feature request. For bugs please open an issue on this repo.
-
-## Contributing
-
-We would prefer that ideas and changes are first raised with the core team via [GitHub Discussions](https://github.com/BloopAI/vibe-kanban/discussions) or [Discord](https://discord.gg/AC4nwVtJM3), where we can discuss implementation details and alignment with the existing roadmap. Please do not open PRs without first discussing your proposal with the team.
-
-## Development
+## Quickstart
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) (>=20)
-- [pnpm](https://pnpm.io/) (>=8)
+- **Rust** (latest stable) — [rustup](https://rustup.rs/)
+- **Node.js** 20+ and **pnpm** 8+
+- **PostgreSQL** 16 (team/remote mode only; local mode uses SQLite)
+- A coding agent authenticated on your machine (Claude Code, Codex, etc.)
+- *(optional)* **Ollama** on a reachable host for local-model agents
 
-Additional development tools:
-```bash
-cargo install cargo-watch
-cargo install sqlx-cli
-```
+### Run (local mode)
 
-Install dependencies:
 ```bash
+git clone git@github.com:icemint/tasca.git
+cd tasca
 pnpm i
+pnpm run dev          # backend + web app; blank DB seeded from dev_assets_seed
 ```
 
-### Running the dev server
+### Point an agent at a local model
+
+Set a Claude Code agent profile's environment to your Ollama endpoint:
 
 ```bash
-pnpm run dev
+ANTHROPIC_BASE_URL=http://<your-rig>:11434
+ANTHROPIC_API_KEY=ollama
 ```
 
-This will start the backend and web app. A blank DB will be copied from the `dev_assets_seed` folder.
+Then assign it a `max_tier` of `low` and let it pick up basic/low tickets off the board.
 
-### Building the web app
+Run `pnpm run dev` and open the URL it prints. Full guides live at [tasca.dev/docs](https://tasca.dev/docs).
 
-To build just the web app:
+## Repository layout
+
+```
+tasca/
+├── crates/                      Rust workspace
+│   ├── server/                  Axum HTTP/WS entry (local mode)
+│   ├── remote/                  Team mode — orgs, issues, members, PostgreSQL
+│   ├── executors/               Agent executor trait + per-agent impls
+│   ├── services/                Worktrees, events, git, assignment engine
+│   ├── db/                      SQLx models + migrations
+│   ├── api-types/               Shared types (→ TypeScript via ts-rs)
+│   └── …                        git, utils, relay
+├── packages/                    Frontend
+│   ├── local-web/               Local board SPA
+│   ├── remote-web/              Team board SPA
+│   ├── web-core/ · ui/          Shared components & stores
+│   └── public/                  Logos & assets
+├── npx-cli/                     CLI launcher
+├── PRD.md                       Product requirements
+├── SANITIZE.md                  Upstream-severance runbook
+├── CLAUDE.md                    Engineering workflow + project context
+├── LICENSE                      Apache-2.0
+└── NOTICE                       Attribution (Vibe Kanban / BloopAI)
+```
+
+## Development
 
 ```bash
-cd packages/local-web
-pnpm run build
+pnpm run dev          # full stack
+pnpm run check        # tsc + cargo check (frontend + backend)
+cargo check --workspace
+cargo install cargo-watch sqlx-cli   # dev tooling
 ```
 
-### Build from source (macOS)
+Team/remote mode additionally needs PostgreSQL with `wal_level=logical` and at least one OAuth provider configured. See [PRD.md](./PRD.md) for the full architecture and phasing.
 
-1. Run `./local-build.sh`
-2. Test with `cd npx-cli && node bin/cli.js`
+## Security model
 
-### Environment Variables
+Coding agents execute arbitrary code. Tasca treats that as the central design constraint, not an afterthought:
 
-The following environment variables can be configured at build time or runtime:
+- **Trust tiers** — external collaborators are propose-only (file/comment); execution requires an internal human to promote a ticket to agent-ready.
+- **Sandboxed runs** — untrusted/external execution happens in ephemeral, egress-restricted containers with no host filesystem or secrets.
+- **No permissive defaults on untrusted paths** — agent permission policy defaults to supervised outside trusted internal work.
 
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `POSTHOG_API_KEY` | Build-time | Empty | PostHog analytics API key (disables analytics if empty) |
-| `POSTHOG_API_ENDPOINT` | Build-time | Empty | PostHog analytics endpoint (disables analytics if empty) |
-| `PORT` | Runtime | Auto-assign | **Production**: Server port. **Dev**: Frontend port (backend uses PORT+1) |
-| `BACKEND_PORT` | Runtime | `0` (auto-assign) | Backend server port (dev mode only, overrides PORT+1) |
-| `FRONTEND_PORT` | Runtime | `3000` | Frontend dev server port (dev mode only, overrides PORT) |
-| `HOST` | Runtime | `127.0.0.1` | Backend server host |
-| `MCP_HOST` | Runtime | Value of `HOST` | MCP server connection host (use `127.0.0.1` when `HOST=0.0.0.0` on Windows) |
-| `MCP_PORT` | Runtime | Value of `BACKEND_PORT` | MCP server connection port |
-| `DISABLE_WORKTREE_CLEANUP` | Runtime | Not set | Disable all git worktree cleanup including orphan and expired workspace cleanup (for debugging) |
-| `VK_ALLOWED_ORIGINS` | Runtime | Not set | Comma-separated list of origins that are allowed to make backend API requests (e.g., `https://my-vibekanban-frontend.com`) |
-| `VK_SHARED_API_BASE` | Runtime | Not set | Base URL for the remote/cloud API used by the local desktop app |
-| `VK_SHARED_RELAY_API_BASE` | Runtime | Not set | Base URL for the relay API used by tunnel-mode connections |
-| `VK_TUNNEL` | Runtime | Not set | Enable relay tunnel mode when set (requires relay API base URL) |
+Tasca ships with **zero outbound telemetry, analytics, crash reporting, or auto-update** — all upstream egress was severed and verified (see [SANITIZE.md](./SANITIZE.md)).
 
-**Build-time variables** must be set when running `pnpm run build`. **Runtime variables** are read when the application starts.
+## Roadmap
 
-#### Self-Hosting with a Reverse Proxy or Custom Domain
+| Version | Theme | Highlights (planned) |
+| --- | --- | --- |
+| v0.1.0 | _Clean foundation._ | Sanitized fork, zero upstream egress, hard-forked at Vibe Kanban v0.1.44 |
+| v0.2.x | Route the work. | Complexity tiers, agent capability tiers, deterministic assignment engine, local-model (Ollama) agent profiles |
+| v0.3.x | A real team. | Multi-user auth (hashing, verify, reset, lockout), sprints, agents as assignees, vanity team domains |
+| v0.4.x | Plan with Claude. | Org-key PM assistant — ticket decomposition, tier suggestion, board orchestration |
+| v0.5.x | Ship through GitHub. | PR↔ticket linkage, webhook-driven status automation, review-driven re-dispatch |
+| v0.6.x | Open the doors safely. | External-client propose-only tier, sandboxed agent execution |
 
-When running Vibe Kanban behind a reverse proxy (e.g., nginx, Caddy, Traefik) or on a custom domain, you must set the `VK_ALLOWED_ORIGINS` environment variable. Without this, the browser's Origin header won't match the backend's expected host, and API requests will be rejected with a 403 Forbidden error.
+This isn't a release calendar — it's the direction of travel. The order is what matters.
 
-Set it to the full origin URL(s) where your frontend is accessible:
+## Contributing
 
-```bash
-# Single origin
-VK_ALLOWED_ORIGINS=https://vk.example.com
+Tasca is developed internally by Icemint Labs. Open an issue before writing code; branch from `main`; use [Conventional Commits](https://www.conventionalcommits.org/); keep `pnpm run check` and `cargo check --workspace` green locally.
 
-# Multiple origins (comma-separated)
-VK_ALLOWED_ORIGINS=https://vk.example.com,https://vk-staging.example.com
-```
+## License & attribution
 
-### Remote Deployment
+Tasca is licensed under the **Apache License 2.0** — see [LICENSE](./LICENSE).
 
-When running Vibe Kanban on a remote server (e.g., via systemctl, Docker, or cloud hosting), you can configure your editor to open projects via SSH:
+Tasca is a hard fork of [**Vibe Kanban**](https://github.com/BloopAI/vibe-kanban) by BloopAI, also Apache-2.0. Original copyright notices are preserved per Apache §4, and modifications are documented in [NOTICE](./NOTICE). "Vibe Kanban" and "BloopAI" are trademarks of their owner and are used here only descriptively; Tasca is an independent project, not affiliated with or endorsed by BloopAI.
 
-1. **Access via tunnel**: Use Cloudflare Tunnel, ngrok, or similar to expose the web UI
-2. **Configure remote SSH** in Settings → Editor Integration:
-   - Set **Remote SSH Host** to your server hostname or IP
-   - Set **Remote SSH User** to your SSH username (optional)
-3. **Prerequisites**:
-   - SSH access from your local machine to the remote server
-   - SSH keys configured (passwordless authentication)
-   - VSCode Remote-SSH extension
+---
 
-When configured, the "Open in VSCode" buttons will generate URLs like `vscode://vscode-remote/ssh-remote+user@host/path` that open your local editor and connect to the remote server.
-
-See the [documentation](https://vibekanban.com/docs/settings/general) for detailed setup instructions.
+<sub>Icemint Labs · Built for teams who ship with agents.</sub>
