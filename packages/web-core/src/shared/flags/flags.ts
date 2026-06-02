@@ -2,14 +2,16 @@
  * Tasca app feature flags.
  *
  * Every flag defaults **off**. Resolution order (first wins):
- *   1. env override  — import.meta.env.VITE_FLAG_<NAME>=("1"|"true")
+ *   1. env override  — VITE_FLAG_<NAME> ("1"/"true" → on, "0"/"false" → off).
+ *      Build-time only (Vite inlines import.meta.env at build); developer/CI use.
  *   2. org settings  — flags returned by the organization (real backend)
  *   3. default off
  *
  * GUARDRAIL: a flag may only be turned on in an environment where its named
  * endpoint/table returns *real* data. No flagged component may render seeded or
  * sample rows — only empty / loading / error states (states.css) are allowed as
- * placeholder content. See design-system/IMPLEMENTATION-PLAN.md §8.
+ * placeholder content. See the build-now vs flag-scaffold split in the app
+ * implementation plan (design-system/IMPLEMENTATION-PLAN.md).
  */
 export const FLAG_NAMES = [
   'tiers', // M1 — issues.complexity_tier, tier policy, required-fields gate
@@ -33,12 +35,15 @@ export const DEFAULT_FLAGS: Flags = FLAG_NAMES.reduce((acc, name) => {
 }, {} as Flags);
 
 function envOverride(name: FlagName): boolean | undefined {
-  // Vite statically replaces the whole `import.meta.env` object with build-time
-  // VITE_* values, so this reads BUILD-TIME flags only (not runtime-injected env).
-  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-  const raw = env?.[`VITE_FLAG_${name.toUpperCase()}`];
-  if (raw === undefined) return undefined;
-  return raw === '1' || raw === 'true';
+  // Vite inlines import.meta.env at build; vite/client types give it an index
+  // signature. Only explicit on/off values count — anything else (typo like
+  // "TRUE"/"yes") falls through to the org layer rather than silently disabling.
+  const env = import.meta.env as Record<string, string | undefined>;
+  const raw = env[`VITE_FLAG_${name.toUpperCase()}`];
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  if (raw !== undefined) console.warn(`[flags] ignoring unrecognized VITE_FLAG_${name.toUpperCase()}="${raw}" (use 1/0/true/false)`);
+  return undefined;
 }
 
 /** Merge env overrides over org-provided flags over the all-off default. */

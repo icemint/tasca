@@ -100,8 +100,10 @@ function resolve(value, scope) {
   return v;
 }
 
-// Targets: every :root token that isn't a raw primitive (--p-*) or the marker.
-const SKIP = (k) => k.startsWith('--p-') || k === '--fonts-display-loaded';
+// Targets: every :root token that isn't a raw primitive (--p-*), the marker, or
+// a token the app's own stylesheet already owns (--syntax-* are defined publicly
+// in web-core/.../new/index.css — re-emitting would create a second source).
+const SKIP = (k) => k.startsWith('--p-') || k.startsWith('--syntax-') || k === '--fonts-display-loaded';
 const targets = Object.keys(rootMap).filter((k) => !SKIP(k));
 
 const lightVals = {}, darkVals = {};
@@ -109,7 +111,9 @@ const exact = []; const raw = [];
 for (const k of targets) {
   const d = resolve(rootMap[k], 'dark');
   const l = lightMap[k] != null ? resolve(lightMap[k], 'light') : resolve(rootMap[k], 'light');
-  if (d == null || l == null) { console.warn(`build-app-tokens: ⚠ skipped unresolved token ${k}`); continue; }
+  // Fail loud: a token that no longer resolves (e.g. a renamed primitive) must
+  // not silently vanish from the bridge while --check still passes.
+  if (d == null || l == null) { console.error(`build-app-tokens: unresolved token ${k} (check var() chain in tokens.css)`); process.exit(1); }
   const solid = parseHex(d) && parseHex(l);
   if (solid) {
     lightVals[k] = hexToExactHsl(l); darkVals[k] = hexToExactHsl(d);

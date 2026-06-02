@@ -39,14 +39,16 @@ jobs:
         run: pnpm run local-web:lint && pnpm run ui:lint && node scripts/check-unused-i18n-keys.mjs && pnpm run local-web:legacy-path-guard
       - name: Typecheck (local-web + remote-web + web-core + ui)
         run: pnpm run local-web:check && pnpm run remote-web:check && pnpm run web-core:check && pnpm run ui:check
-      - name: App design tokens in sync + color guard
-        run: |
-          node scripts/build-app-tokens.mjs --check
-          node scripts/check-app-colors.mjs
+      - name: App design tokens in sync
+        run: node scripts/build-app-tokens.mjs --check
+      - name: App color guard (no hardcoded hex)
+        run: node scripts/check-app-colors.mjs
       - name: Build local-web + remote-web
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm --filter @vibe/local-web run build && pnpm --filter @vibe/remote-web run build
+      - name: Design-token bridge utilities emitted
+        run: node scripts/check-app-tokens-emitted.mjs
       - name: Marketing site (token guard + Astro check + build)
         run: |
           node scripts/check-site-colors.mjs
