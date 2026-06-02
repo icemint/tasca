@@ -10,6 +10,7 @@ import type { Workspace as RemoteWorkspace } from 'shared/remote-types';
 import type { DiffViewMode } from '@/shared/stores/useDiffViewStore';
 import type { LayoutMode } from '@/shared/stores/useUiPreferencesStore';
 import { RIGHT_MAIN_PANEL_MODES } from '@/shared/stores/useUiPreferencesStore';
+import type { Flags } from '@/shared/flags';
 import type { AppNavigation } from '@/shared/lib/routes/appNavigation';
 import type { ProjectIssueCreateOptions } from '@/shared/stores/useKanbanIssueComposerStore';
 import type { AppRuntime } from '@/shared/hooks/useAppRuntime';
@@ -148,6 +149,10 @@ export interface ActionVisibilityContext {
 
   // Auth state
   isSignedIn: boolean;
+
+  // Feature flags (env → org → off). Exposed so action `isVisible(ctx)`
+  // predicates can gate on flags; the nav rail consumes `useFlags()` directly.
+  flags: Flags;
 }
 
 // Enum discriminant for action target types

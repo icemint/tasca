@@ -24,6 +24,7 @@ import { SettingsDialog } from "@/shared/dialogs/settings/SettingsDialog";
 import { CommandBarDialog } from "@/shared/dialogs/command-bar/CommandBarDialog";
 import { useCommandBarShortcut } from "@/shared/hooks/useCommandBarShortcut";
 import { listOrganizationProjects } from "@remote/shared/lib/api";
+import { PrimaryNavRail } from "@remote/app/layout/PrimaryNavRail";
 import { RemoteAppBarUserPopoverContainer } from "@remote/app/layout/RemoteAppBarUserPopoverContainer";
 import { RemoteNavbarContainer } from "@remote/app/layout/RemoteNavbarContainer";
 import { RemoteDesktopNavbar } from "@remote/app/layout/RemoteDesktopNavbar";
@@ -255,6 +256,7 @@ export function RemoteAppShell({ children }: RemoteAppShellProps) {
       )}
 
       <div className="flex min-h-0 flex-1">
+        {!isMobile && <PrimaryNavRail />}
         {!isMobile && (
           <AppBar
             projects={projects}
