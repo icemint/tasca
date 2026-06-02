@@ -59,7 +59,7 @@ export default function InvitationPage() {
       const verifier = generateVerifier();
       const challenge = await generateChallenge(verifier);
 
-      storeVerifier(verifier);
+      await storeVerifier(verifier);
       storeInvitationToken(token);
 
       const appBase =
