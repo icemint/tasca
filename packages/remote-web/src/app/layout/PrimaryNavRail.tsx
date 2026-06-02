@@ -22,9 +22,12 @@ import { SettingsDialog } from "@/shared/dialogs/settings/SettingsDialog";
  *   - Settings — always present, opens the existing SettingsDialog
  *
  * Flag-gated items are removed from the tree entirely when off (not just
- * dimmed), so no half-built destination is ever reachable. "My issues" is
- * intentionally omitted until its view exists — we don't link a nav item to a
- * nonexistent route.
+ * dimmed), so no half-built destination is ever reachable. When a flag IS
+ * enabled but the destination view/route does not exist yet, the item renders
+ * as a non-interactive "coming soon" placeholder — it never points at a
+ * fabricated or mismatched destination. The later ticket that builds the view
+ * replaces `comingSoon` with a real `onClick` navigate target. "My issues" is
+ * omitted entirely until its view exists.
  */
 
 type RailIcon = ComponentType<IconProps>;
@@ -33,23 +36,34 @@ interface RailItemProps {
   icon: RailIcon;
   label: string;
   active?: boolean;
-  onClick: () => void;
+  /** When set, the item is shown but inert (no real destination yet). */
+  comingSoon?: boolean;
+  onClick?: () => void;
 }
 
-function RailItem({ icon: Icon, label, active = false, onClick }: RailItemProps) {
+function RailItem({
+  icon: Icon,
+  label,
+  active = false,
+  comingSoon = false,
+  onClick,
+}: RailItemProps) {
   return (
     <button
       type="button"
-      title={label}
-      aria-label={label}
+      disabled={comingSoon}
+      title={comingSoon ? `${label} — coming soon` : label}
+      aria-label={comingSoon ? `${label} (coming soon)` : label}
       aria-current={active ? "page" : undefined}
-      onClick={onClick}
+      onClick={comingSoon ? undefined : onClick}
       className={cn(
-        "grid h-10 w-10 place-items-center rounded-md transition-colors cursor-pointer",
+        "grid h-10 w-10 place-items-center rounded-md transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal",
-        active
-          ? "bg-surface-2 text-signal"
-          : "text-fg-3 hover:bg-surface-2 hover:text-fg",
+        comingSoon
+          ? "cursor-default text-fg-faint"
+          : active
+            ? "cursor-pointer bg-surface-2 text-signal"
+            : "cursor-pointer text-fg-3 hover:bg-surface-2 hover:text-fg",
       )}
     >
       <Icon size={20} weight={active ? "fill" : "regular"} aria-hidden />
@@ -59,7 +73,8 @@ function RailItem({ icon: Icon, label, active = false, onClick }: RailItemProps)
 
 function RailBrandMark() {
   // Three kanban columns — page ink, brand signal, amber accent. Fills resolve
-  // from the design-token bridge (full hsl() values), so no hardcoded color.
+  // from the design-token bridge (full hsl() values); --fg-4/--signal/--amber
+  // are theme-defined, so no hardcoded color.
   return (
     <div
       className="grid h-9 w-9 place-items-center rounded-lg border border-line bg-surface"
@@ -99,19 +114,11 @@ export function PrimaryNavRail() {
         active={isBoardActive}
         onClick={() => navigate({ to: "/" })}
       />
-      {flags.agents && (
-        <RailItem
-          icon={RobotIcon}
-          label="Agents"
-          onClick={() => void SettingsDialog.show()}
-        />
-      )}
+      {/* Agents/Sprints views don't exist yet — shown (when flagged) as inert
+          placeholders, never wired to a stand-in destination. */}
+      {flags.agents && <RailItem icon={RobotIcon} label="Agents" comingSoon />}
       {flags.sprints && (
-        <RailItem
-          icon={LightningIcon}
-          label="Sprints"
-          onClick={() => void SettingsDialog.show()}
-        />
+        <RailItem icon={LightningIcon} label="Sprints" comingSoon />
       )}
 
       <div className="mt-auto">

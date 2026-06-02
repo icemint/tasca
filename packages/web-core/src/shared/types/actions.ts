@@ -150,7 +150,8 @@ export interface ActionVisibilityContext {
   // Auth state
   isSignedIn: boolean;
 
-  // Feature flags (env → org → off). Drives flag-gated nav visibility.
+  // Feature flags (env → org → off). Exposed so action `isVisible(ctx)`
+  // predicates can gate on flags; the nav rail consumes `useFlags()` directly.
   flags: Flags;
 }
 
