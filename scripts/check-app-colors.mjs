@@ -26,7 +26,7 @@ const STYLE_PROP_HEX = /(color|background|backgroundColor|backgroundImage|border
 const ARBITRARY_HEX = /\b(bg|text|border|ring|from|to|via|fill|stroke|decoration|shadow|outline)-\[#[0-9a-fA-F]{3,8}\]/g;
 const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
 // Ratchet: legacy Tailwind arbitrary-hex baseline. Ported code must not add more.
-const ARBITRARY_BASELINE = 27;
+const ARBITRARY_BASELINE = 22;
 
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;

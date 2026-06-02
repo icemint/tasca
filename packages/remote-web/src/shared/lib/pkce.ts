@@ -23,19 +23,37 @@ export async function generateChallenge(verifier: string): Promise<string> {
   return bytesToHex(new Uint8Array(hash));
 }
 
+import {
+  putOAuthVerifier,
+  getOAuthVerifier,
+  delOAuthVerifier,
+} from "@remote/shared/lib/auth";
+
 const VERIFIER_KEY = "oauth_verifier";
 const INVITATION_TOKEN_KEY = "invitation_token";
 
-export function storeVerifier(verifier: string): void {
+/**
+ * Persist the PKCE verifier to BOTH sessionStorage (fast, sync) and IndexedDB
+ * (durable across a reload mid-flow). Awaiting the IndexedDB write guarantees
+ * the verifier is committed before the caller redirects to the OAuth provider.
+ */
+export async function storeVerifier(verifier: string): Promise<void> {
   sessionStorage.setItem(VERIFIER_KEY, verifier);
+  await putOAuthVerifier(verifier);
 }
 
-export function retrieveVerifier(): string | null {
-  return sessionStorage.getItem(VERIFIER_KEY);
+/** Read the verifier, preferring sessionStorage and falling back to IndexedDB. */
+export async function retrieveVerifier(): Promise<string | null> {
+  const fromSession = sessionStorage.getItem(VERIFIER_KEY);
+  if (fromSession) {
+    return fromSession;
+  }
+  return getOAuthVerifier();
 }
 
-export function clearVerifier(): void {
+export async function clearVerifier(): Promise<void> {
   sessionStorage.removeItem(VERIFIER_KEY);
+  await delOAuthVerifier();
 }
 
 export function storeInvitationToken(token: string): void {

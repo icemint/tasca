@@ -33,7 +33,7 @@ export default function InvitationCompletePage() {
       }
 
       try {
-        const verifier = retrieveVerifier();
+        const verifier = await retrieveVerifier();
         if (!verifier) {
           setError("OAuth session lost. Please try again.");
           return;
@@ -54,7 +54,7 @@ export default function InvitationCompletePage() {
         await storeTokens(access_token, refresh_token);
         await acceptInvitation(token, access_token);
 
-        clearVerifier();
+        await clearVerifier();
         clearInvitationToken();
 
         setIsAccepted(true);
@@ -62,7 +62,7 @@ export default function InvitationCompletePage() {
         setError(
           e instanceof Error ? e.message : "Failed to complete invitation",
         );
-        clearVerifier();
+        void clearVerifier();
         clearInvitationToken();
       }
     };
