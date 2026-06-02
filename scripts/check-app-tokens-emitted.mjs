@@ -15,7 +15,11 @@ import { fileURLToPath } from 'url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'packages/remote-web/dist/assets');
 // Representative safelisted utilities (one per family) that must be present.
-const REQUIRED = ['.bg-signal', '.text-fg-2', '.bg-surface-2', '.bg-tier-low', '.bg-exec-running', '.bg-review-merged'];
+const REQUIRED = [
+  '.bg-signal', '.text-fg-2', '.bg-surface-2', '.bg-tier-low', '.bg-exec-running', '.bg-review-merged',
+  // highest-risk AA inks + alpha line — a @config regression dropping these is worst
+  '.text-on-amber', '.text-on-signal', '.border-line',
+];
 
 if (!fs.existsSync(DIST)) {
   console.error(`check-app-tokens-emitted: ${path.relative(ROOT, DIST)} not found — run the remote-web build first`);

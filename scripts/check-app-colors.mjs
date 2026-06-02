@@ -22,9 +22,11 @@ const DIRS = ['packages/remote-web/src', 'packages/web-core/src', 'packages/ui/s
 
 // Whole-file (multi-line) match of an inline style object up to its first `}}`.
 const STYLE_OBJ = /style=\{\{([\s\S]*?)\}\}/g;
-const STYLE_PROP_HEX = /(color|background|backgroundColor|borderColor|outlineColor|fill|stroke|boxShadow)\s*:\s*['"`][^'"`]*#[0-9a-fA-F]{3,8}/;
+const STYLE_PROP_HEX = /(color|background|backgroundColor|backgroundImage|borderColor|outline|outlineColor|caretColor|textDecorationColor|fill|stroke|boxShadow)\s*:\s*['"`][^'"`]*#[0-9a-fA-F]{3,8}/;
 const ARBITRARY_HEX = /\b(bg|text|border|ring|from|to|via|fill|stroke|decoration|shadow|outline)-\[#[0-9a-fA-F]{3,8}\]/g;
 const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
+// Ratchet: legacy Tailwind arbitrary-hex baseline. Ported code must not add more.
+const ARBITRARY_BASELINE = 27;
 
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -53,6 +55,10 @@ for (const d of DIRS) {
 }
 
 if (warnCount) console.warn(`check-app-colors: ⚠ ${warnCount} Tailwind arbitrary-hex usage(s) in legacy app code (tracked for cleanup; ported code must use tokens)`);
+if (warnCount > ARBITRARY_BASELINE) {
+  console.error(`check-app-colors: arbitrary-hex regression — ${warnCount} > baseline ${ARBITRARY_BASELINE}. Use design tokens, not bg-[#…]. (Lower the baseline when legacy is cleaned up.)`);
+  process.exit(1);
+}
 if (errors.length) {
   console.error('check-app-colors: hardcoded hex in inline styles (use token utilities / var(--…)):');
   for (const e of errors) console.error(`  ✗ ${e}`);

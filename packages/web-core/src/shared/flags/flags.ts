@@ -10,8 +10,8 @@
  * GUARDRAIL: a flag may only be turned on in an environment where its named
  * endpoint/table returns *real* data. No flagged component may render seeded or
  * sample rows — only empty / loading / error states (states.css) are allowed as
- * placeholder content. See the build-now vs flag-scaffold split in the app
- * implementation plan (design-system/IMPLEMENTATION-PLAN.md).
+ * placeholder content. See the "Feature-flag guardrail" section in
+ * design-system/REMAINING-WORK.md.
  */
 export const FLAG_NAMES = [
   'tiers', // M1 — issues.complexity_tier, tier policy, required-fields gate
