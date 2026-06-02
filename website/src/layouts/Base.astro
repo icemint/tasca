@@ -75,5 +75,47 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
         document.querySelectorAll('.io').forEach(function (el) { io.observe(el); });
       })();
     </script>
+
+    <script is:inline>
+      // Table-of-contents scroll-spy: highlight the in-view section's link.
+      // Progressive enhancement — links work without JS; this only adds .active.
+      (function () {
+        var navs = document.querySelectorAll('.legal-toc, .docs-nav, .docs-toc, .docs-mobilebar');
+        if (!navs.length) return;
+        var OFFSET = 96; // sticky header + breathing room
+        navs.forEach(function (nav) {
+          var entries = [];
+          nav.querySelectorAll('a[href^="#"]').forEach(function (a) {
+            var id = decodeURIComponent(a.getAttribute('href').slice(1));
+            var el = id && document.getElementById(id);
+            if (el) entries.push({ a: a, el: el });
+          });
+          if (!entries.length) return;
+          var ticking = false;
+          function update() {
+            ticking = false;
+            var y = window.scrollY + OFFSET;
+            var cur = entries[0];
+            for (var i = 0; i < entries.length; i++) {
+              var top = entries[i].el.getBoundingClientRect().top + window.scrollY;
+              if (top <= y) cur = entries[i]; else break;
+            }
+            // At the very bottom, force the last section active.
+            if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+              cur = entries[entries.length - 1];
+            }
+            for (var j = 0; j < entries.length; j++) {
+              entries[j].a.classList.toggle('active', entries[j] === cur);
+            }
+          }
+          function onScroll() {
+            if (!ticking) { ticking = true; requestAnimationFrame(update); }
+          }
+          window.addEventListener('scroll', onScroll, { passive: true });
+          window.addEventListener('resize', onScroll, { passive: true });
+          update();
+        });
+      })();
+    </script>
   </body>
 </html>

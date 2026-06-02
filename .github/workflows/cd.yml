@@ -78,26 +78,41 @@ jobs:
 
       # Deploy by the immutable SHA tag — NOT :latest. Coolify does not re-pull a
       # mutable tag (coolify #5318), so we PATCH the resource's image tag to the
-      # new sha-<short> via the v4 API, then trigger a deploy. Both endpoints are
-      # confirmed in the Coolify v4 OpenAPI spec:
+      # new sha-<short> via the v4 API, then trigger a deploy AND poll the rollout
+      # to terminal status (a queued deploy returning 200 is NOT success — a bad
+      # rollout must fail this job). Endpoints (Coolify v4 OpenAPI):
       #   PATCH /api/v1/applications/{uuid}   (docker_registry_image_name / _tag)
-      #   GET   /api/v1/deploy?uuid={uuid}
-      # Skips gracefully until COOLIFY_API_URL is set, so an early merge to main
-      # publishes the image without failing on missing deploy config.
-      - name: Deploy to Coolify (PATCH image tag → deploy)
+      #   GET   /api/v1/deploy?uuid={uuid}    -> { deployments: [{ deployment_uuid }] }
+      #   GET   /api/v1/deployments/{uuid}    -> { status }
+      # Skips gracefully until COOLIFY_API_URL is set.
+      - name: Deploy to Coolify (PATCH image tag → deploy → verify rollout)
         if: ${{ env.COOLIFY_API_URL != '' }}
         env:
           SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
+          UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
         run: |
           set -euo pipefail
           base="${COOLIFY_API_URL%/}"
+          auth="Authorization: Bearer ${COOLIFY_API_TOKEN}"
           # 1) Point the Coolify app at the new immutable image tag.
-          curl -fsS -X PATCH \
-            "${base}/api/v1/applications/${COOLIFY_RESOURCE_UUID}" \
-            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"docker_registry_image_name\":\"${IMAGE}\",\"docker_registry_image_tag\":\"${SHA_TAG}\"}"
-          # 2) Trigger the redeploy of that resource.
-          curl -fsS \
-            "${base}/api/v1/deploy?uuid=${COOLIFY_RESOURCE_UUID}" \
-            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}"
+          curl -fsS -X PATCH "${base}/api/v1/applications/${UUID}" \
+            -H "$auth" -H "Content-Type: application/json" \
+            -d "{\"docker_registry_image_name\":\"${IMAGE}\",\"docker_registry_image_tag\":\"${SHA_TAG}\"}" > /dev/null
+          # 2) Trigger the deploy and capture the deployment uuid.
+          resp=$(curl -fsS "${base}/api/v1/deploy?uuid=${UUID}" -H "$auth")
+          echo "deploy: $resp"
+          dep=$(printf '%s' "$resp" | jq -r '.deployments[0].deployment_uuid // empty' 2>/dev/null || true)
+          if [ -z "$dep" ]; then echo "::error::no deployment_uuid in deploy response"; exit 1; fi
+          echo "tracking deployment $dep"
+          # 3) Poll the rollout to terminal status (~15 min cap).
+          for i in $(seq 1 90); do
+            sleep 10
+            raw=$(curl -fsS "${base}/api/v1/deployments/${dep}" -H "$auth" 2>/dev/null || true)
+            st=$(printf '%s' "$raw" | jq -r '.status // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+            echo "rollout[$i]: ${st:-<pending>}"
+            case "$st" in
+              finished*|success*)        echo "✓ rollout succeeded"; exit 0 ;;
+              *fail*|*error*|*cancel*)   echo "::error::rollout ended: $st"; exit 1 ;;
+            esac
+          done
+          echo "::error::rollout poll timed out (last status: ${st:-unknown})"; exit 1
