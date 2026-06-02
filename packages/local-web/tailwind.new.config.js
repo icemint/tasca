@@ -19,6 +19,34 @@ function getSize(sizeLabel, multiplier = 1) {
   return sizes[sizeLabel] * multiplier + "rem";
 }
 
+// Tasca design-token bridge families. This config is the one `@config` in
+// web-core/src/app/styles/new/index.css loads for BOTH apps, so the bridge must
+// live here (inlined — a cross-package require fails under this package's
+// type:module + Tailwind's config loader). Tokens are full CSS colors
+// (web-core/.../tokens-bridge.css), consumed as var(--x). Colors colliding with
+// Tailwind's numeric scales are merged as { DEFAULT } so amber-100..900 survive.
+const tv = (name) => `var(--${name})`;
+const bridgeColors = {
+  bg: tv('bg'), 'bg-sub': tv('bg-sub'),
+  surface: tv('surface'), 'surface-2': tv('surface-2'), 'surface-3': tv('surface-3'),
+  line: tv('line'), 'line-2': tv('line-2'), 'line-3': tv('line-3'),
+  fg: tv('fg'), 'fg-2': tv('fg-2'), 'fg-3': tv('fg-3'), 'fg-4': tv('fg-4'), 'fg-faint': tv('fg-faint'),
+  signal: tv('signal'), 'signal-2': tv('signal-2'), 'signal-3': tv('signal-3'), 'signal-dim': tv('signal-dim'),
+  'on-amber': tv('on-amber'), 'on-signal': tv('on-signal'),
+  amber: { DEFAULT: tv('amber'), 2: tv('amber-2'), deep: tv('amber-deep') },
+  green: { DEFAULT: tv('green') }, red: { DEFAULT: tv('red') },
+  purple: { DEFAULT: tv('purple') }, violet: { DEFAULT: tv('violet') },
+  tier: { basic: tv('t-basic'), low: tv('t-low'), medium: tv('t-medium'), hard: tv('t-hard'), ultra: tv('t-ultra') },
+  exec: { idle: tv('exec-idle'), running: tv('exec-running'), pending: tv('exec-pending'), failed: tv('exec-failed'), denied: tv('exec-denied') },
+  review: { draft: tv('review-draft'), open: tv('review-open'), approved: tv('review-approved'), changes: tv('review-changes'), merged: tv('review-merged') },
+};
+// Always-emit a representative utility per family so the build proves the bridge
+// is wired (scripts/check-app-tokens-emitted.mjs verifies these in compiled CSS).
+const bridgeSafelist = [
+  'bg-signal', 'text-fg-2', 'bg-surface-2', 'border-line',
+  'bg-tier-low', 'bg-exec-running', 'bg-review-merged', 'text-on-amber', 'text-on-signal',
+];
+
 module.exports = {
   darkMode: ["class"],
   important: false,
@@ -33,6 +61,7 @@ module.exports = {
     "node_modules/@rjsf/shadcn/src/**/*.{js,ts,jsx,tsx,mdx}"
   ],
   safelist: [
+    ...bridgeSafelist,
     'xl:hidden',
     'xl:relative',
     'xl:inset-auto',
@@ -122,6 +151,8 @@ module.exports = {
         background: "hsl(var(--bg-primary))",
         foreground: "hsl(var(--text-normal))",
         border: "hsl(var(--border))",
+        // Tasca design-token bridge (signal/amber/tier/exec/review/surface/fg/line)
+        ...bridgeColors,
       },
       borderColor: {
         DEFAULT: "hsl(var(--border))",
