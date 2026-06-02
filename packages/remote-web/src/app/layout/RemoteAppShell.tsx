@@ -25,6 +25,11 @@ import { CommandBarDialog } from "@/shared/dialogs/command-bar/CommandBarDialog"
 import { useCommandBarShortcut } from "@/shared/hooks/useCommandBarShortcut";
 import { listOrganizationProjects } from "@remote/shared/lib/api";
 import { PrimaryNavRail } from "@remote/app/layout/PrimaryNavRail";
+import {
+  PmAssistantPanel,
+  PmAssistantToggle,
+} from "@remote/app/assistant/PmAssistantPanel";
+import { useFlag } from "@/shared/flags";
 import { RemoteAppBarUserPopoverContainer } from "@remote/app/layout/RemoteAppBarUserPopoverContainer";
 import { RemoteNavbarContainer } from "@remote/app/layout/RemoteNavbarContainer";
 import { RemoteDesktopNavbar } from "@remote/app/layout/RemoteDesktopNavbar";
@@ -57,6 +62,7 @@ export function RemoteAppShell({ children }: RemoteAppShellProps) {
   const location = useLocation();
   const { hostId: routeHostId } = useParams({ strict: false });
   const { isSignedIn } = useAuth();
+  const showPmAssistant = useFlag("pm_assistant");
   const isWorkspaceContextRoute = location.pathname.includes("/workspaces");
   const isProjectRoute = /^\/projects\/[^/]+/.test(location.pathname);
   const isExportRoute = location.pathname === "/export";
@@ -495,6 +501,13 @@ export function RemoteAppShell({ children }: RemoteAppShellProps) {
           <div className="min-h-0 flex-1">{children}</div>
         </div>
       </div>
+
+      {showPmAssistant && (
+        <>
+          <PmAssistantToggle />
+          <PmAssistantPanel />
+        </>
+      )}
     </div>
   );
 }
