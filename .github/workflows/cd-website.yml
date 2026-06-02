@@ -88,28 +88,7 @@ jobs:
       - name: Deploy to Coolify (PATCH image tag → deploy → verify rollout)
         if: ${{ env.COOLIFY_WEBSITE_RESOURCE_UUID != '' }}
         env:
+          IMAGE: ${{ env.IMAGE }}
           SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
-          UUID: ${{ secrets.COOLIFY_WEBSITE_RESOURCE_UUID }}
-        run: |
-          set -euo pipefail
-          base="${COOLIFY_API_URL%/}"
-          auth="Authorization: Bearer ${COOLIFY_API_TOKEN}"
-          curl -fsS -X PATCH "${base}/api/v1/applications/${UUID}" \
-            -H "$auth" -H "Content-Type: application/json" \
-            -d "{\"docker_registry_image_name\":\"${IMAGE}\",\"docker_registry_image_tag\":\"${SHA_TAG}\"}" > /dev/null
-          resp=$(curl -fsS "${base}/api/v1/deploy?uuid=${UUID}" -H "$auth")
-          echo "deploy: $resp"
-          dep=$(printf '%s' "$resp" | jq -r '.deployments[0].deployment_uuid // empty' 2>/dev/null || true)
-          if [ -z "$dep" ]; then echo "::error::no deployment_uuid in deploy response"; exit 1; fi
-          echo "tracking deployment $dep"
-          for i in $(seq 1 90); do
-            sleep 10
-            raw=$(curl -fsS "${base}/api/v1/deployments/${dep}" -H "$auth" 2>/dev/null || true)
-            st=$(printf '%s' "$raw" | jq -r '.status // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
-            echo "rollout[$i]: ${st:-<pending>}"
-            case "$st" in
-              finished*|success*)        echo "✓ rollout succeeded"; exit 0 ;;
-              *fail*|*error*|*cancel*)   echo "::error::rollout ended: $st"; exit 1 ;;
-            esac
-          done
-          echo "::error::rollout poll timed out (last status: ${st:-unknown})"; exit 1
+          COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_WEBSITE_RESOURCE_UUID }}
+        run: bash scripts/coolify-deploy.sh
