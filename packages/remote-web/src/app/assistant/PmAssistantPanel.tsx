@@ -39,8 +39,16 @@ export function PmAssistantPanel() {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  // Remember the trigger, move focus into the panel on open, restore on close.
+  // While closed, the panel stays mounted (so it can animate) but must be fully
+  // removed from the tab order AND the accessibility tree — `inert` does both,
+  // which `aria-hidden` + an off-screen transform alone do not (the buttons
+  // would otherwise stay keyboard-focusable inside an aria-hidden subtree).
+  // Clear inert BEFORE moving focus into the panel on open.
   useEffect(() => {
+    const el = panelRef.current;
+    if (el) {
+      el.inert = !isOpen;
+    }
     if (isOpen) {
       returnFocusRef.current = document.activeElement as HTMLElement | null;
       closeBtnRef.current?.focus();
