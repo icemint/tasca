@@ -2,6 +2,7 @@ const DB_NAME = "rf-auth";
 const STORE_NAME = "tokens";
 const ACCESS_TOKEN_KEY = "access_token";
 const REFRESH_TOKEN_KEY = "refresh_token";
+const OAUTH_VERIFIER_KEY = "oauth_verifier";
 export const AUTH_CHANGED_EVENT = "remote-auth-changed";
 
 function emitAuthChanged(): void {
@@ -75,6 +76,24 @@ export async function storeTokens(
   await put(ACCESS_TOKEN_KEY, accessToken);
   await put(REFRESH_TOKEN_KEY, refreshToken);
   emitAuthChanged();
+}
+
+/**
+ * PKCE verifier persistence. Mirrors the sessionStorage copy into IndexedDB so
+ * the OAuth flow survives a full page reload between redirect and callback
+ * (sessionStorage is cleared on some reloads / new tab restores). Same store as
+ * the auth tokens; the key is transient and cleared right after redeem.
+ */
+export function putOAuthVerifier(verifier: string): Promise<void> {
+  return put(OAUTH_VERIFIER_KEY, verifier);
+}
+
+export function getOAuthVerifier(): Promise<string | null> {
+  return get(OAUTH_VERIFIER_KEY);
+}
+
+export function delOAuthVerifier(): Promise<void> {
+  return del(OAUTH_VERIFIER_KEY);
 }
 
 export function getAccessToken(): Promise<string | null> {

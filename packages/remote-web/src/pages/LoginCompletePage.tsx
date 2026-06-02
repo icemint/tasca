@@ -38,7 +38,7 @@ export default function LoginCompletePage() {
       }
 
       try {
-        const verifier = retrieveVerifier();
+        const verifier = await retrieveVerifier();
         if (!verifier) {
           setError("OAuth session lost. Please try again.");
           return;
@@ -51,12 +51,12 @@ export default function LoginCompletePage() {
         );
 
         await storeTokens(access_token, refresh_token);
-        clearVerifier();
+        await clearVerifier();
 
         window.location.replace(nextPath);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to complete login");
-        clearVerifier();
+        void clearVerifier();
       }
     };
 
@@ -66,10 +66,12 @@ export default function LoginCompletePage() {
   if (error) {
     return (
       <StatusCard title="Login failed" variant="error">
-        <p className="text-sm text-normal mt-base">{error}</p>
+        <p className="mt-base text-sm text-fg-2" role="alert">
+          {error}
+        </p>
         <button
           type="button"
-          className="mt-double w-full rounded-sm bg-brand px-base py-half text-sm font-medium text-on-brand transition-colors hover:bg-brand-hover"
+          className="mt-double w-full rounded-sm bg-signal px-base py-half text-sm font-medium text-on-signal transition-colors hover:bg-signal-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal"
           onClick={() =>
             navigate({
               to: "/account",
@@ -86,7 +88,9 @@ export default function LoginCompletePage() {
 
   return (
     <StatusCard title="Completing login...">
-      <p className="text-sm text-low mt-base">Processing OAuth callback...</p>
+      <p className="mt-base text-sm text-fg-3" role="status" aria-live="polite">
+        Processing OAuth callback...
+      </p>
     </StatusCard>
   );
 }
@@ -101,11 +105,11 @@ function StatusCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="h-screen overflow-auto bg-primary">
+    <div className="h-screen overflow-auto bg-bg">
       <div className="mx-auto flex min-h-full w-full max-w-md flex-col justify-center px-base py-double">
-        <div className="rounded-sm border border-border bg-secondary p-double">
+        <div className="rounded-sm border border-line bg-surface p-double">
           <h2
-            className={`text-lg font-semibold ${variant === "error" ? "text-error" : "text-high"}`}
+            className={`text-lg font-semibold ${variant === "error" ? "text-red" : "text-fg"}`}
           >
             {title}
           </h2>
