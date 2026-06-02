@@ -10,7 +10,9 @@ import {
   buildKanbanIssueComposerKey,
   closeKanbanIssueComposer,
 } from '@/shared/stores/useKanbanIssueComposerStore';
-import { ProjectSunsetPage } from './ProjectSunsetPage';
+import { OrgProvider } from '@/shared/providers/remote/OrgProvider';
+import { ProjectProvider } from '@/shared/providers/remote/ProjectProvider';
+import { KanbanContainer } from '@/features/kanban/ui/KanbanContainer';
 
 /**
  * Hook to find a project by ID, using orgId from Zustand store
@@ -75,8 +77,8 @@ export function ProjectKanban() {
     previousIssueComposerKeyRef.current = issueComposerKey;
   }, [issueComposerKey]);
 
-  // Find the project and get its organization
-  const { project, organizationId, isLoading } = useFindProjectById(
+  // Find the project's organization (membership of the live board's providers)
+  const { organizationId, isLoading } = useFindProjectById(
     projectId ?? undefined
   );
 
@@ -111,5 +113,13 @@ export function ProjectKanban() {
     );
   }
 
-  return <ProjectSunsetPage projectName={project?.name} />;
+  // Live board: KanbanContainer must run inside OrgProvider + ProjectProvider.
+  // projectId and organizationId are guaranteed non-null by the guard above.
+  return (
+    <OrgProvider organizationId={organizationId}>
+      <ProjectProvider projectId={projectId}>
+        <KanbanContainer />
+      </ProjectProvider>
+    </OrgProvider>
+  );
 }
