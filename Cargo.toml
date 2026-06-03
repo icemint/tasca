@@ -53,7 +53,7 @@ schemars = { version = "1.0.4", features = ["derive", "chrono04", "uuid1", "pres
 serde_with = "3"
 async-trait = "0.1"
 aws-lc-sys = "=0.37.0"
-aws-lc-rs = "=1.16.0"
+aws-lc-rs = "=1.17.0"
 
 [profile.release]
 debug = 1

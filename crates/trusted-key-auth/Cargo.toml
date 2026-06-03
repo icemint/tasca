@@ -16,4 +16,4 @@ sha2 = "0.10"
 spake2 = { version = "0.5.0-pre.0", features = ["getrandom"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }

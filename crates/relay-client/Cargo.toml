@@ -8,7 +8,7 @@ anyhow = { workspace = true }
 base64 = "0.22"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 http = "1"
-os_info = "3.12.0"
+os_info = "3.15.0"
 relay-control = { path = "../relay-control" }
 relay-ws = { path = "../relay-ws" }
 relay-types = { path = "../relay-types" }
@@ -20,4 +20,4 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 tokio = { workspace = true }
 trusted-key-auth = { path = "../trusted-key-auth" }
 utils = { path = "../utils" }
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }

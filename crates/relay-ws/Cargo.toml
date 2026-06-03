@@ -18,7 +18,7 @@ sha2 = "0.10"
 thiserror = { workspace = true }
 tokio = { version = "1.0", features = ["net"] }
 tokio-tungstenite = { version = "0.26" }
-uuid = { version = "1.0" }
+uuid = { version = "1.23" }
 
 [dev-dependencies]
 futures-channel = { version = "0.3", features = ["sink"] }
