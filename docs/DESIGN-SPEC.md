@@ -517,7 +517,7 @@
 
 ##### Color & Token Reference
 - Observed semantic tokens: `primary`, `secondary`, `panel`, `border`, `high`, `low`, `normal`, `brand`, `brand-hover`, `on-brand`, `success`, `warning`, `error`, plus opacity variants (`/10`, `/30`, `/50`, `/60`).
-- NO ENUM TOKENS FOUND for complexity tiers, agent types, or role-based access levels.
+- NO ENUM *TOKENS* FOUND for complexity tiers, agent types, or role-based access levels. (Update: the #104 tier badge now ships per-tier colors as INLINE HSL values in `KanbanCardContent.tsx` TIER_BADGE, not design tokens — so 'define tier tokens' below is now a *tokenize-the-existing-hardcoded-colors* migration, not greenfield.)
 - NO DEDICATED TOKENS for PM-assistant surfaces or GitHub PR integration state colors.
 
 #### Onboarding Flow Map
@@ -530,17 +530,17 @@
 
 #### Missing/Gaps
 
-- No tier-selection surface (basic/low/medium/hard/ultra enum not reflected in UI)
-- No agent-as-assignee picker (Agent entity not defined, no avatar selector)
-- No PM-assistant chat panel (no orchestration surface)
+- No tier-*edit* surface (TierPicker #105, pending). The basic/low/medium/hard/ultra enum IS now reflected in the UI as a card badge + kanban filter (#104, flag-gated 'tiers', off by default)
+- No agent-as-assignee picker (no Agent entity in UI code, no avatar selector; the backend Agent entity exists in crates/db/src/models/agent.rs but is not surfaced — agent UI #106 deferred to M3)
+- PM-assistant chat panel exists only as a flag-gated INERT scaffold (`PmAssistantPanel`, gated behind `useFlag('pm_assistant')`, off by default): chrome + empty state + disabled composer, 'coming soon'. No orchestration surface, no websocket/polling, no transcript wiring (M3)
 - No GitHub PR ↔ ticket status display (no PR widget, no review_state automation UI)
 - No guest propose-only restricted view (no role-based issue creation gate)
 - No sprint management UI (sprint entity exists in PRD but no screens observed)
 - No org-level Anthropic API key settings (required for PM-assistant in Phase 3)
-- No tier complexity display on issue card
+- Tier complexity display on the issue card IS built (#104 badge, flag-gated 'tiers', off by default)
 - No agent availability status indicator
 - No review-driven state-transition UI for ready_for_development state
-- No feature flag UI for tier/agent features in settings
+- No feature-flag *toggle UI* in settings yet. NOTE: a typed feature-flag SYSTEM now exists (`packages/web-core/src/shared/flags/flags.ts` — FLAG_NAMES incl. 'tiers'/'agents'/'sprints'/'pm_assistant', all default off, resolved env→org via `resolveFlags`, consumed via `useFlag`) and already gates the #104 tier surfaces and the PM-assistant scaffold
 
 ### 1.5 Where current code BLOCKS good design (must-fix to enable restyle)
 
@@ -2950,16 +2950,16 @@ const kanbanClasses = () => {
 - No preview iframe loading/error state indication in PreviewBrowser — only spinner and text
 - No conversation-level agent-is-running indicator or turn counter visible in workspace-chat
 - Missing semantic tokens for diff colors, review states, and execution states — all hardcoded as Tailwind classes or inline HSL
-- No tier-selector UI surface; complexity_tier enum not referenced in any component
-- No agent-as-assignee picker; Agent entity absent from current code
-- No PM-assistant chat panel or orchestration surface; no websocket/polling implementation
+- No tier *selector/editor* surface on issue detail (TierPicker, #105 — pending). NOTE (M1, post-audit): the complexity-tier read-only BADGE and the kanban tier FILTER (#104) ARE built and shipped — flag-gated behind `useFlag('tiers')` (off by default). `complexity_tier` is referenced in `packages/ui/src/components/KanbanCardContent.tsx` (TIER_BADGE, all 5 tiers), `KanbanContainer.tsx`, `KanbanFiltersDialog.tsx`, and `useKanbanFilters.ts`. Only the tier *edit* control is still missing.
+- No agent-as-assignee picker; no Agent entity in the *frontend/UI* code (the backend Agent entity exists in `crates/db/src/models/agent.rs` and is used by the assignment engine, but is not surfaced in any UI — agent UI #106 deferred to M3)
+- PM-assistant chat panel exists as an INERT flag-gated scaffold only (`pm_assistant` flag, off by default — chrome + empty state + disabled composer). No orchestration surface and no websocket/polling implementation (M3)
 - No GitHub PR status widget; no review_state field or PR linkage visible in issue detail
 - No guest propose-only restricted view; role-based issue creation gating not implemented
 - No sprint management UI; sprint entity exists in PRD but no screens observed
 - No org-level Anthropic API key settings dialog; required for Phase 3 PM-assistant
-- No feature-flag UI for tier, agent, GitHub integration, or guest features in settings
+- No feature-flag *toggle UI* in settings for tier/agent/GitHub/guest features. NOTE: the flag *system* (`flags.ts`, FLAG_NAMES, `resolveFlags`/`useFlag`, all default off) is built and already gates shipped surfaces (#104 tiers badge/filter, pm_assistant scaffold)
 - OAuthButton hardcoded hex colors (#dadce0, #f2f2f2, #1f1f1f) instead of using brand tokens; not in UI library
-- No tier complexity display on issue card; no tier selector on issue detail
+- Tier complexity IS displayed on the kanban card via the #104 badge (flag-gated 'tiers', off by default); a tier *selector* on issue detail is still missing (TierPicker #105, pending)
 - No agent availability status indicator (online/offline/busy); no agent avatar component system
 - No review-driven state-transition UI for ready_for_development state
 - No tier-source indicator (manual vs assistant-recommended) on issues
@@ -3107,7 +3107,7 @@ const kanbanClasses = () => {
 | Refactor command bar styling from inline styles to design token system | components | M1-Routing | M |
 | Add approval state variants (awaiting_review, changes_requested, approved, denied) to ChatApprovalCard and ChatEntryContainer | components | M1-Routing | M |
 | Create tier-selector component (button group + dropdown variants) | components | M1-Routing | M |
-| Build agent-icon/avatar component system with availability status | components | M1-Routing | M |
+| Build agent-icon/avatar component system with availability status | components | M3-PM-Assistant | M |
 | Add useMedium (1024px) and useLarge (1280px) hooks for 3-tier responsive design | responsive | M1-Routing | S |
 | Refactor KanbanBoard to responsive single-column layout on mobile (<640px) | responsive | M1-Routing | L |
 | Add Approve/Request Changes/Deny action buttons to approval workflow UI | components | M2-Team-Auth | L |

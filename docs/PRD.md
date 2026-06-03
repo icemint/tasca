@@ -54,6 +54,8 @@ Telemetry/analytics, BloopAI update-check + auto-update, BloopAI cloud/relay bac
 
 ## 4. Data model deltas (additive migrations only)
 
+> **Where live routing state lives (M1 reality):** the local `tasks` table is **legacy/dead** — nothing writes to it and `workspace.task_id` is never populated (Electric syncs remote Issues to the frontend PGlite, not to local SQLite). The remote **Issue** is authoritative for `complexity_tier`/`tier_source`; the assignment engine denormalizes that tier onto the **Workspace** at create-and-start (#143). Operational/attention state (`dispatch_state`, `needs_attention`, `attention_reason`, `interrupted`) lives on the **Workspace** (`crates/db/src/models/workspace.rs`), **not** on `tasks`. The `Task` struct retains the tier columns below for schema parity, but it is not on the live path.
+
 ### 4.1 `complexity_tier` on Issue/Task
 - Migration adds `complexity_tier TEXT NOT NULL DEFAULT 'medium' CHECK (complexity_tier IN ('basic','low','medium','hard','ultra'))` to `tasks` (local) and `issues` (remote).
 - Plus `tier_source TEXT DEFAULT 'manual' CHECK (tier_source IN ('manual','assistant','classifier'))` and `tier_confidence REAL NULL`.
@@ -78,10 +80,10 @@ agents (
 )
 ```
 - New model `crates/db/src/models/agent.rs` (`find_available_for_tier`, `claim`, `release`); one-line `pub mod agent;`.
-- **Agent-as-assignee (decided):** each Agent gets a synthetic `users` row (`member_kind='agent'`) so the existing `issue_assignees (issue_id, user_id)` join is reused verbatim — **not** a parallel `agent_assignees` table. The `member_kind` flag excludes agents from human auth flows and member-list UIs. The assignment engine's "issue is unassigned" predicate counts agent assignees.
+- **Agent-as-assignee (DEFERRED to M3, #14/#114):** the intended design is a synthetic `users` row per Agent (`member_kind='agent'`) so the existing `issue_assignees (issue_id, user_id)` join is reused verbatim — **not** a parallel `agent_assignees` table — with the `member_kind` flag excluding agents from human auth flows and member-list UIs. **Not yet built on main:** there is no `member_kind` column and no synthetic agent user row. In M1 the assignment engine's "issue is unassigned" check is a plain `is_unassigned` boolean input on `AssignmentContext` (`crates/assignment-engine/src/lib.rs:33`), resolved by the caller — it does not yet count agent assignees.
 
 ### 4.3 Sprints
-- v1: `sprint_id UUID NULL` on Issue + a `sprints (id, project_id, name, starts_at, ends_at, state)` table. (Chosen over saved-filter for assignment scoping fidelity.)
+- v1: `sprint_id UUID NULL` on Issue + a `sprints (id, project_id, name, starts_at, ends_at, state)` table (#139, present in both DBs). (Chosen over saved-filter for assignment scoping fidelity.) **M1 status:** the table and the engine's `sprint_id`/`active_sprint_id` inputs exist, but the sprints **Electric SHAPE is not yet published** (deferred to #107), so sprint data does not sync to the frontend yet — `all_shape_routes()` registers no sprint shape.
 
 ### 4.4 PR↔ticket link
 - `issue_pull_requests (issue_id, pr_number, repo, state, head_branch, base_branch, created_at)` — many-to-many (one ticket may span PRs; reuses VK's existing `pull_request_issues` remote migration where present).
@@ -98,10 +100,10 @@ agents (
 On ticket start (or sprint auto-dispatch), select an agent where: `agent.min_tier ≤ issue.complexity_tier ≤ agent.max_tier` AND `availability='free'` AND `active_sessions < concurrency_limit` AND issue is `unassigned` AND not blocked by an open `blocking` relationship AND in the active sprint. Seed the Session with that agent's `ExecutorConfig` (+`base_url`/credential). The HTTP-supplied `executor_config` becomes an explicit **manual override** (backward compatible).
 
 ### 5.2 Insertion point
-The verified seam is `ContainerService::start_workspace` in `crates/services/src/services/container.rs` (≈`:1003`), immediately **before `Session::create` (≈`:1019`)** — **not** `:1063` as originally drafted (corrected after reading the post-`20251216142123` workspace/session refactor; re-confirm exact lines at build time per §13.8). New crate `crates/assignment-engine/` (deps: db, executors, services); a single ~1-line call inserted there. Keep the engine a **leaf** consumed by `services` (avoid a `services → assignment-engine → {db,executors}` cycle against the existing `services → db/executors` spine).
+The verified seam is `ContainerService::start_workspace` in `crates/services/src/services/container.rs` (`fn` at `:1079`), where the assignment hook runs at `:1102`–`:1152`, immediately **before `Session::create` (`:1156`)**. The engine resolves the ticket's tier from the linked **remote Issue** and denormalizes it onto the Workspace at create-and-start (`Workspace::set_assignment_context`, #143, in `crates/server/src/routes/workspaces/create.rs:380`–`:409`) — the seam then reads it back via `Workspace::assignment_context` with no remote round-trip. (The local `tasks` table is legacy/dead — `workspace.task_id` is never populated — so routing state does NOT flow through it.) New crate `crates/assignment-engine/` exposes the pure `decide()`; the impure DB glue lives in `services::services::assignment::{context_for_workspace, claim_assignment}` (returning `ClaimOutcome::{Assigned, Queue, Upstream}`). Keep the engine a **leaf** consumed by `services` (avoid a `services → assignment-engine → {db,executors}` cycle against the existing `services → db/executors` spine).
 
 ### 5.3 Escalation (human-gated v1)
-On attempt failure (executor error, validation gate fail, or max-turn exhaustion), the engine does **not** auto-bump tier. It flips the ticket to `needs_attention`, records the failure reason, and surfaces a one-click "escalate to tier+1 / reassign to cloud agent." (Auto-escalation is a v2 flag.)
+On attempt failure (executor error, validation gate fail, or max-turn exhaustion), the engine does **not** auto-bump tier. It flips the **workspace** to `needs_attention` (off-struct accessor; `interrupted` records resumability) and records the reason. A human then triggers escalation: `escalation::escalate_workspace_tier` (`crates/services/src/services/escalation.rs`) writes the bumped tier to the **remote Issue FIRST** (remote-authoritative, `tier_source = Manual`, audited as `AuditAction::IssueEscalateTier`), then syncs the local denormalized tier and clears attention — idempotent/self-healing on partial failure. Re-dispatch on agent release is FIFO. (Auto-escalation is a later flag.)
 
 ### 5.4 Edge cases
 - **No eligible agent:** ticket stays `todo`, flagged `no_capable_agent`; notify leads. Never silently drop.
@@ -132,10 +134,10 @@ Lower tiers demand more decomposition (encode the "no reasoning, just coding" di
 | `hard` | + human-authored plan; cloud agent recommended |
 | `ultra` | human + cloud only; agent assists, doesn't own |
 
-Validation blocks `start` if required fields for the ticket's tier are absent (with a clear checklist of what's missing). PM-assistant (§8) can fill these.
+Validation blocks `start` if required fields for the ticket's tier are absent (with a clear checklist of what's missing). **M1 (#19):** the gate is enforced in `create_and_start_workspace` (`crates/server/src/routes/workspaces/create.rs:289`) **only when agents are configured** (`Agent::list` non-empty) — otherwise every tier-defaulted linked issue would block on unfilled fields; `ultra` returns a human+cloud-only rejection. PM-assistant (§8) can fill these.
 
 ### 6.2 Prompt templates
-Per-tier system-prompt wrappers stored as editable templates; injected via the executor's prompt. Low/basic templates: constrain tool surface, cap turns (`max_turns`), forbid open-ended planning ("implement exactly the spec; do not redesign"). Templates are versioned; per-org override allowed.
+Per-tier system-prompt wrappers stored as editable templates; injected via the executor's prompt. Low/basic templates: constrain tool surface, cap turns (`max_turns`), forbid open-ended planning ("implement exactly the spec; do not redesign"). Templates are versioned (#20, `services::services::prompt_templates`) and wrapped at the engine seam; per-org override allowed (the override store is a later phase — M1 uses built-in defaults). The turn cap is emitted as `--max-turns` **only for ClaudeCode** executors (other engine-routable executors, e.g. QwenCode, would error on the unknown flag — their turn-cap enforcement is a future refinement).
 
 ### 6.3 Edge cases
 - Tier raised after fields filled → previously-satisfied fields retained; only newly-required fields prompted.
@@ -172,7 +174,7 @@ Per-org conversational Claude (Messages API, org-level API key — §"credential
 
 ### 8.2 Credentials
 - **Org-level shared key** (decided): encrypted, set/rotated by owner/admin only; `key_added_by`, `key_last_validated`. Validated on entry via a cheap 1-token Messages API call.
-- **Encryption key (decided):** the org Anthropic key — and the new password-reset/email-verify tokens (§7) — are encrypted with a **dedicated `SERVER_ENCRYPTION_KEY`** env, **not** the JWT-secret-derived AES key (existing `jwt.rs` `derive_key`). This decouples stored-secret validity from JWT rotation, so rotating `TASCA_REMOTE_JWT_SECRET` cannot lock out stored API keys.
+- **Encryption key (TARGET — M3, NOT yet built):** the *intended* design encrypts the org Anthropic key — and the password-reset/email-verify tokens (§7) — under a **dedicated `SERVER_ENCRYPTION_KEY`** env to decouple stored-secret validity from JWT rotation. **On main this is not implemented:** there is no `SERVER_ENCRYPTION_KEY`, and provider tokens are encrypted with a key derived from the JWT secret via `Jwt::derive_key()` (SHA-256 of the base64-decoded JWT secret, `crates/remote/src/auth/jwt.rs:265`–`:312`). Consequence today: rotating `TASCA_REMOTE_JWT_SECRET` **would** invalidate stored secrets. Any security doc (e.g. security.html) implying envelope encryption under a dedicated key is live is WRONG until this M3 work lands.
 - Powers **PM-assistant only** (decided) — NOT worker agents. Worker spend (local Qwen = free; cloud agents = separate per-agent credentials) stays isolated for cost attribution + rate-limit isolation.
 - **Compliance note:** subscription OAuth (Pro/Max) is prohibited in third-party tools by Anthropic (policy effective 2026-02-19; enforced 2026-01-09). MUST use Console API keys (`sk-ant-api03-*`), pay-as-you-go, billed to the org. No "Connect Anthropic account" OAuth button is permitted.
 
@@ -251,7 +253,7 @@ Success criteria: no code path lets a `guest`-authored ticket reach an executor 
 
 **Phase 0 — Fork hygiene, severance, rebrand & CI/CD (1–2 sprints):** see §15 for the severance catalogue (✅ done). Boot remote/Postgres minimal subset (DB + Electric + one auth provider — verification §13.7); fill Apache-2.0 copyright; add NOTICE (✅ done). **Author fresh CI/CD** (all upstream BloopAI workflows deleted): GitHub Actions pipeline — lint + typecheck + `cargo check --workspace`/remote + `pnpm run check` + test on every PR; build pipeline for binaries/installers; branch protection requiring the CI status check; deploy to own infra (Hetzner + Coolify per the HeyLinks pattern) via GHCR + webhook; provision own secrets (no BloopAI R2/deploy-token refs). Re-author the 3 composite build actions (setup-node, sccache/Rust setup) pointing at upstream sources (mozilla-actions/sccache-action, mlugg/setup-zig) rather than the deleted BloopAI forks.
 
-**Phase 1 — Routing core (2–3 sprints):** `complexity_tier`, `Agent` entity, assignment engine at `container.rs:1063`, Ollama executor profile wiring, per-tier required-field validation. Internal-only, single org.
+**Phase 1 — Routing core (2–3 sprints):** `complexity_tier`, `Agent` entity, assignment engine at the `start_workspace` seam (`container.rs:1079`, before `Session::create` at `:1156`; tier denormalized onto the Workspace via #143), Ollama executor profile wiring, per-tier required-field validation. Internal-only, single org.
 
 **Phase 2 — Team + auth (2 sprints):** multi-user credential layer, rate-limit/verify/reset/lockout, sprints, agent-as-assignee.
 
@@ -275,7 +277,7 @@ Success criteria: no code path lets a `guest`-authored ticket reach an executor 
 
 ### Verification items (no decision; confirm during build)
 7. **Remote standalone boot (Phase 0):** verify Postgres (`wal_level=logical`) + ElectricSQL + JWT + ≥1 OAuth provider + reverse proxy boots minimally (`Caddyfile.example` not wired upstream).
-8. **Task↔Workspace↔Session / worktree plumbing (Phase 1):** confirm current `parent_workspace_id` + branch-per-attempt (gitflow) semantics after upstream refactor `20251216142123` before wiring tier-based pickup at `container.rs:1063`. Does not affect the client=Project=repo model (§9).
+8. **Task↔Workspace↔Session / worktree plumbing (Phase 1):** confirm current `parent_workspace_id` + branch-per-attempt (gitflow) semantics after upstream refactor `20251216142123` before wiring tier-based pickup at the `start_workspace` seam (`container.rs:1079`, before `Session::create` at `:1156`). Does not affect the client=Project=repo model (§9).
 9. **Breaking rebrand constants:** sequenced/completed in Phase 0 (PHASE 4 of SANITIZE) — Tauri id, SPAKE2 (both ends), ProjectDirs. ✅ done.
 
 ---

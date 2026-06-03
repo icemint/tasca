@@ -18,7 +18,7 @@
   <img alt="Node" src="https://img.shields.io/badge/node-20-339933?logo=node.js&logoColor=white">
 </p>
 
-> **Status: v0.1.0** — sanitized fork foundation. Built on the open-source [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) execution core (Apache-2.0), with all upstream telemetry, auto-update, and back-channel egress severed. The team layer, capability-aware routing, PM assistant, and GitHub automation ship in subsequent releases (see [Roadmap](#roadmap)).
+> **Status: pre-1.0, actively developed (current `0.1.x`)** — sanitized fork foundation plus the M1 capability-aware routing core, which is built but ships **flag-gated off** by default. Built on the open-source [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) execution core (Apache-2.0), with all upstream telemetry, auto-update, and back-channel egress severed. The full team layer, PM assistant, GitHub automation, and sandboxing land in subsequent releases (see [Roadmap](#roadmap)); features behind a feature flag are not enabled in a default build.
 
 ---
 
@@ -51,10 +51,10 @@ The result is a Linear/Shortcut-style tracker that treats agents as teammates wi
 ## How it works
 
 1. **Plan on the board** — create, prioritise, tier, and assign issues across a kanban board, organised by project and sprint.
-2. **Decompose with the PM assistant** — an org-connected Claude breaks vague tickets into tier-appropriate, fully-specified work (edge cases, IO contracts, acceptance gates).
-3. **Agents pick up what they can** — the routing engine matches an unassigned, unblocked ticket to a free agent whose capability tier covers it, seeding an isolated git worktree.
+2. **Decompose your tickets** — break vague tickets into tier-appropriate, fully-specified work (edge cases, IO contracts, acceptance gates). *(An org-connected Claude PM assistant to do this for you is planned — see [Roadmap](#roadmap).)*
+3. **Agents pick up what they can** — the routing engine matches an unassigned, unblocked ticket to a free agent whose capability tier covers it, seeding an isolated git worktree. *(Built today; enabled via the `tiers`/`agents` feature flags.)*
 4. **Review the diff** — agents open PRs with AI-generated descriptions; you review inline, on the board or on GitHub.
-5. **Status follows the work** — GitHub webhooks move tickets automatically: a PR opened → in review, `changes_requested` → back to ready-for-development (optionally re-dispatched to the agent with the review comments), merged → done.
+5. **Status follows the work** *(planned)* — GitHub webhooks move tickets automatically: a PR opened → in review, `changes_requested` → back to ready-for-development (optionally re-dispatched to the agent with the review comments), merged → done.
 
 ## Capability-aware routing
 
@@ -107,7 +107,7 @@ Claude Code · Codex · Gemini CLI · GitHub Copilot · Amp · Cursor · OpenCod
   api.tasca.dev    → backend
 ```
 
-Each project connects to one or more GitHub repos; PRs link back to their tickets, and review events drive ticket status. The agent runner executes untrusted/external work in ephemeral, egress-restricted sandboxes (see [Security model](#security-model)).
+Each project connects to one or more GitHub repos; PRs link back to their tickets, and review events drive ticket status *(GitHub linkage and webhook-driven status are planned — see [Roadmap](#roadmap))*. The agent runner is designed to execute untrusted/external work in ephemeral, egress-restricted sandboxes; that isolation is on the roadmap (see [Security model](#security-model)) and not yet enforced.
 
 ## Tech stack
 
@@ -119,7 +119,7 @@ Each project connects to one or more GitHub repos; PRs link back to their ticket
 | Agent execution | Subprocess executors · git worktree isolation · MCP task API |
 | Type sync | `ts-rs` (Rust structs → TypeScript) |
 | Auth | JWT + refresh rotation · OAuth PKCE (GitHub/Google) |
-| PM assistant | Anthropic Messages API (org-level key, BYO) |
+| PM assistant *(planned — v0.4.x)* | Anthropic Messages API (org-level key, BYO) |
 | Realtime | WebSocket (event stream → live board) |
 
 ## Quickstart
@@ -150,7 +150,7 @@ ANTHROPIC_BASE_URL=http://<your-rig>:11434
 ANTHROPIC_API_KEY=ollama
 ```
 
-Then assign it a `max_tier` of `low` and let it pick up basic/low tickets off the board.
+Then enable the `tiers` and `agents` feature flags (every flag defaults off — set `VITE_FLAG_TIERS=1 VITE_FLAG_AGENTS=1` at build time, or via org settings), assign it a `max_tier` of `low`, and let it pick up basic/low tickets off the board.
 
 Run `pnpm run dev` and open the URL it prints. Full guides live at [tasca.dev/docs](https://tasca.dev/docs).
 
@@ -162,18 +162,18 @@ tasca/
 │   ├── server/                  Axum HTTP/WS entry (local mode)
 │   ├── remote/                  Team mode — orgs, issues, members, PostgreSQL
 │   ├── executors/               Agent executor trait + per-agent impls
-│   ├── services/                Worktrees, events, git, assignment engine
+│   ├── assignment-engine/       Pure tier × capability decision (decide())
+│   ├── services/                Worktrees, events, git, assignment wiring
 │   ├── db/                      SQLx models + migrations
 │   ├── api-types/               Shared types (→ TypeScript via ts-rs)
-│   └── …                        git, utils, relay
+│   └── …                        git, mcp, review, relay/*, worktree-manager, utils
 ├── packages/                    Frontend
 │   ├── local-web/               Local board SPA
 │   ├── remote-web/              Team board SPA
 │   ├── web-core/ · ui/          Shared components & stores
 │   └── public/                  Logos & assets
 ├── npx-cli/                     CLI launcher
-├── PRD.md                       Product requirements
-├── SANITIZE.md                  Upstream-severance runbook
+├── docs/                        PRD, ROADMAP, SEMVER, security & ops docs
 ├── CLAUDE.md                    Engineering workflow + project context
 ├── LICENSE                      Apache-2.0
 └── NOTICE                       Attribution (Vibe Kanban / BloopAI)
@@ -188,15 +188,15 @@ cargo check --workspace
 cargo install cargo-watch sqlx-cli   # dev tooling
 ```
 
-Team/remote mode additionally needs PostgreSQL with `wal_level=logical` and at least one OAuth provider configured. See [PRD.md](./PRD.md) for the full architecture and phasing.
+Team/remote mode additionally needs PostgreSQL with `wal_level=logical` and at least one OAuth provider configured. See [docs/PRD.md](./docs/PRD.md) for the full architecture and phasing.
 
 ## Security model
 
-Coding agents execute arbitrary code. Tasca treats that as the central design constraint, not an afterthought:
+Coding agents execute arbitrary code. Tasca treats that as the central design constraint, not an afterthought. The model below is the **target security posture**; items marked _(planned)_ are on the roadmap and not yet enforced on `main`:
 
-- **Trust tiers** — external collaborators are propose-only (file/comment); execution requires an internal human to promote a ticket to agent-ready.
-- **Sandboxed runs** — untrusted/external execution happens in ephemeral, egress-restricted containers with no host filesystem or secrets.
-- **No permissive defaults on untrusted paths** — agent permission policy defaults to supervised outside trusted internal work.
+- **Trust tiers** _(planned — v0.6.x)_ — external collaborators are propose-only (file/comment); execution requires an internal human to promote a ticket to agent-ready.
+- **Sandboxed runs** _(planned — v0.6.x)_ — untrusted/external execution happens in ephemeral, egress-restricted containers with no host filesystem or secrets.
+- **No permissive defaults on untrusted paths** _(planned)_ — agent permission policy defaults to supervised outside trusted internal work.
 
 Tasca ships with **zero outbound telemetry, analytics, crash reporting, or auto-update** — all upstream egress was severed and verified (see [SANITIZE.md](./SANITIZE.md)).
 
