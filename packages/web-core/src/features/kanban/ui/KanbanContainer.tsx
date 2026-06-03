@@ -70,7 +70,7 @@ import {
   DropdownMenuTrigger,
 } from '@vibe/ui/components/Dropdown';
 import { SearchableTagDropdownContainer } from '@/shared/components/SearchableTagDropdownContainer';
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 import { useIssueMultiSelect } from '@/shared/hooks/useIssueMultiSelect';
 import { useIssueSelectionStore } from '@/shared/stores/useIssueSelectionStore';
 import { BulkActionBarContainer } from './BulkActionBarContainer';
@@ -93,6 +93,10 @@ const areKanbanFiltersEqual = (
   }
 
   if (!areStringSetsEqual(left.priorities, right.priorities)) {
+    return false;
+  }
+
+  if (!areStringSetsEqual(left.complexityTiers, right.complexityTiers)) {
     return false;
   }
 
@@ -315,6 +319,16 @@ export function KanbanContainer() {
       setKanbanProjectViewFilters(projectId, activeViewId, {
         ...kanbanFilters,
         priorities,
+      });
+    },
+    [activeViewId, kanbanFilters, projectId, setKanbanProjectViewFilters]
+  );
+
+  const setKanbanComplexityTiers = useCallback(
+    (complexityTiers: ComplexityTier[]) => {
+      setKanbanProjectViewFilters(projectId, activeViewId, {
+        ...kanbanFilters,
+        complexityTiers,
       });
     },
     [activeViewId, kanbanFilters, projectId, setKanbanProjectViewFilters]
@@ -960,6 +974,7 @@ export function KanbanContainer() {
             hasActiveFilters={hasActiveFilters}
             onSearchQueryChange={setKanbanSearchQuery}
             onPrioritiesChange={setKanbanPriorities}
+            onComplexityTiersChange={setKanbanComplexityTiers}
             onAssigneesChange={setKanbanAssignees}
             onTagsChange={setKanbanTags}
             onSortChange={setKanbanSort}
