@@ -186,6 +186,10 @@ export type ComplexityTier = "basic" | "low" | "medium" | "hard" | "ultra";
 
 export type TierSource = "manual" | "assistant" | "classifier";
 
+export type Agent = { id: string, org_id: string | null, name: string, executor_profile: string, base_url: string | null, credential_ref: string | null, max_complexity_tier: ComplexityTier, min_complexity_tier: ComplexityTier, availability: Availability, concurrency_limit: bigint, active_sessions: bigint, sandbox_profile: string | null, created_at: string, updated_at: string, };
+
+export type Availability = "free" | "busy" | "offline" | "paused";
+
 export type ApprovalInfo = { approval_id: string, tool_name: string, execution_process_id: string, is_question: boolean, created_at: string, timeout_at: string, };
 
 export type ApprovalStatus = { "status": "pending" } | { "status": "approved" } | { "status": "denied", reason?: string, } | { "status": "timed_out" };

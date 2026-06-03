@@ -22,7 +22,8 @@ pub enum TaskStatus {
 
 /// Capability tier of a task (PRD §4.1). Lower tiers demand more up-front
 /// decomposition; the assignment engine matches a task's tier to an agent's
-/// `[min, max]` tier band.
+/// `[min, max]` tier band. Variants are declared in ascending tier order, so the
+/// derived `Ord` yields the ordinal band comparison the engine relies on.
 #[derive(
     Debug,
     Clone,
@@ -32,6 +33,8 @@ pub enum TaskStatus {
     Deserialize,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     TS,
     EnumString,
     Display,
