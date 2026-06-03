@@ -47,6 +47,8 @@ import {
   StatusResponse,
   CreateOrganizationRequest,
   CreateOrganizationResponse,
+  Organization,
+  UpdateOrganizationFlagsRequest,
   ListOrganizationsResponse,
   OrganizationMemberWithProfile,
   ListMembersResponse,
@@ -1412,6 +1414,25 @@ export const organizationsApi = {
       }
     );
     return handleRemoteResponse<UpdateMemberRoleResponse>(response);
+  },
+
+  // Admin-guarded: set per-org feature flags. No UI caller yet (admin/curl
+  // parity); a UI caller should invalidate organizationKeys.userList() on
+  // success so OrgFlagsProvider re-reads the updated feature_flags.
+  updateOrganizationFlags: async (
+    orgId: string,
+    feature_flags: Record<string, boolean>
+  ): Promise<Organization> => {
+    const body: UpdateOrganizationFlagsRequest = { feature_flags };
+    const response = await makeRemoteRequest(
+      `/v1/organizations/${orgId}/flags`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+    return handleRemoteResponse<Organization>(response);
   },
 
   listInvitations: async (orgId: string): Promise<Invitation[]> => {
