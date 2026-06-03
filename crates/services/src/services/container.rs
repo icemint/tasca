@@ -1299,21 +1299,43 @@ pub trait ContainerService {
             }
         }
 
+        // Past this point the workspace is `dispatched`; every exit must either
+        // start it, re-queue it (recoverable), or flag it for attention (corrupt) —
+        // never leave it silently stuck in `dispatched`, which `find_queued_ready`
+        // would never re-select.
         let (Some(prompt), Some(cfg_json)) = (next.dispatch_prompt, next.dispatch_executor_config)
         else {
-            tracing::error!(%workspace_id, "redispatch: queued workspace missing prompt/config");
+            // Corrupt queue row (shouldn't happen: mark_queued always writes both).
+            // Re-queuing would just poison-loop, so flag for a human instead.
+            tracing::error!(%workspace_id, "redispatch: queued workspace missing prompt/config; flagging for attention");
+            self.flag_redispatch_failure(workspace_id, "redispatch_data_missing")
+                .await;
             return;
         };
         let executor_config: ExecutorConfig = match serde_json::from_str(&cfg_json) {
             Ok(cfg) => cfg,
             Err(e) => {
-                tracing::error!(?e, %workspace_id, "redispatch: bad stored executor config");
+                // Unrecoverable: re-queuing replays the same bad config. Flag it.
+                tracing::error!(?e, %workspace_id, "redispatch: bad stored executor config; flagging for attention");
+                self.flag_redispatch_failure(workspace_id, "redispatch_bad_config")
+                    .await;
                 return;
             }
         };
         let workspace = match Workspace::find_by_id(&self.db().pool, workspace_id).await {
             Ok(Some(workspace)) => workspace,
-            _ => return,
+            // The workspace was deleted out from under us — nothing to recover.
+            Ok(None) => return,
+            Err(e) => {
+                // Transient DB error — re-queue so a later release retries.
+                tracing::error!(?e, %workspace_id, "redispatch: failed to load workspace; re-queuing");
+                if let Err(re) =
+                    Workspace::mark_queued(&self.db().pool, workspace_id, &prompt, &cfg_json).await
+                {
+                    tracing::error!(?re, %workspace_id, "redispatch: failed to re-queue after load error");
+                }
+                return;
+            }
         };
 
         // Re-enter the start path: the engine re-evaluates with the now-free slot
@@ -1330,6 +1352,16 @@ pub trait ContainerService {
             {
                 tracing::error!(?re, %workspace_id, "redispatch: failed to re-queue after start error");
             }
+        }
+    }
+
+    /// Flag a workspace whose re-dispatch failed unrecoverably (corrupt queue data)
+    /// for human attention (M1 #17) — rather than re-queuing it into a poison loop.
+    async fn flag_redispatch_failure(&self, workspace_id: Uuid, reason: &str) {
+        if let Err(e) =
+            Workspace::record_needs_attention(&self.db().pool, workspace_id, reason, false).await
+        {
+            tracing::error!(?e, %workspace_id, "redispatch: failed to flag needs_attention");
         }
     }
 
