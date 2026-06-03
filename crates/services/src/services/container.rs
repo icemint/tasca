@@ -229,11 +229,17 @@ pub trait ContainerService {
         // any. `take_claimed_agent` atomically clears the marker, so this releases
         // exactly once even though a session can finalize repeatedly (initial run +
         // each follow-up) and even if a start failure already released it. Done
-        // before the killed early-return so killed runs free their slot too.
-        if let Ok(Some(agent_id)) =
-            Session::take_claimed_agent(&self.db().pool, ctx.session.id).await
-        {
-            self.release_agent_quietly(agent_id).await;
+        // before the killed early-return so killed runs free their slot too. A DB
+        // error here is logged loudly (not swallowed): the slot would otherwise
+        // leak until the next startup recovery (cleanup_orphan_executions).
+        match Session::take_claimed_agent(&self.db().pool, ctx.session.id).await {
+            Ok(Some(agent_id)) => self.release_agent_quietly(agent_id).await,
+            Ok(None) => {}
+            Err(e) => tracing::error!(
+                ?e,
+                session_id = %ctx.session.id,
+                "failed to take claimed agent on finalize; slot will be reconciled at next startup"
+            ),
         }
 
         // Skip notification if process was intentionally killed by user
@@ -271,6 +277,19 @@ pub trait ContainerService {
 
     /// Cleanup executions marked as running in the db, call at startup
     async fn cleanup_orphan_executions(&self) -> Result<(), ContainerError> {
+        // M1 #16 recovery: at startup no agent run is in flight, so any agent
+        // concurrency slot still marked claimed is a stale claim from a previous
+        // run that crashed before it could release. Clear the session markers and
+        // reset the agent counters together so a restart heals any leaked slot.
+        match Session::clear_all_claimed_agents(&self.db().pool).await {
+            Ok(n) if n > 0 => tracing::info!("Cleared {n} stale agent claim(s) at startup"),
+            Ok(_) => {}
+            Err(e) => tracing::error!(?e, "Failed to clear stale agent claims at startup"),
+        }
+        if let Err(e) = Agent::reset_active_sessions(&self.db().pool).await {
+            tracing::error!(?e, "Failed to reset agent active_sessions at startup");
+        }
+
         let running_processes = ExecutionProcess::find_running(&self.db().pool).await?;
         for process in running_processes {
             tracing::info!(
@@ -1139,12 +1158,19 @@ pub trait ContainerService {
             Err(e) => {
                 // The marker is on the session, so take-once governs release —
                 // shared with the finalize monitor, which may also fire for the
-                // failed process. Whichever takes the marker first releases.
-                if claimed_agent_id.is_some()
-                    && let Ok(Some(agent_id)) =
-                        Session::take_claimed_agent(&self.db().pool, session.id).await
-                {
-                    self.release_agent_quietly(agent_id).await;
+                // failed process. Whichever takes the marker first releases; a DB
+                // error is logged (not swallowed) so a leak is diagnosable and the
+                // startup recovery will reconcile it.
+                if claimed_agent_id.is_some() {
+                    match Session::take_claimed_agent(&self.db().pool, session.id).await {
+                        Ok(Some(agent_id)) => self.release_agent_quietly(agent_id).await,
+                        Ok(None) => {}
+                        Err(take_err) => tracing::error!(
+                            ?take_err,
+                            session_id = %session.id,
+                            "failed to take claimed agent on start failure; slot will be reconciled at next startup"
+                        ),
+                    }
                 }
                 Err(e)
             }

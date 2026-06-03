@@ -125,6 +125,24 @@ impl Agent {
         .await
     }
 
+    /// Reset every agent's `active_sessions` to 0 (M1 #16 startup recovery). At
+    /// process startup no agent run is in flight (orphaned executions are killed),
+    /// so the true concurrent-session count is 0. Paired with
+    /// [`Session::clear_all_claimed_agents`], this heals any concurrency slot that
+    /// leaked because a previous run crashed between `claim` and release.
+    ///
+    /// [`Session::clear_all_claimed_agents`]: crate::models::session::Session::clear_all_claimed_agents
+    pub async fn reset_active_sessions(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+        let res = sqlx::query!(
+            r#"UPDATE agents
+               SET active_sessions = 0, updated_at = datetime('now', 'subsec')
+               WHERE active_sessions != 0"#
+        )
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Release a previously-claimed slot. Floored at 0 so a double-release can't
     /// drive `active_sessions` negative.
     pub async fn release(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
@@ -201,6 +219,35 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
+            0
+        );
+    }
+
+    /// M1 #16 startup recovery: reset_active_sessions zeroes every agent's counter
+    /// so a slot leaked by a crashed run heals on restart.
+    #[sqlx::test]
+    async fn reset_active_sessions_zeroes_all(pool: SqlitePool) {
+        let id = Uuid::new_v4();
+        insert_agent(&pool, id, 5, "ultra").await;
+        Agent::claim(&pool, id).await.unwrap();
+        Agent::claim(&pool, id).await.unwrap();
+        assert_eq!(
+            Agent::find_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .active_sessions,
+            2
+        );
+
+        let reset = Agent::reset_active_sessions(&pool).await.unwrap();
+        assert_eq!(reset, 1, "the one non-idle agent row was reset");
+        assert_eq!(
+            Agent::find_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .active_sessions,
             0
         );
     }

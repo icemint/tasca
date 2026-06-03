@@ -14,6 +14,22 @@ const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 pub enum AgentEnvError {
     #[error("unknown executor profile: {0}")]
     UnknownProfile(String),
+    /// An endpoint override (`base_url`) was requested for an executor that does
+    /// not read `ANTHROPIC_BASE_URL`. Injecting the env would be silently ignored
+    /// by that executor (mis-routing the run to the default endpoint), so the
+    /// assignment is rejected instead — `decide()` treats it as undispatchable.
+    #[error("executor {0} does not support an endpoint override (ANTHROPIC_BASE_URL)")]
+    EndpointOverrideUnsupported(BaseCodingAgent),
+}
+
+/// Whether an executor honors `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`. Only the
+/// Anthropic-API-compatible executors do; routing any other executor to a custom
+/// endpoint via these vars would silently no-op (see [`StandardCodingAgentExecutor::merge_env`]).
+fn honors_anthropic_endpoint_env(executor: BaseCodingAgent) -> bool {
+    matches!(
+        executor,
+        BaseCodingAgent::ClaudeCode | BaseCodingAgent::QwenCode
+    )
 }
 
 /// Map an assigned agent into the executor config + the per-run env overrides the
@@ -39,6 +55,13 @@ pub fn resolve_agent_executor(
 
     let mut env = HashMap::new();
     if let Some(url) = base_url.map(str::trim).filter(|s| !s.is_empty()) {
+        // Only inject the endpoint env for an executor that actually reads it.
+        // Otherwise the run would silently target the default endpoint while the
+        // engine believes it routed correctly — reject so the agent is treated as
+        // undispatchable rather than mis-routed.
+        if !honors_anthropic_endpoint_env(executor) {
+            return Err(AgentEnvError::EndpointOverrideUnsupported(executor));
+        }
         env.insert(ANTHROPIC_BASE_URL.to_string(), url.to_string());
         if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
             env.insert(ANTHROPIC_API_KEY.to_string(), key.to_string());
@@ -105,5 +128,26 @@ mod tests {
                 "NOT_A_REAL_AGENT".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn endpoint_override_on_non_honoring_executor_is_rejected() {
+        // GEMINI does not read ANTHROPIC_BASE_URL: injecting it would silently
+        // mis-route the run, so an endpoint override must be rejected (making the
+        // agent undispatchable) rather than producing env the executor ignores.
+        assert_eq!(
+            resolve_agent_executor("GEMINI", Some("http://ollama.local:11434"), None),
+            Err(AgentEnvError::EndpointOverrideUnsupported(
+                BaseCodingAgent::Gemini
+            ))
+        );
+    }
+
+    #[test]
+    fn non_honoring_executor_without_endpoint_override_is_fine() {
+        // No base_url ⇒ no routing env ⇒ no mis-routing risk; any executor is OK.
+        let (config, cmd) = resolve_agent_executor("GEMINI", None, None).unwrap();
+        assert_eq!(config.executor, BaseCodingAgent::Gemini);
+        assert!(cmd.env.is_none());
     }
 }
