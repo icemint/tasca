@@ -1115,12 +1115,18 @@ pub trait ContainerService {
                             // override store is a later phase ⇒ `None` = built-in default.
                             let template = super::prompt_templates::resolve(ctx.tier, None);
                             prompt = template.wrap(&prompt);
-                            (
-                                a.executor_config,
-                                a.env.env,
-                                Some(a.agent.id),
-                                template.max_turns_params(),
-                            )
+                            // `--max-turns` is a Claude Code CLI flag; only emit the cap
+                            // for Claude agents. Other engine-routable executors (e.g.
+                            // QwenCode) would error on the unknown flag — their turn-cap
+                            // enforcement is a future refinement.
+                            let extra_params = if a.executor_config.executor
+                                == executors::executors::BaseCodingAgent::ClaudeCode
+                            {
+                                template.max_turns_params()
+                            } else {
+                                None
+                            };
+                            (a.executor_config, a.env.env, Some(a.agent.id), extra_params)
                         }
                         super::assignment::ClaimOutcome::Queue => {
                             // Defer: nothing is started; the run waits in the queue.
