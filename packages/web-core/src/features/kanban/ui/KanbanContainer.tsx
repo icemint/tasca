@@ -51,6 +51,7 @@ import {
   type DropResult,
 } from '@vibe/ui/components/KanbanBoard';
 import { KanbanCardContent } from '@vibe/ui/components/KanbanCardContent';
+import { useFlag } from '@/shared/flags';
 import {
   IssueWorkspaceCard,
   type WorkspaceWithStats,
@@ -124,6 +125,7 @@ function LoadingState() {
  */
 export function KanbanContainer() {
   const isMobile = useIsMobile();
+  const tiersEnabled = useFlag('tiers');
   const { t } = useTranslation('common');
   const appNavigation = useAppNavigation();
   const routeState = useCurrentKanbanRouteState();
@@ -1045,6 +1047,9 @@ export function KanbanContainer() {
                               title={issue.title}
                               description={issue.description}
                               priority={issue.priority}
+                              complexityTier={
+                                tiersEnabled ? issue.complexity_tier : null
+                              }
                               tags={getTagObjectsForIssue(issue.id)}
                               assignees={issueAssigneesMap[issue.id] ?? []}
                               pullRequests={issueCardPullRequests}
