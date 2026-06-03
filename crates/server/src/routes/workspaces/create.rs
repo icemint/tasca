@@ -20,6 +20,19 @@ use crate::{
     },
 };
 
+/// Map the remote Issue's complexity tier (api-types) to the local one (db). The
+/// two enums carry identical variants; they differ only by crate (M1 #143).
+fn issue_tier_to_db(tier: api_types::ComplexityTier) -> db::models::task::ComplexityTier {
+    use db::models::task::ComplexityTier as Db;
+    match tier {
+        api_types::ComplexityTier::Basic => Db::Basic,
+        api_types::ComplexityTier::Low => Db::Low,
+        api_types::ComplexityTier::Medium => Db::Medium,
+        api_types::ComplexityTier::Hard => Db::Hard,
+        api_types::ComplexityTier::Ultra => Db::Ultra,
+    }
+}
+
 pub(crate) async fn create_workspace_record(
     deployment: &DeploymentImpl,
     name: Option<String>,
@@ -289,6 +302,37 @@ pub async fn create_and_start_workspace(
                     e
                 );
             }
+        }
+
+        // M1 #143: denormalize the linked issue's tier/sprint/project onto the
+        // workspace so the assignment engine can route at the seam (before
+        // Session::create) without a remote round-trip. Best-effort: if the fetch
+        // or write fails, the workspace simply has no assignment context and the
+        // engine falls through to the caller's executor config (upstream behavior).
+        match client.get_issue(linked_issue.issue_id).await {
+            Ok(issue) => {
+                if let Err(e) = Workspace::set_assignment_context(
+                    &deployment.db().pool,
+                    managed_workspace.workspace.id,
+                    issue_tier_to_db(issue.complexity_tier),
+                    issue.sprint_id,
+                    issue.project_id,
+                    linked_issue.issue_id,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "Failed to persist assignment context for workspace {}: {}",
+                        managed_workspace.workspace.id,
+                        e
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                "Failed to fetch issue {} for assignment context: {}",
+                linked_issue.issue_id,
+                e
+            ),
         }
     }
 

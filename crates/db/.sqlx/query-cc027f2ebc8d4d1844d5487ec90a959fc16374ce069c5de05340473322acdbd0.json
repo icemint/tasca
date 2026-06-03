@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces\n               SET complexity_tier = $2,\n                   sprint_id = $3,\n                   remote_project_id = $4,\n                   remote_issue_id = $5,\n                   updated_at = datetime('now', 'subsec')\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "cc027f2ebc8d4d1844d5487ec90a959fc16374ce069c5de05340473322acdbd0"
+}
