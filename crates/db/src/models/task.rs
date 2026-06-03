@@ -52,6 +52,20 @@ pub enum ComplexityTier {
     Ultra,
 }
 
+impl ComplexityTier {
+    /// The next tier up, or `None` at the ceiling (`Ultra`). Used by the
+    /// human-gated escalate action (M1 #17).
+    pub fn next_up(self) -> Option<Self> {
+        match self {
+            Self::Basic => Some(Self::Low),
+            Self::Low => Some(Self::Medium),
+            Self::Medium => Some(Self::Hard),
+            Self::Hard => Some(Self::Ultra),
+            Self::Ultra => None,
+        }
+    }
+}
+
 /// How a task's tier was set (PRD §4.1 / §13.4). v1 is `manual` + PM-assistant
 /// `assistant`; the dedicated `classifier` is deferred to v2.
 #[derive(
@@ -140,5 +154,19 @@ impl Task {
         .execute(pool)
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tier_tests {
+    use super::ComplexityTier::*;
+
+    #[test]
+    fn next_up_climbs_then_stops_at_ceiling() {
+        assert_eq!(Basic.next_up(), Some(Low));
+        assert_eq!(Low.next_up(), Some(Medium));
+        assert_eq!(Medium.next_up(), Some(Hard));
+        assert_eq!(Hard.next_up(), Some(Ultra));
+        assert_eq!(Ultra.next_up(), None, "ultra is the ceiling");
     }
 }

@@ -7,16 +7,57 @@ use axum::{
 use db::models::{
     coding_agent_turn::CodingAgentTurn,
     execution_process::{ExecutionProcess, ExecutionProcessStatus},
+    task::ComplexityTier,
     workspace::{Workspace, WorkspaceError},
 };
 use deployment::Deployment;
-use serde::Deserialize;
-use services::services::{container::ContainerService, diff_stream, remote_sync};
+use serde::{Deserialize, Serialize};
+use services::services::{
+    container::ContainerService,
+    diff_stream,
+    escalation::{self, EscalateError},
+    remote_sync,
+};
 use sqlx::Error as SqlxError;
+use ts_rs::TS;
 use utils::response::ApiResponse;
 use workspace_manager::WorkspaceManager;
 
 use crate::{DeploymentImpl, error::ApiError};
+
+#[derive(Debug, Serialize, TS)]
+pub struct EscalateResponse {
+    /// The new tier after the bump.
+    pub new_tier: ComplexityTier,
+    /// `true` when no configured agent can take the new tier (override allowed but
+    /// the workspace will queue until a capable agent exists) — surface as a warning.
+    pub beyond_agent_ceiling: bool,
+}
+
+/// Human-gated escalate: bump the workspace's linked issue one tier (M1 #17).
+/// Allowed even beyond the agent ceiling (warns via `beyond_agent_ceiling`).
+pub async fn escalate_workspace(
+    Extension(workspace): Extension<Workspace>,
+    State(deployment): State<DeploymentImpl>,
+) -> Result<ResponseJson<ApiResponse<EscalateResponse>>, ApiError> {
+    let client = deployment
+        .remote_client()
+        .map_err(|_| ApiError::BadRequest("remote client is not configured".to_string()))?;
+
+    let outcome = escalation::escalate_workspace_tier(&deployment.db().pool, &client, workspace.id)
+        .await
+        .map_err(|e| match e {
+            EscalateError::NoLinkedIssue => ApiError::BadRequest(e.to_string()),
+            EscalateError::AtCeiling => ApiError::Conflict(e.to_string()),
+            EscalateError::Db(db) => ApiError::Database(db),
+            EscalateError::Remote(remote) => ApiError::RemoteClient(remote),
+        })?;
+
+    Ok(ResponseJson(ApiResponse::success(EscalateResponse {
+        new_tier: outcome.new_tier,
+        beyond_agent_ceiling: outcome.beyond_agent_ceiling,
+    })))
+}
 
 #[derive(Debug, Deserialize)]
 pub struct DeleteWorkspaceQuery {

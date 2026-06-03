@@ -15,6 +15,10 @@ pub enum AuditAction {
     MemberRevokeInvite,
     MemberRemove,
     MemberRoleChange,
+
+    /// A human manually raised an issue's complexity tier (M1 #17 escalate /
+    /// override) — captures overrides, including those past the agent ceiling.
+    IssueEscalateTier,
 }
 
 impl AuditAction {
@@ -30,6 +34,7 @@ impl AuditAction {
             Self::MemberRevokeInvite => "member.revoke_invite",
             Self::MemberRemove => "member.remove",
             Self::MemberRoleChange => "member.role_change",
+            Self::IssueEscalateTier => "issue.escalate_tier",
         }
     }
 }

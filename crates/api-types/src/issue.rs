@@ -19,10 +19,14 @@ pub enum IssuePriority {
 
 /// Capability tier of an issue (PRD §4.1) — the remote mirror of the local
 /// `Task` tier. Drives the board tier badge/filter and the assignment hand-off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, TS, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Type, TS, Default,
+)]
 #[sqlx(type_name = "complexity_tier", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum ComplexityTier {
+    // Declared in ascending tier order so the derived `Ord` is the ordinal band
+    // comparison (used to detect a manual tier *raise* for the escalate audit).
     Basic,
     Low,
     #[default]
@@ -112,7 +116,7 @@ pub struct CreateIssueRequest {
     pub extension_metadata: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 pub struct UpdateIssueRequest {
     #[serde(
         default,

@@ -1,6 +1,6 @@
 use api_types::{
     CreateIssueRequest, DeleteResponse, Issue, ListIssuesQuery, ListIssuesResponse,
-    MutationResponse, NotificationPayload, NotificationType, SearchIssuesRequest,
+    MutationResponse, NotificationPayload, NotificationType, SearchIssuesRequest, TierSource,
     UpdateIssueRequest,
 };
 use axum::{
@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     AppState,
+    audit::{self, AuditAction, AuditEvent},
     auth::RequestContext,
     db::{
         get_txid, issue_followers::IssueFollowerRepository, issues::IssueRepository,
@@ -360,6 +361,13 @@ async fn update_issue(
     let organization_id =
         ensure_project_access(state.pool(), ctx.user.id, issue.project_id).await?;
 
+    // M1 #17: detect a human escalate/override — a manual tier change that RAISES
+    // the tier — before `payload` is consumed by the update, so it can be audited.
+    let manual_tier_raise = matches!(payload.tier_source, Some(TierSource::Manual))
+        && payload
+            .complexity_tier
+            .is_some_and(|new_tier| new_tier > issue.complexity_tier);
+
     let mut tx = crate::db::begin_tx(state.pool()).await.map_err(|error| {
         tracing::error!(?error, "failed to begin transaction");
         ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
@@ -401,6 +409,16 @@ async fn update_issue(
     })?;
 
     notify_issue_update_changes(&state, organization_id, ctx.user.id, &issue, &data).await;
+
+    // M1 #17: audit the manual tier escalation/override (incl. past the ceiling).
+    if manual_tier_raise {
+        audit::emit(
+            AuditEvent::from_request(&ctx, AuditAction::IssueEscalateTier)
+                .resource("issue", Some(issue_id))
+                .organization(organization_id)
+                .http("PATCH", format!("/v1/issues/{issue_id}"), 200),
+        );
+    }
 
     Ok(Json(MutationResponse { data, txid }))
 }
