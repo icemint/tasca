@@ -25,6 +25,7 @@ import { Route as ProjectsProjectIdIssuesIssueIdRouteImport } from './routes/pro
 import { Route as HostsHostIdWorkspacesCreateRouteImport } from './routes/hosts.$hostId.workspaces_.create'
 import { Route as HostsHostIdWorkspacesWorkspaceIdRouteImport } from './routes/hosts.$hostId.workspaces_.$workspaceId'
 import { Route as HostsHostIdWorkspacesWorkspaceIdVscodeRouteImport } from './routes/hosts.$hostId.workspaces.$workspaceId.vscode'
+import { Route as ProjectsProjectIdIssuesIssueIdRunsRunIdRouteImport } from './routes/projects.$projectId_.issues.$issueId_.runs.$runId'
 import { Route as ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRouteImport } from './routes/projects.$projectId_.hosts.$hostId.workspaces.create.$draftId'
 import { Route as ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRouteImport } from './routes/projects.$projectId_.issues.$issueId_.hosts.$hostId.workspaces.$workspaceId'
 import { Route as ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesCreateDraftIdRouteImport } from './routes/projects.$projectId_.issues.$issueId_.hosts.$hostId.workspaces.create.$draftId'
@@ -115,6 +116,12 @@ const HostsHostIdWorkspacesWorkspaceIdVscodeRoute =
     path: '/$workspaceId/vscode',
     getParentRoute: () => HostsHostIdWorkspacesRoute,
   } as any)
+const ProjectsProjectIdIssuesIssueIdRunsRunIdRoute =
+  ProjectsProjectIdIssuesIssueIdRunsRunIdRouteImport.update({
+    id: '/projects/$projectId_/issues/$issueId_/runs/$runId',
+    path: '/projects/$projectId/issues/$issueId/runs/$runId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute =
   ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRouteImport.update({
     id: '/projects/$projectId_/hosts/$hostId/workspaces/create/$draftId',
@@ -155,6 +162,7 @@ export interface FileRoutesByFullPath {
   '/hosts/$hostId/workspaces/create': typeof HostsHostIdWorkspacesCreateRoute
   '/projects/$projectId/issues/$issueId': typeof ProjectsProjectIdIssuesIssueIdRoute
   '/hosts/$hostId/workspaces/$workspaceId/vscode': typeof HostsHostIdWorkspacesWorkspaceIdVscodeRoute
+  '/projects/$projectId/issues/$issueId/runs/$runId': typeof ProjectsProjectIdIssuesIssueIdRunsRunIdRoute
   '/projects/$projectId/hosts/$hostId/workspaces/create/$draftId': typeof ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute
   '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/$workspaceId': typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRoute
   '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/create/$draftId': typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesCreateDraftIdRoute
@@ -176,6 +184,7 @@ export interface FileRoutesByTo {
   '/hosts/$hostId/workspaces/create': typeof HostsHostIdWorkspacesCreateRoute
   '/projects/$projectId/issues/$issueId': typeof ProjectsProjectIdIssuesIssueIdRoute
   '/hosts/$hostId/workspaces/$workspaceId/vscode': typeof HostsHostIdWorkspacesWorkspaceIdVscodeRoute
+  '/projects/$projectId/issues/$issueId/runs/$runId': typeof ProjectsProjectIdIssuesIssueIdRunsRunIdRoute
   '/projects/$projectId/hosts/$hostId/workspaces/create/$draftId': typeof ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute
   '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/$workspaceId': typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRoute
   '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/create/$draftId': typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesCreateDraftIdRoute
@@ -198,6 +207,7 @@ export interface FileRoutesById {
   '/hosts/$hostId/workspaces_/create': typeof HostsHostIdWorkspacesCreateRoute
   '/projects/$projectId_/issues/$issueId': typeof ProjectsProjectIdIssuesIssueIdRoute
   '/hosts/$hostId/workspaces/$workspaceId/vscode': typeof HostsHostIdWorkspacesWorkspaceIdVscodeRoute
+  '/projects/$projectId_/issues/$issueId_/runs/$runId': typeof ProjectsProjectIdIssuesIssueIdRunsRunIdRoute
   '/projects/$projectId_/hosts/$hostId/workspaces/create/$draftId': typeof ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute
   '/projects/$projectId_/issues/$issueId_/hosts/$hostId/workspaces/$workspaceId': typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRoute
   '/projects/$projectId_/issues/$issueId_/hosts/$hostId/workspaces/create/$draftId': typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesCreateDraftIdRoute
@@ -221,6 +231,7 @@ export interface FileRouteTypes {
     | '/hosts/$hostId/workspaces/create'
     | '/projects/$projectId/issues/$issueId'
     | '/hosts/$hostId/workspaces/$workspaceId/vscode'
+    | '/projects/$projectId/issues/$issueId/runs/$runId'
     | '/projects/$projectId/hosts/$hostId/workspaces/create/$draftId'
     | '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/$workspaceId'
     | '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/create/$draftId'
@@ -242,6 +253,7 @@ export interface FileRouteTypes {
     | '/hosts/$hostId/workspaces/create'
     | '/projects/$projectId/issues/$issueId'
     | '/hosts/$hostId/workspaces/$workspaceId/vscode'
+    | '/projects/$projectId/issues/$issueId/runs/$runId'
     | '/projects/$projectId/hosts/$hostId/workspaces/create/$draftId'
     | '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/$workspaceId'
     | '/projects/$projectId/issues/$issueId/hosts/$hostId/workspaces/create/$draftId'
@@ -263,6 +275,7 @@ export interface FileRouteTypes {
     | '/hosts/$hostId/workspaces_/create'
     | '/projects/$projectId_/issues/$issueId'
     | '/hosts/$hostId/workspaces/$workspaceId/vscode'
+    | '/projects/$projectId_/issues/$issueId_/runs/$runId'
     | '/projects/$projectId_/hosts/$hostId/workspaces/create/$draftId'
     | '/projects/$projectId_/issues/$issueId_/hosts/$hostId/workspaces/$workspaceId'
     | '/projects/$projectId_/issues/$issueId_/hosts/$hostId/workspaces/create/$draftId'
@@ -284,6 +297,7 @@ export interface RootRouteChildren {
   HostsHostIdWorkspacesWorkspaceIdRoute: typeof HostsHostIdWorkspacesWorkspaceIdRoute
   HostsHostIdWorkspacesCreateRoute: typeof HostsHostIdWorkspacesCreateRoute
   ProjectsProjectIdIssuesIssueIdRoute: typeof ProjectsProjectIdIssuesIssueIdRoute
+  ProjectsProjectIdIssuesIssueIdRunsRunIdRoute: typeof ProjectsProjectIdIssuesIssueIdRunsRunIdRoute
   ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute: typeof ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute
   ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRoute: typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRoute
   ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesCreateDraftIdRoute: typeof ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesCreateDraftIdRoute
@@ -403,6 +417,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HostsHostIdWorkspacesWorkspaceIdVscodeRouteImport
       parentRoute: typeof HostsHostIdWorkspacesRoute
     }
+    '/projects/$projectId_/issues/$issueId_/runs/$runId': {
+      id: '/projects/$projectId_/issues/$issueId_/runs/$runId'
+      path: '/projects/$projectId/issues/$issueId/runs/$runId'
+      fullPath: '/projects/$projectId/issues/$issueId/runs/$runId'
+      preLoaderRoute: typeof ProjectsProjectIdIssuesIssueIdRunsRunIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$projectId_/hosts/$hostId/workspaces/create/$draftId': {
       id: '/projects/$projectId_/hosts/$hostId/workspaces/create/$draftId'
       path: '/projects/$projectId/hosts/$hostId/workspaces/create/$draftId'
@@ -457,6 +478,8 @@ const rootRouteChildren: RootRouteChildren = {
   HostsHostIdWorkspacesWorkspaceIdRoute: HostsHostIdWorkspacesWorkspaceIdRoute,
   HostsHostIdWorkspacesCreateRoute: HostsHostIdWorkspacesCreateRoute,
   ProjectsProjectIdIssuesIssueIdRoute: ProjectsProjectIdIssuesIssueIdRoute,
+  ProjectsProjectIdIssuesIssueIdRunsRunIdRoute:
+    ProjectsProjectIdIssuesIssueIdRunsRunIdRoute,
   ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute:
     ProjectsProjectIdHostsHostIdWorkspacesCreateDraftIdRoute,
   ProjectsProjectIdIssuesIssueIdHostsHostIdWorkspacesWorkspaceIdRoute:
