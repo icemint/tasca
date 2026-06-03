@@ -88,6 +88,41 @@ pub struct CreateWorkspace {
     pub name: Option<String>,
 }
 
+/// The dispatch lifecycle of an engine-routed workspace (M1 #17). `NULL` in the DB
+/// (no `DispatchState`) means the engine never fired for this workspace (ad-hoc /
+/// manual / upstream) — it is never queued and never re-dispatched.
+#[derive(Debug, Clone, Copy, sqlx::Type, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[sqlx(type_name = "dispatch_state", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum DispatchState {
+    /// Capable agents were all busy at start; the run is deferred and waits for an
+    /// agent-release event to be picked up (FIFO).
+    Queued,
+    /// An agent was claimed and the coding-agent run started.
+    Running,
+    /// A previously-queued run was claimed by a release event and started. Distinct
+    /// from `Running` only to make the race-safe `queued → dispatched` transition
+    /// observable; behaves like `Running` thereafter.
+    Dispatched,
+}
+
+/// Operator-facing reason a workspace needs attention (M1 #17). A free-text tag
+/// (the column is TEXT) so new reasons can be added without enum/migration churn
+/// as richer exit signals get plumbed. v1 emits `"executor_error"`; `"max_turns"`
+/// and a distinct `"interrupted"` are future refinements once the executor exposes
+/// a structured exit reason.
+pub const ATTENTION_EXECUTOR_ERROR: &str = "executor_error";
+
+/// The head-of-queue projection used to pick the next deferred workspace to
+/// re-dispatch on an agent release (M1 #17).
+#[derive(Debug, Clone)]
+pub struct QueuedWorkspace {
+    pub id: Uuid,
+    pub complexity_tier: Option<ComplexityTier>,
+    pub dispatch_prompt: Option<String>,
+    pub dispatch_executor_config: Option<String>,
+}
+
 /// The assignment inputs denormalized onto a workspace from its linked remote
 /// Issue at create-and-start (M1 #143). Kept off the main [`Workspace`] struct (so
 /// the many `Workspace` query sites and the shared TS type are untouched) and read
@@ -146,6 +181,115 @@ impl Workspace {
             sprint_id,
             remote_project_id,
             remote_issue_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Defer a workspace's run because all capable agents were busy (M1 #17):
+    /// record `dispatch_state = queued` and capture the coding-agent prompt so the
+    /// run can be started later on an agent-release event.
+    pub async fn mark_queued(
+        pool: &SqlitePool,
+        id: Uuid,
+        prompt: &str,
+        executor_config_json: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE workspaces
+               SET dispatch_state = 'queued', dispatch_prompt = $2,
+                   dispatch_executor_config = $3, updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id,
+            prompt,
+            executor_config_json
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record that an agent was claimed and the run started (M1 #17).
+    pub async fn mark_running(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE workspaces
+               SET dispatch_state = 'running', updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Atomically claim a queued workspace for re-dispatch (M1 #17). The
+    /// `WHERE dispatch_state = 'queued'` guard makes this exactly-once: among
+    /// concurrent agent-release re-dispatchers, only the one whose UPDATE flips
+    /// `queued → dispatched` gets `true` and proceeds to start it; the rest get
+    /// `false` and move on — no double-start.
+    pub async fn try_claim_for_dispatch(pool: &SqlitePool, id: Uuid) -> Result<bool, sqlx::Error> {
+        let res = sqlx::query!(
+            r#"UPDATE workspaces
+               SET dispatch_state = 'dispatched', updated_at = datetime('now', 'subsec')
+               WHERE id = $1 AND dispatch_state = 'queued'"#,
+            id
+        )
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    /// Read a workspace's dispatch state (M1 #17). `None` ⇒ the engine never fired.
+    pub async fn dispatch_state(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<DispatchState>, sqlx::Error> {
+        sqlx::query_scalar!(
+            r#"SELECT dispatch_state AS "dispatch_state: DispatchState"
+               FROM workspaces WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(pool)
+        .await
+        .map(Option::flatten)
+    }
+
+    /// The queued workspaces awaiting an agent, oldest first (FIFO by creation).
+    /// The caller filters by the freed agent's tier band in Rust (TEXT tiers don't
+    /// sort ordinally in SQL), mirroring `Agent::find_available_for_tier` (M1 #17).
+    pub async fn find_queued_ready(pool: &SqlitePool) -> Result<Vec<QueuedWorkspace>, sqlx::Error> {
+        sqlx::query_as!(
+            QueuedWorkspace,
+            r#"SELECT id AS "id!: Uuid",
+                      complexity_tier AS "complexity_tier: ComplexityTier",
+                      dispatch_prompt,
+                      dispatch_executor_config
+               FROM workspaces
+               WHERE dispatch_state = 'queued'
+               ORDER BY created_at ASC"#
+        )
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Flag a workspace as needing human attention after a failed/interrupted run
+    /// (M1 #17). `interrupted` additionally sets the resumable marker (the worktree
+    /// is preserved, so the run can be resumed rather than silently retried).
+    pub async fn record_needs_attention(
+        pool: &SqlitePool,
+        id: Uuid,
+        reason: &str,
+        interrupted: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE workspaces
+               SET needs_attention = 1, attention_reason = $2, interrupted = $3,
+                   updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id,
+            reason,
+            interrupted
         )
         .execute(pool)
         .await?;
@@ -736,9 +880,103 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::SqlitePool;
     use uuid::Uuid;
 
-    use super::Workspace;
+    use super::{DispatchState, Workspace};
+
+    async fn insert_ws(pool: &SqlitePool) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO workspaces (id, branch) VALUES (?, 'ws')")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        id
+    }
+
+    /// M1 #17: a deferred workspace records `queued` + its prompt/config, surfaces
+    /// in the FIFO ready-list, and `dispatch_state` reads back.
+    #[sqlx::test]
+    async fn mark_queued_then_found_ready(pool: SqlitePool) {
+        let id = insert_ws(&pool).await;
+        // Ad-hoc until queued.
+        assert!(
+            Workspace::dispatch_state(&pool, id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Needs a tier to be re-dispatchable.
+        sqlx::query("UPDATE workspaces SET complexity_tier = 'medium' WHERE id = ?")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        Workspace::mark_queued(&pool, id, "the prompt", "{\"cfg\":1}")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            Workspace::dispatch_state(&pool, id).await.unwrap(),
+            Some(DispatchState::Queued)
+        );
+        let ready = Workspace::find_queued_ready(&pool).await.unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, id);
+        assert_eq!(ready[0].dispatch_prompt.as_deref(), Some("the prompt"));
+        assert_eq!(
+            ready[0].dispatch_executor_config.as_deref(),
+            Some("{\"cfg\":1}")
+        );
+    }
+
+    /// M1 #17: claiming a queued workspace for dispatch is exactly-once — the first
+    /// caller flips queued→dispatched and wins; a second caller loses (no double-start).
+    #[sqlx::test]
+    async fn try_claim_for_dispatch_is_exactly_once(pool: SqlitePool) {
+        let id = insert_ws(&pool).await;
+        Workspace::mark_queued(&pool, id, "p", "{}").await.unwrap();
+
+        assert!(Workspace::try_claim_for_dispatch(&pool, id).await.unwrap());
+        assert_eq!(
+            Workspace::dispatch_state(&pool, id).await.unwrap(),
+            Some(DispatchState::Dispatched)
+        );
+        assert!(
+            !Workspace::try_claim_for_dispatch(&pool, id).await.unwrap(),
+            "a second claim must lose — no double-start"
+        );
+        // A dispatched workspace is no longer in the ready queue.
+        assert!(
+            Workspace::find_queued_ready(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// M1 #17: a failed/interrupted run flags the workspace for attention with a
+    /// reason and the resumable marker.
+    #[sqlx::test]
+    async fn record_needs_attention_sets_flag_reason_interrupted(pool: SqlitePool) {
+        let id = insert_ws(&pool).await;
+        Workspace::record_needs_attention(&pool, id, super::ATTENTION_EXECUTOR_ERROR, true)
+            .await
+            .unwrap();
+
+        let row: (bool, Option<String>, bool) = sqlx::query_as(
+            "SELECT needs_attention, attention_reason, interrupted FROM workspaces WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0, "needs_attention set");
+        assert_eq!(row.1.as_deref(), Some("executor_error"));
+        assert!(row.2, "interrupted (resumable) marker set");
+    }
 
     #[test]
     fn best_matching_container_ref_prefers_deepest_match() {

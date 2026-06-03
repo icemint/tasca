@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use db::{
     DBService,
     models::{
-        agent::Agent,
+        agent::{Agent, Availability},
         coding_agent_turn::{CodingAgentTurn, CreateCodingAgentTurn},
         execution_process::{
             CreateExecutionProcess, ExecutionContext, ExecutionProcess, ExecutionProcessError,
@@ -79,6 +79,15 @@ pub enum ContainerError {
     KillFailed(std::io::Error),
     #[error(transparent)]
     Other(#[from] AnyhowError), // Catches any unclassified errors
+}
+
+/// The result of [`ContainerService::start_workspace`] (M1 #17). A run either
+/// started, or was deferred because all capable agents were busy — in which case
+/// no session/execution exists yet and the workspace is recorded `queued`, to be
+/// started by a later agent-release event.
+pub enum StartOutcome {
+    Started(Box<ExecutionProcess>),
+    Queued,
 }
 
 #[async_trait]
@@ -232,14 +241,50 @@ pub trait ContainerService {
         // before the killed early-return so killed runs free their slot too. A DB
         // error here is logged loudly (not swallowed): the slot would otherwise
         // leak until the next startup recovery (cleanup_orphan_executions).
-        match Session::take_claimed_agent(&self.db().pool, ctx.session.id).await {
-            Ok(Some(agent_id)) => self.release_agent_quietly(agent_id).await,
-            Ok(None) => {}
-            Err(e) => tracing::error!(
-                ?e,
-                session_id = %ctx.session.id,
-                "failed to take claimed agent on finalize; slot will be reconciled at next startup"
-            ),
+        let freed_agent = match Session::take_claimed_agent(&self.db().pool, ctx.session.id).await {
+            Ok(Some(agent_id)) => {
+                self.release_agent_quietly(agent_id).await;
+                Some(agent_id)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::error!(
+                    ?e,
+                    session_id = %ctx.session.id,
+                    "failed to take claimed agent on finalize; slot will be reconciled at next startup"
+                );
+                None
+            }
+        };
+
+        // M1 #17: an engine-assigned coding-agent run that failed needs human
+        // attention (no auto tier-bump in v1). Scoped to runs that held a claimed
+        // agent (engine-routed) so ad-hoc/upstream failures aren't flagged. The
+        // worktree is preserved (finalize never deletes it), so the run is resumable
+        // — `interrupted` records that resumable marker.
+        if freed_agent.is_some()
+            && matches!(
+                ctx.execution_process.run_reason,
+                ExecutionProcessRunReason::CodingAgent
+            )
+            && matches!(ctx.execution_process.status, ExecutionProcessStatus::Failed)
+            && let Err(e) = Workspace::record_needs_attention(
+                &self.db().pool,
+                ctx.workspace.id,
+                db::models::workspace::ATTENTION_EXECUTOR_ERROR,
+                true,
+            )
+            .await
+        {
+            tracing::error!(?e, workspace_id = %ctx.workspace.id, "failed to record needs_attention");
+        }
+
+        // M1 #17: a freed slot triggers FIFO re-dispatch of the next queued-ready
+        // workspace the freed agent can take. Run inline (awaited): `start_workspace`
+        // returns once the next run has *started* (it does not block on completion),
+        // so this cannot recurse into another finalize within this call.
+        if let Some(freed_agent_id) = freed_agent {
+            self.redispatch_after_release(freed_agent_id).await;
         }
 
         // Skip notification if process was intentionally killed by user
@@ -1036,8 +1081,9 @@ pub trait ContainerService {
         workspace: &Workspace,
         executor_config: ExecutorConfig,
         prompt: String,
-    ) -> Result<ExecutionProcess, ContainerError> {
-        // Create container
+    ) -> Result<StartOutcome, ContainerError> {
+        // Create container (idempotent — a re-dispatched queued workspace already
+        // has its worktree; create just ensures it exists).
         self.create(workspace).await?;
 
         let repos = WorkspaceRepo::find_repos_for_workspace(&self.db().pool, workspace.id).await?;
@@ -1046,18 +1092,40 @@ pub trait ContainerService {
             .await?
             .ok_or(SqlxError::RowNotFound)?;
 
-        // M1 #16: capability-aware assignment hooks in BEFORE the session is
-        // created, so the session runs with the assigned agent's executor config +
-        // endpoint env. If no task is linked, no agents are configured, the task is
-        // already assigned / outside the active sprint, or no capable agent is free,
-        // `claim_assignment` returns `None` and we fall through to the caller's
-        // explicit `executor_config` — byte-for-byte upstream behavior (PRD §5.1).
+        // M1 #16/#17: capability-aware assignment hooks in BEFORE the session is
+        // created. The tri-state outcome decides what happens to the run:
+        //  - Assigned  ⇒ start now with the agent's executor config + endpoint env.
+        //  - Queue     ⇒ capable agents all busy ⇒ DEFER: record `queued` + capture
+        //                the prompt; an agent-release event starts it later (FIFO).
+        //  - Upstream  ⇒ no engine routing ⇒ start with the caller's explicit
+        //                config — byte-for-byte upstream behavior (PRD §5.1).
         let (executor_config, env_overrides, claimed_agent_id) =
             match super::assignment::context_for_workspace(&self.db().pool, &workspace).await? {
                 Some(ctx) => {
                     match super::assignment::claim_assignment(&self.db().pool, &ctx).await? {
-                        Some(a) => (a.executor_config, a.env.env, Some(a.agent.id)),
-                        None => (executor_config, None, None),
+                        super::assignment::ClaimOutcome::Assigned(a) => {
+                            if let Err(e) =
+                                Workspace::mark_running(&self.db().pool, workspace.id).await
+                            {
+                                tracing::warn!(?e, "failed to mark workspace running");
+                            }
+                            (a.executor_config, a.env.env, Some(a.agent.id))
+                        }
+                        super::assignment::ClaimOutcome::Queue => {
+                            // Defer: nothing is started; the run waits in the queue.
+                            // Capture the prompt + caller config to replay on release.
+                            let cfg_json =
+                                serde_json::to_string(&executor_config).unwrap_or_default();
+                            Workspace::mark_queued(
+                                &self.db().pool,
+                                workspace.id,
+                                &prompt,
+                                &cfg_json,
+                            )
+                            .await?;
+                            return Ok(StartOutcome::Queued);
+                        }
+                        super::assignment::ClaimOutcome::Upstream => (executor_config, None, None),
                     }
                 }
                 None => (executor_config, None, None),
@@ -1154,7 +1222,7 @@ pub trait ContainerService {
         };
 
         match start_result {
-            Ok(execution_process) => Ok(execution_process),
+            Ok(execution_process) => Ok(StartOutcome::Started(Box::new(execution_process))),
             Err(e) => {
                 // The marker is on the session, so take-once governs release —
                 // shared with the finalize monitor, which may also fire for the
@@ -1182,6 +1250,118 @@ pub trait ContainerService {
     async fn release_agent_quietly(&self, agent_id: Uuid) {
         if let Err(e) = Agent::release(&self.db().pool, agent_id).await {
             tracing::error!(?e, %agent_id, "failed to release agent concurrency slot");
+        }
+    }
+
+    /// FIFO re-dispatch on an agent release (M1 #17): start the oldest queued
+    /// workspace the just-freed agent can take. Best-effort — every failure is
+    /// logged, never propagated, so a stuck re-dispatch can't break finalize. A
+    /// queued workspace is claimed atomically (queued→dispatched) so concurrent
+    /// releases can't double-start it, and is re-queued if its start fails so the
+    /// work is never silently lost.
+    async fn redispatch_after_release(&self, freed_agent_id: Uuid) {
+        // The freed agent must actually have capacity now — it may have been
+        // re-claimed by a concurrent start, or set offline/paused.
+        let agent = match Agent::find_by_id(&self.db().pool, freed_agent_id).await {
+            Ok(Some(agent)) => agent,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::error!(?e, "redispatch: failed to load freed agent");
+                return;
+            }
+        };
+        if agent.availability != Availability::Free
+            || agent.active_sessions >= agent.concurrency_limit
+        {
+            return;
+        }
+
+        // Oldest queued workspace whose tier the freed agent's band covers.
+        let queued = match Workspace::find_queued_ready(&self.db().pool).await {
+            Ok(queued) => queued,
+            Err(e) => {
+                tracing::error!(?e, "redispatch: failed to list queued workspaces");
+                return;
+            }
+        };
+        let Some(next) = super::assignment::select_for_dispatch(&agent, queued) else {
+            return; // nothing this agent can take right now
+        };
+        let workspace_id = next.id;
+
+        // Atomically claim it (queued→dispatched) so racing releases don't double-start.
+        match Workspace::try_claim_for_dispatch(&self.db().pool, workspace_id).await {
+            Ok(true) => {}
+            Ok(false) => return, // another release got it first
+            Err(e) => {
+                tracing::error!(?e, %workspace_id, "redispatch: claim-for-dispatch failed");
+                return;
+            }
+        }
+
+        // Past this point the workspace is `dispatched`; every exit must either
+        // start it, re-queue it (recoverable), or flag it for attention (corrupt) —
+        // never leave it silently stuck in `dispatched`, which `find_queued_ready`
+        // would never re-select.
+        let (Some(prompt), Some(cfg_json)) = (next.dispatch_prompt, next.dispatch_executor_config)
+        else {
+            // Corrupt queue row (shouldn't happen: mark_queued always writes both).
+            // Re-queuing would just poison-loop, so flag for a human instead.
+            tracing::error!(%workspace_id, "redispatch: queued workspace missing prompt/config; flagging for attention");
+            self.flag_redispatch_failure(workspace_id, "redispatch_data_missing")
+                .await;
+            return;
+        };
+        let executor_config: ExecutorConfig = match serde_json::from_str(&cfg_json) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // Unrecoverable: re-queuing replays the same bad config. Flag it.
+                tracing::error!(?e, %workspace_id, "redispatch: bad stored executor config; flagging for attention");
+                self.flag_redispatch_failure(workspace_id, "redispatch_bad_config")
+                    .await;
+                return;
+            }
+        };
+        let workspace = match Workspace::find_by_id(&self.db().pool, workspace_id).await {
+            Ok(Some(workspace)) => workspace,
+            // The workspace was deleted out from under us — nothing to recover.
+            Ok(None) => return,
+            Err(e) => {
+                // Transient DB error — re-queue so a later release retries.
+                tracing::error!(?e, %workspace_id, "redispatch: failed to load workspace; re-queuing");
+                if let Err(re) =
+                    Workspace::mark_queued(&self.db().pool, workspace_id, &prompt, &cfg_json).await
+                {
+                    tracing::error!(?re, %workspace_id, "redispatch: failed to re-queue after load error");
+                }
+                return;
+            }
+        };
+
+        // Re-enter the start path: the engine re-evaluates with the now-free slot
+        // and claims the agent (Assigned ⇒ Running). If it lost the slot to a
+        // concurrent start, `start_workspace` re-queues it (Queue) — never dropped.
+        if let Err(e) = self
+            .start_workspace(&workspace, executor_config, prompt.clone())
+            .await
+        {
+            tracing::error!(?e, %workspace_id, "redispatch: failed to start queued workspace; re-queuing");
+            // Don't leave it stuck in `dispatched`; re-queue so a later release retries.
+            if let Err(re) =
+                Workspace::mark_queued(&self.db().pool, workspace_id, &prompt, &cfg_json).await
+            {
+                tracing::error!(?re, %workspace_id, "redispatch: failed to re-queue after start error");
+            }
+        }
+    }
+
+    /// Flag a workspace whose re-dispatch failed unrecoverably (corrupt queue data)
+    /// for human attention (M1 #17) — rather than re-queuing it into a poison loop.
+    async fn flag_redispatch_failure(&self, workspace_id: Uuid, reason: &str) {
+        if let Err(e) =
+            Workspace::record_needs_attention(&self.db().pool, workspace_id, reason, false).await
+        {
+            tracing::error!(?e, %workspace_id, "redispatch: failed to flag needs_attention");
         }
     }
 

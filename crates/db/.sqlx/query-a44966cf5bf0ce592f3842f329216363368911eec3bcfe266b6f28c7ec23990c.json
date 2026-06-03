@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT dispatch_state AS \"dispatch_state: DispatchState\"\n               FROM workspaces WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "name": "dispatch_state: DispatchState",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a44966cf5bf0ce592f3842f329216363368911eec3bcfe266b6f28c7ec23990c"
+}

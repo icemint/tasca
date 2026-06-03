@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces\n               SET dispatch_state = 'dispatched', updated_at = datetime('now', 'subsec')\n               WHERE id = $1 AND dispatch_state = 'queued'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "21965eb35b3952bec1f79340e25714f832ae4924035a1eec980768c715927017"
+}

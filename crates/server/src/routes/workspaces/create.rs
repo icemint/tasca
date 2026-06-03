@@ -8,7 +8,7 @@ use db::models::{
     workspace::{CreateWorkspace, Workspace},
 };
 use deployment::Deployment;
-use services::services::container::ContainerService;
+use services::services::container::{ContainerService, StartOutcome};
 use utils::response::ApiResponse;
 use uuid::Uuid;
 
@@ -339,10 +339,18 @@ pub async fn create_and_start_workspace(
     let workspace = managed_workspace.workspace.clone();
     tracing::info!("Created workspace {}", workspace.id);
 
-    let execution_process = deployment
+    // M1 #17: the engine may DEFER the run when all capable agents are busy — the
+    // workspace is recorded `queued` and started later on an agent release, so no
+    // execution process exists yet (`execution_process: None`). For ad-hoc/manual
+    // and engine-assigned starts, a process is returned as before.
+    let execution_process = match deployment
         .container()
         .start_workspace(&workspace, executor_config.clone(), workspace_prompt)
-        .await?;
+        .await?
+    {
+        StartOutcome::Started(execution_process) => Some(*execution_process),
+        StartOutcome::Queued => None,
+    };
 
     deployment
         .track_if_analytics_allowed(
