@@ -1,6 +1,6 @@
 use api_types::{
-    DeleteResponse, Issue, IssuePriority, IssueSortField, ListIssuesResponse, MutationResponse,
-    PullRequestStatus, SearchIssuesRequest, SortDirection,
+    ComplexityTier, DeleteResponse, Issue, IssuePriority, IssueSortField, ListIssuesResponse,
+    MutationResponse, PullRequestStatus, SearchIssuesRequest, SortDirection, TierSource,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -149,6 +149,9 @@ impl IssueRepository {
                 i.title               AS "title!",
                 i.description         AS "description?",
                 i.priority            AS "priority: IssuePriority",
+                i.complexity_tier     AS "complexity_tier!: ComplexityTier",
+                i.tier_source         AS "tier_source!: TierSource",
+                i.tier_confidence     AS "tier_confidence?",
                 i.start_date          AS "start_date?: DateTime<Utc>",
                 i.target_date         AS "target_date?: DateTime<Utc>",
                 i.completed_at        AS "completed_at?: DateTime<Utc>",
@@ -281,6 +284,9 @@ impl IssueRepository {
                 title               AS "title!",
                 description         AS "description?",
                 priority            AS "priority: IssuePriority",
+                complexity_tier     AS "complexity_tier!: ComplexityTier",
+                tier_source         AS "tier_source!: TierSource",
+                tier_confidence     AS "tier_confidence?",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
@@ -330,6 +336,8 @@ impl IssueRepository {
         title: String,
         description: Option<String>,
         priority: Option<IssuePriority>,
+        complexity_tier: Option<ComplexityTier>,
+        tier_source: Option<TierSource>,
         start_date: Option<DateTime<Utc>>,
         target_date: Option<DateTime<Utc>>,
         completed_at: Option<DateTime<Utc>>,
@@ -350,9 +358,9 @@ impl IssueRepository {
                 id, project_id, status_id, title, description, priority,
                 start_date, target_date, completed_at, sort_order,
                 parent_issue_id, parent_issue_sort_order, extension_metadata,
-                creator_user_id
+                creator_user_id, complexity_tier, tier_source
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING
                 id                  AS "id!: Uuid",
                 project_id          AS "project_id!: Uuid",
@@ -362,6 +370,9 @@ impl IssueRepository {
                 title               AS "title!",
                 description         AS "description?",
                 priority            AS "priority: IssuePriority",
+                complexity_tier     AS "complexity_tier!: ComplexityTier",
+                tier_source         AS "tier_source!: TierSource",
+                tier_confidence     AS "tier_confidence?",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
@@ -386,7 +397,9 @@ impl IssueRepository {
             parent_issue_id,
             parent_issue_sort_order,
             extension_metadata,
-            creator_user_id
+            creator_user_id,
+            complexity_tier.unwrap_or_default() as ComplexityTier,
+            tier_source.unwrap_or_default() as TierSource
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -412,6 +425,9 @@ impl IssueRepository {
         title: Option<String>,
         description: Option<Option<String>>,
         priority: Option<Option<IssuePriority>>,
+        complexity_tier: Option<ComplexityTier>,
+        tier_source: Option<TierSource>,
+        tier_confidence: Option<Option<f64>>,
         start_date: Option<Option<DateTime<Utc>>>,
         target_date: Option<Option<DateTime<Utc>>>,
         completed_at: Option<Option<DateTime<Utc>>>,
@@ -429,6 +445,8 @@ impl IssueRepository {
         let description_value = description.flatten();
         let update_priority = priority.is_some();
         let priority_value = priority.flatten();
+        let update_tier_confidence = tier_confidence.is_some();
+        let tier_confidence_value = tier_confidence.flatten();
         let update_start_date = start_date.is_some();
         let start_date_value = start_date.flatten();
         let update_target_date = target_date.is_some();
@@ -456,6 +474,9 @@ impl IssueRepository {
                 parent_issue_id = CASE WHEN $14 THEN $15 ELSE parent_issue_id END,
                 parent_issue_sort_order = CASE WHEN $16 THEN $17 ELSE parent_issue_sort_order END,
                 extension_metadata = COALESCE($18, extension_metadata),
+                complexity_tier = COALESCE($20, complexity_tier),
+                tier_source = COALESCE($21, tier_source),
+                tier_confidence = CASE WHEN $22 THEN $23 ELSE tier_confidence END,
                 updated_at = NOW()
             WHERE id = $19
             RETURNING
@@ -467,6 +488,9 @@ impl IssueRepository {
                 title               AS "title!",
                 description         AS "description?",
                 priority            AS "priority: IssuePriority",
+                complexity_tier     AS "complexity_tier!: ComplexityTier",
+                tier_source         AS "tier_source!: TierSource",
+                tier_confidence     AS "tier_confidence?",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
@@ -496,7 +520,11 @@ impl IssueRepository {
             update_parent_issue_sort_order,
             parent_issue_sort_order_value,
             extension_metadata,
-            id
+            id,
+            complexity_tier as Option<ComplexityTier>,
+            tier_source as Option<TierSource>,
+            update_tier_confidence,
+            tier_confidence_value
         )
         .fetch_one(executor)
         .await?;
@@ -567,6 +595,9 @@ impl IssueRepository {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await?;
 
@@ -617,6 +648,9 @@ impl IssueRepository {
                 &mut *conn,
                 issue_id,
                 Some(target_status_id),
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,

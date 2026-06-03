@@ -1,18 +1,18 @@
 use std::{env, fs, path::Path};
 
 use api_types::{
-    Attachment, AttachmentUrlResponse, AttachmentWithBlob, Blob, CreateIssueAssigneeRequest,
-    CreateIssueCommentReactionRequest, CreateIssueCommentRequest, CreateIssueFollowerRequest,
-    CreateIssueRelationshipRequest, CreateIssueRequest, CreateIssueTagRequest,
-    CreateProjectRequest, CreateProjectStatusRequest, CreatePullRequestIssueRequest,
-    CreateTagRequest, ExportRequest, Issue, IssueAssignee, IssueComment, IssueCommentReaction,
-    IssueFollower, IssuePriority, IssueRelationship, IssueRelationshipType, IssueSortField,
-    IssueTag, ListIssuesQuery, ListIssuesResponse, MemberRole, Notification, NotificationGroupKind,
-    NotificationPayload, NotificationType, OrganizationMember, Project, ProjectStatus, PullRequest,
-    PullRequestIssue, PullRequestStatus, SearchIssuesRequest, SortDirection, Tag,
-    UpdateIssueCommentReactionRequest, UpdateIssueCommentRequest, UpdateIssueRequest,
-    UpdateNotificationRequest, UpdateProjectRequest, UpdateProjectStatusRequest, UpdateTagRequest,
-    User, UserData, Workspace,
+    Attachment, AttachmentUrlResponse, AttachmentWithBlob, Blob, ComplexityTier,
+    CreateIssueAssigneeRequest, CreateIssueCommentReactionRequest, CreateIssueCommentRequest,
+    CreateIssueFollowerRequest, CreateIssueRelationshipRequest, CreateIssueRequest,
+    CreateIssueTagRequest, CreateProjectRequest, CreateProjectStatusRequest,
+    CreatePullRequestIssueRequest, CreateTagRequest, ExportRequest, Issue, IssueAssignee,
+    IssueComment, IssueCommentReaction, IssueFollower, IssuePriority, IssueRelationship,
+    IssueRelationshipType, IssueSortField, IssueTag, ListIssuesQuery, ListIssuesResponse,
+    MemberRole, Notification, NotificationGroupKind, NotificationPayload, NotificationType,
+    OrganizationMember, Project, ProjectStatus, PullRequest, PullRequestIssue, PullRequestStatus,
+    SearchIssuesRequest, SortDirection, Tag, TierSource, UpdateIssueCommentReactionRequest,
+    UpdateIssueCommentRequest, UpdateIssueRequest, UpdateNotificationRequest, UpdateProjectRequest,
+    UpdateProjectStatusRequest, UpdateTagRequest, User, UserData, Workspace,
 };
 use relay_types::{CreateRemoteSessionResponse, ListRelayHostsResponse, RelayHost};
 use remote::{
@@ -82,6 +82,8 @@ fn export_shapes() -> String {
         ProjectStatus::decl(),
         Tag::decl(),
         Issue::decl(),
+        ComplexityTier::decl(),
+        TierSource::decl(),
         IssueAssignee::decl(),
         Blob::decl(),
         Attachment::decl(),

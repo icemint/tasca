@@ -1,5 +1,6 @@
 use api_types::{
-    AttachmentWithBlob, Issue, IssueAssignee, IssuePriority, Project, ProjectStatus, User,
+    AttachmentWithBlob, ComplexityTier, Issue, IssueAssignee, IssuePriority, Project,
+    ProjectStatus, TierSource, User,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -102,6 +103,9 @@ impl ExportRepository {
                 title               AS "title!",
                 description         AS "description?",
                 priority            AS "priority: IssuePriority",
+                complexity_tier     AS "complexity_tier!: ComplexityTier",
+                tier_source         AS "tier_source!: TierSource",
+                tier_confidence     AS "tier_confidence?",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
