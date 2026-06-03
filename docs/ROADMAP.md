@@ -241,7 +241,7 @@ M
 > **Outcome:** the implemented linkage resolves tier from the **linked remote Issue** denormalized onto the Workspace (`assignment_context`), not via `workspace.task_id` (never populated) — see #143.
 
 ## Context
-PRD 5.2 cites `container.rs:1063`, but the verified seam is `start_workspace(workspace, executor_config, prompt)` at `crates/services/src/services/container.rs:1003`, with `Session::create` at **:1019**. The task FK was removed (20260217120312). Document how the engine resolves a Task and its `complexity_tier` at the seam — via `workspace.task_id` (Option<Uuid>, `workspace.rs:44`), `parent_workspace_id`, or `linked_issue` (`create.rs:253`) — and whether branch-per-attempt changes what "unassigned"/"in-flight" mean. Documentation only; may surface a needed `start_workspace` signature change.
+PRD 5.2 cites `container.rs:1063`, but the verified seam is `start_workspace(workspace, executor_config, prompt)` at `crates/services/src/services/container.rs:1079`, with `Session::create` at **:1156**. The task FK was removed (20260217120312). Document how the engine resolves a Task and its `complexity_tier` at the seam — via `workspace.task_id` (Option<Uuid>, `workspace.rs:44`), `parent_workspace_id`, or `linked_issue` (`create.rs:253`) — and whether branch-per-attempt changes what "unassigned"/"in-flight" mean. Documentation only; may surface a needed `start_workspace` signature change.
 
 ## Acceptance criteria
 - [ ] A documented, verified path from the seam to the Task and its tier
@@ -299,7 +299,7 @@ L
 > **As shipped:** wired in `ContainerService::start_workspace` (`crates/services/src/services/container.rs:1079`) before `Session::create` (`:1156`); the impure helper is `services::services::assignment::{context_for_workspace, claim_assignment}` → `ClaimOutcome::{Assigned,Queue,Upstream}`, with atomic `Agent::claim` and exactly-once release via `Session::take_claimed_agent` in `finalize_task`. (Original ':1003/:1019' line numbers were pre-merge estimates.)
 
 ## Context
-The corrected seam: `start_workspace` is at `crates/services/src/services/container.rs:1003`; `Session::create` runs at **:1019** with `executor: Some(executor_config.executor.to_string())`. Just before :1019, resolve `Task::find_by_id`, call `decide()`, and:
+The corrected seam: `start_workspace` is at `crates/services/src/services/container.rs:1079`; `Session::create` runs at **:1156** with `executor: Some(executor_config.executor.to_string())`. Just before :1156, resolve `Task::find_by_id`, call `decide()`, and:
 - **Assigned** → override `executor_config` (executor + inject base_url/credential into the resolved CodingAgent's `CmdOverrides.env`) and call `Agent::claim()`
 - **ManualOverride** → keep client config, tag the attempt for audit
 - **Queued/NoCapableAgent/Blocked** → return a non-execution result that flips the ticket to ready/no_capable_agent/needs_attention; never start a session
@@ -307,7 +307,7 @@ The corrected seam: `start_workspace` is at `crates/services/src/services/contai
 Backward compat: when no Agent rows exist, fall through to the client config exactly as upstream. Integrate with start-failure cleanup (`container.rs:1184-1209`) so a failed start releases the agent. Confirm `services → assignment-engine → db/executors` introduces no workspace dependency cycle.
 
 ## Acceptance criteria
-- [ ] Single insertion point before :1019 (one upstream-file edit)
+- [ ] Single insertion point before :1156 (one upstream-file edit)
 - [ ] When a capable Agent exists, the session uses the agent's config + base_url/credential, not the client's; `claim()` is atomic, loser re-queries
 - [ ] Zero Agent rows ⇒ byte-for-byte upstream behavior
 - [ ] Queued/NoCapableAgent/Blocked set the documented ticket state, never silently start or drop
@@ -1058,7 +1058,7 @@ M
 ## Context
 §10 core: untrusted input must never directly trigger execution — a guest-authored ticket needs an internal human to promote it to agent-ready first. The local server has ZERO authz on `create_and_start_workspace` (`crates/server/src/routes/workspaces/create.rs:212`), and trust tiers live in remote while execution initiates locally with no app-user identity (DISCOVERY §2.3).
 
-**Decision (default): the gate is authoritative remote-side.** Add a ticket `trust_state TEXT CHECK IN ('proposed','agent_ready')` defaulting `proposed` when the ticket or any comment is guest-authored, require a member+ promotion (audited) to set `agent_ready`, and refuse to issue any dispatch/sync to the local executor for a ticket below `agent_ready` — the single chokepoint upstream of `container.rs:1019` Session::create. Tie to `can_trigger_execution(role)` (guest → false).
+**Decision (default): the gate is authoritative remote-side.** Add a ticket `trust_state TEXT CHECK IN ('proposed','agent_ready')` defaulting `proposed` when the ticket or any comment is guest-authored, require a member+ promotion (audited) to set `agent_ready`, and refuse to issue any dispatch/sync to the local executor for a ticket below `agent_ready` — the single chokepoint upstream of `container.rs:1156` Session::create. Tie to `can_trigger_execution(role)` (guest → false).
 
 ## Acceptance criteria
 - [ ] Guest-authored tickets default to a non-executable trust state; promotion requires member+ and is audited
@@ -1075,7 +1075,7 @@ L
 ### `M` · `security` — Add sandbox_profile to the Agent entity and resolve it at run start
 
 ## Context
-PRD §4.2/§10 put a `sandbox_profile TEXT NULL` on the Agent entity to select isolation per run. The Agent entity is a Phase-1 build; add `sandbox_profile` there (or a follow-up additive migration) and a resolver that, at the `container.rs:1003` start seam, picks the profile based on the agent AND whether the ticket is external-touch — forcing a sandbox profile for external-touch regardless of the agent default. This issue defines the field + resolution policy; the runner is separate.
+PRD §4.2/§10 put a `sandbox_profile TEXT NULL` on the Agent entity to select isolation per run. The Agent entity is a Phase-1 build; add `sandbox_profile` there (or a follow-up additive migration) and a resolver that, at the `container.rs:1079` start seam, picks the profile based on the agent AND whether the ticket is external-touch — forcing a sandbox profile for external-touch regardless of the agent default. This issue defines the field + resolution policy; the runner is separate.
 
 ## Acceptance criteria
 - [ ] `agents.sandbox_profile` exists and is readable by the assignment/start path
@@ -1092,7 +1092,7 @@ M
 ### `XL` · `infra` — Container-per-run executor backend for external-touch runs (macOS)
 
 ## Context
-§10 + §13.1 locked decision: any external-touch execution must run in an ephemeral container/jail with no host FS, no secrets, egress-restricted; Ollama/GPU stays on host reached over the network. Today executors spawn as host child processes (`claude.rs:650 group_spawn_no_window`). Build a sandboxed run backend provisioning the worktree + toolchain INSIDE a Linux container, routing the executor's spawn through it when `sandbox_profile` is set, gated at the `container.rs:1003` seam.
+§10 + §13.1 locked decision: any external-touch execution must run in an ephemeral container/jail with no host FS, no secrets, egress-restricted; Ollama/GPU stays on host reached over the network. Today executors spawn as host child processes (`claude.rs:650 group_spawn_no_window`). Build a sandboxed run backend provisioning the worktree + toolchain INSIDE a Linux container, routing the executor's spawn through it when `sandbox_profile` is set, gated at the `container.rs:1079` seam.
 
 **Decision (default): Docker Desktop runner for v1**; leave the Apple `container` backend and egress-allowlist tuning to follow-ups (see macOS-sandbox decision/spike). Verify env injection (`CmdOverrides.env`), log streaming, and worktree paths work inside the container (`claude.rs:630-650`, `acp/harness.rs`).
 
@@ -1145,10 +1145,10 @@ M
 
 ## Key decisions to resolve (blocking design questions)
 
-> Surfaced by the review; several correct errors in the PRD (e.g. the assignment seam is `start_workspace` ~`:1003`/`Session::create :1019`, not `container.rs:1063`).
+> Surfaced by the review; several correct errors in the PRD (e.g. the assignment seam is `start_workspace` ~`:1079`/`Session::create :1156`, not `container.rs:1063`).
 
 1. ****
-   - _Recommended:_ Insert the engine call just before Session::create at container.rs:1019 inside start_workspace (:1003), resolving the Task/tier via workspace.task_id. Have engineering confirm the post-20251216142123 refactor hasn't moved it again before implementation.
+   - _Recommended:_ Insert the engine call just before Session::create at container.rs:1156 inside start_workspace (:1079), resolving the Task/tier via workspace.task_id. Have engineering confirm the post-20251216142123 refactor hasn't moved it again before implementation.
    - _Blocks:_ Wire the assignment engine into start_workspace before Session::create; Spike: resolve Task/tier linkage; all M1 routing wiring.
 
 2. ****
