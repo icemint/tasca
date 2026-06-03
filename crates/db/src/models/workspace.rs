@@ -12,6 +12,7 @@ const WORKSPACE_NAME_MAX_LEN: usize = 60;
 use super::{
     execution_process::ExecutorActionField,
     session::Session,
+    task::ComplexityTier,
     workspace_repo::{RepoWithTargetBranch, WorkspaceRepo},
 };
 
@@ -87,7 +88,70 @@ pub struct CreateWorkspace {
     pub name: Option<String>,
 }
 
+/// The assignment inputs denormalized onto a workspace from its linked remote
+/// Issue at create-and-start (M1 #143). Kept off the main [`Workspace`] struct (so
+/// the many `Workspace` query sites and the shared TS type are untouched) and read
+/// via [`Workspace::assignment_context`] only at the engine seam. A `None`
+/// `complexity_tier` means the workspace was not created from a tiered issue, so
+/// the engine does not fire (byte-for-byte upstream behavior).
+#[derive(Debug, Clone)]
+pub struct WorkspaceAssignmentContext {
+    pub complexity_tier: Option<ComplexityTier>,
+    pub sprint_id: Option<Uuid>,
+    pub remote_project_id: Option<Uuid>,
+    pub remote_issue_id: Option<Uuid>,
+}
+
 impl Workspace {
+    /// Read the denormalized assignment context for a workspace (M1 #143). Used at
+    /// the `start_workspace` seam to resolve tier/sprint without a remote round-trip.
+    pub async fn assignment_context(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<WorkspaceAssignmentContext>, sqlx::Error> {
+        sqlx::query_as!(
+            WorkspaceAssignmentContext,
+            r#"SELECT complexity_tier AS "complexity_tier: ComplexityTier",
+                      sprint_id AS "sprint_id: Uuid",
+                      remote_project_id AS "remote_project_id: Uuid",
+                      remote_issue_id AS "remote_issue_id: Uuid"
+               FROM workspaces
+               WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(pool)
+        .await
+    }
+
+    /// Persist the assignment context denormalized from the linked Issue (M1 #143).
+    /// Called at create-and-start when a workspace is linked to a tiered issue.
+    pub async fn set_assignment_context(
+        pool: &SqlitePool,
+        id: Uuid,
+        complexity_tier: ComplexityTier,
+        sprint_id: Option<Uuid>,
+        remote_project_id: Uuid,
+        remote_issue_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE workspaces
+               SET complexity_tier = $2,
+                   sprint_id = $3,
+                   remote_project_id = $4,
+                   remote_issue_id = $5,
+                   updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id,
+            complexity_tier,
+            sprint_id,
+            remote_project_id,
+            remote_issue_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Fetch all workspaces. Newest first.
     pub async fn fetch_all(pool: &SqlitePool) -> Result<Vec<Self>, WorkspaceError> {
         let workspaces = sqlx::query_as!(

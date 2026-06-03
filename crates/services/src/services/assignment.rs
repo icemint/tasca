@@ -7,31 +7,36 @@
 //! stays a pure, side-effect-free leaf.
 
 use assignment_engine::{Assignment, AssignmentContext, AssignmentDecision, decide};
-use db::models::{agent::Agent, sprint::Sprint, task::Task, workspace::Workspace};
+use db::models::{agent::Agent, sprint::Sprint, workspace::Workspace};
 use sqlx::SqlitePool;
 
 /// Resolve the routing context for a started workspace, or `None` when there is
-/// nothing to route (no linked task). A `None` return means the caller uses its
-/// explicit executor config — upstream behavior.
+/// nothing to route. The tier/sprint are denormalized onto the workspace from its
+/// linked remote Issue at create-and-start (M1 #143); a workspace with no linked
+/// tiered issue has no `complexity_tier`, so this returns `None` and the caller
+/// uses its explicit executor config — byte-for-byte upstream behavior.
 pub async fn context_for_workspace(
     pool: &SqlitePool,
     workspace: &Workspace,
 ) -> Result<Option<AssignmentContext>, sqlx::Error> {
-    let Some(task_id) = workspace.task_id else {
+    let Some(wac) = Workspace::assignment_context(pool, workspace.id).await? else {
         return Ok(None);
     };
-    let Some(task) = Task::find_by_id(pool, task_id).await? else {
+    let Some(tier) = wac.complexity_tier else {
         return Ok(None);
     };
-    let active_sprint = Sprint::active_for_project(pool, task.project_id).await?;
+    let active_sprint = match wac.remote_project_id {
+        Some(project_id) => Sprint::active_for_project(pool, project_id).await?,
+        None => None,
+    };
     Ok(Some(AssignmentContext {
-        tier: task.complexity_tier,
-        sprint_id: task.sprint_id,
+        tier,
+        sprint_id: wac.sprint_id,
         active_sprint_id: active_sprint.map(|s| s.id),
-        // v1: local Tasks carry no assignee or blocking model yet, so a started
-        // task is treated as unassigned and unblocked. The assignee / blocked-by
-        // inputs arrive with the issue-linked path (#13 seam) and #17 escalation;
-        // until then `decide()` simply never returns Blocked/already-assigned here.
+        // v1: the issue's assignee / blocked-by inputs are not yet wired through
+        // (they arrive with #17 escalation), so a started workspace is treated as
+        // unassigned and unblocked — `decide()` never returns Blocked/already-
+        // assigned here until then.
         is_unassigned: true,
         is_blocked: false,
     }))
@@ -179,5 +184,64 @@ mod tests {
         // The DB shows exactly one claimed slot — the loser backed off, no over-claim.
         let agent = Agent::find_by_id(&pool, id).await.unwrap().unwrap();
         assert_eq!(agent.active_sessions, 1, "agent was never over-claimed");
+    }
+
+    /// M1 #143 END-TO-END: a workspace carrying a tiered issue's tier (as
+    /// persisted onto the workspace at create-and-start) resolves a real
+    /// assignment context and routes to a capable free agent — proving the engine
+    /// actually FIRES from a workspace, not just that the pure predicate works.
+    #[sqlx::test(migrations = "../db/migrations")]
+    async fn workspace_with_issue_tier_routes_to_capable_agent(pool: SqlitePool) {
+        let ws_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO workspaces (id, branch, complexity_tier) VALUES (?, 'ws', 'medium')",
+        )
+        .bind(ws_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_free_agent(&pool, 1).await; // full-band free agent — covers medium
+
+        let workspace = Workspace::find_by_id(&pool, ws_id).await.unwrap().unwrap();
+        let ctx = context_for_workspace(&pool, &workspace)
+            .await
+            .unwrap()
+            .expect("a workspace from a tiered issue must yield an assignment context");
+        assert_eq!(ctx.tier, ComplexityTier::Medium);
+
+        let assignment = claim_assignment(&pool, &ctx)
+            .await
+            .unwrap()
+            .expect("engine must route to a capable agent, NOT fall through to ManualOverride");
+
+        // `assignment.agent` is the pre-claim snapshot; the claim increment lands in
+        // the DB. Assert against the DB to prove the slot was claimed end-to-end.
+        let agent = Agent::find_by_id(&pool, assignment.agent.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            agent.active_sessions, 1,
+            "the agent slot was claimed end-to-end"
+        );
+    }
+
+    /// M1 #143: an ad-hoc workspace (no linked tiered issue) yields no context, so
+    /// the engine does not fire — byte-for-byte upstream behavior.
+    #[sqlx::test(migrations = "../db/migrations")]
+    async fn ad_hoc_workspace_yields_no_context(pool: SqlitePool) {
+        let ws_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO workspaces (id, branch) VALUES (?, 'ws')")
+            .bind(ws_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let workspace = Workspace::find_by_id(&pool, ws_id).await.unwrap().unwrap();
+        assert!(
+            context_for_workspace(&pool, &workspace)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

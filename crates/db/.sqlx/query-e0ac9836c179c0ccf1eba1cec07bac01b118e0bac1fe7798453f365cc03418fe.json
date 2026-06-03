@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT complexity_tier AS \"complexity_tier: ComplexityTier\",\n                      sprint_id AS \"sprint_id: Uuid\",\n                      remote_project_id AS \"remote_project_id: Uuid\",\n                      remote_issue_id AS \"remote_issue_id: Uuid\"\n               FROM workspaces\n               WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "name": "complexity_tier: ComplexityTier",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "sprint_id: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "remote_project_id: Uuid",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "remote_issue_id: Uuid",
+        "ordinal": 3,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e0ac9836c179c0ccf1eba1cec07bac01b118e0bac1fe7798453f365cc03418fe"
+}
