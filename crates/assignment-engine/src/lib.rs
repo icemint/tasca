@@ -6,6 +6,8 @@
 //! Every path returns an explicit [`AssignmentDecision`] — never a silent no-op
 //! (PRD §5.5).
 
+pub mod validation;
+
 use db::models::{
     agent::{Agent, Availability},
     task::ComplexityTier,

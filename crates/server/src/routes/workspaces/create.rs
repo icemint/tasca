@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use assignment_engine::validation::{RequiredField, ValidationResult, validate_required_fields};
 use axum::{Json, extract::State, response::Json as ResponseJson};
 use db::models::{
+    agent::Agent,
     requests::{
         CreateAndStartWorkspaceRequest, CreateAndStartWorkspaceResponse, CreateWorkspaceApiRequest,
     },
@@ -19,6 +21,43 @@ use crate::{
         ImportedIssueAttachment, import_issue_attachments_from_remote,
     },
 };
+
+/// Whether an `extension_metadata` JSON key holds a non-empty value (M1 #19).
+fn metadata_has(meta: &serde_json::Value, key: &str) -> bool {
+    match meta.get(key) {
+        Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+        Some(serde_json::Value::Array(a)) => !a.is_empty(),
+        Some(serde_json::Value::Object(o)) => !o.is_empty(),
+        Some(serde_json::Value::Null) | None => false,
+        // Numbers / bools are present by virtue of being set.
+        Some(_) => true,
+    }
+}
+
+/// The required fields actually present on an issue (M1 #19): the title from the
+/// issue itself, the rest from its `extension_metadata` (filled by the PM-assistant
+/// in a later phase). Keys match [`RequiredField::key`].
+fn present_fields_from_issue(issue: &api_types::Issue) -> HashSet<RequiredField> {
+    let mut present = HashSet::new();
+    if !issue.title.trim().is_empty() {
+        present.insert(RequiredField::Title);
+    }
+    for field in [
+        RequiredField::ExactFiles,
+        RequiredField::IoContract,
+        RequiredField::AcceptanceGate,
+        RequiredField::EdgeCases,
+        RequiredField::AffectedModules,
+        RequiredField::ConstrainedTools,
+        RequiredField::DesignNote,
+        RequiredField::HumanPlan,
+    ] {
+        if metadata_has(&issue.extension_metadata, field.key()) {
+            present.insert(field);
+        }
+    }
+    present
+}
 
 /// Map the remote Issue's complexity tier (api-types) to the local one (db). The
 /// two enums carry identical variants; they differ only by crate (M1 #143).
@@ -247,6 +286,40 @@ pub async fn create_and_start_workspace(
         ));
     }
 
+    // M1 #19: per-tier required-field gate (PRD §6.1). Enforced only when routing is
+    // active (agents configured) — otherwise every linked issue (which defaults to a
+    // tier) would block on unfilled fields. Blocks the start with a missing-field
+    // checklist before any workspace is created.
+    if let Some(linked) = &linked_issue
+        && let Ok(client) = deployment.remote_client()
+        && !Agent::list(&deployment.db().pool).await?.is_empty()
+    {
+        let issue = client
+            .get_issue(linked.issue_id)
+            .await
+            .map_err(ApiError::RemoteClient)?;
+        let tier = issue_tier_to_db(issue.complexity_tier);
+        match validate_required_fields(tier, &present_fields_from_issue(&issue)) {
+            ValidationResult::Ok => {}
+            ValidationResult::RequiresHumanCloud => {
+                return Err(ApiError::BadRequest(
+                    "Ultra-tier tickets are human + cloud only and cannot be auto-started"
+                        .to_string(),
+                ));
+            }
+            ValidationResult::MissingFields(missing) => {
+                let list = missing
+                    .iter()
+                    .map(|f| f.key())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(ApiError::BadRequest(format!(
+                    "Ticket is missing required fields for {tier} tier: {list}"
+                )));
+            }
+        }
+    }
+
     let mut managed_workspace = deployment
         .workspace_manager()
         .load_managed_workspace(create_workspace_record(&deployment, name).await?)
@@ -378,6 +451,32 @@ mod tests {
     use uuid::Uuid;
 
     use super::{ImportedIssueAttachment, rewrite_imported_issue_attachments_markdown};
+
+    /// M1 #19: a metadata field counts as present only with a non-empty value.
+    #[test]
+    fn metadata_has_detects_present_nonempty_values() {
+        let meta = serde_json::json!({
+            "exact_files": ["a.rs"],
+            "io_contract": "stdin -> stdout",
+            "constrained_tools": { "allow": ["read"] },
+            "design_note": "",
+            "edge_cases": [],
+            "acceptance_gate": null,
+        });
+        assert!(super::metadata_has(&meta, "exact_files"), "non-empty array");
+        assert!(
+            super::metadata_has(&meta, "io_contract"),
+            "non-empty string"
+        );
+        assert!(
+            super::metadata_has(&meta, "constrained_tools"),
+            "non-empty object"
+        );
+        assert!(!super::metadata_has(&meta, "design_note"), "empty string");
+        assert!(!super::metadata_has(&meta, "edge_cases"), "empty array");
+        assert!(!super::metadata_has(&meta, "acceptance_gate"), "null");
+        assert!(!super::metadata_has(&meta, "human_plan"), "absent key");
+    }
 
     fn imported_file(
         attachment_id: Uuid,
