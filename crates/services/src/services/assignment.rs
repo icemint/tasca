@@ -25,6 +25,12 @@ pub async fn context_for_workspace(
     let Some(tier) = wac.complexity_tier else {
         return Ok(None);
     };
+    // `remote_project_id` is the REMOTE issue's project id, queried against the
+    // LOCAL `sprints` table. Today that table has no sync/insert path, so this
+    // always returns `None` (⇒ no sprint filter ⇒ every task in scope), which is
+    // correct for now. COHERENCE NOTE for whoever wires sprint sync: populate
+    // local `sprints.project_id` with the REMOTE project id to match this read
+    // site, or active-sprint scoping will silently never match.
     let active_sprint = match wac.remote_project_id {
         Some(project_id) => Sprint::active_for_project(pool, project_id).await?,
         None => None,
