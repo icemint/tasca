@@ -5,6 +5,7 @@ pub mod auth;
 pub mod config;
 pub mod container;
 pub mod diff_stream;
+pub mod escalation;
 pub mod events;
 pub mod execution_process;
 pub mod file;

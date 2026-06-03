@@ -187,6 +187,40 @@ impl Workspace {
         Ok(())
     }
 
+    /// Re-persist the denormalized tier after a human escalation (M1 #17) so the
+    /// next engine pass routes to the higher band. The remote Issue is the
+    /// authoritative tier; this keeps the local mirror in sync.
+    pub async fn set_complexity_tier(
+        pool: &SqlitePool,
+        id: Uuid,
+        complexity_tier: ComplexityTier,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE workspaces
+               SET complexity_tier = $2, updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id,
+            complexity_tier
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Clear the needs-attention flag once the operator has handled it (M1 #17).
+    pub async fn clear_attention(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE workspaces
+               SET needs_attention = 0, attention_reason = NULL, interrupted = 0,
+                   updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Defer a workspace's run because all capable agents were busy (M1 #17):
     /// record `dispatch_state = queued` and capture the coding-agent prompt so the
     /// run can be started later on an agent-release event.
@@ -976,6 +1010,38 @@ mod tests {
         assert!(row.0, "needs_attention set");
         assert_eq!(row.1.as_deref(), Some("executor_error"));
         assert!(row.2, "interrupted (resumable) marker set");
+    }
+
+    /// M1 #17 escalate: set_complexity_tier re-persists the bumped tier and
+    /// clear_attention resets the flag once the operator has handled it.
+    #[sqlx::test]
+    async fn escalation_accessors_set_tier_and_clear_attention(pool: SqlitePool) {
+        let id = insert_ws(&pool).await;
+
+        Workspace::set_complexity_tier(&pool, id, super::ComplexityTier::Hard)
+            .await
+            .unwrap();
+        let wac = Workspace::assignment_context(&pool, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(wac.complexity_tier, Some(super::ComplexityTier::Hard));
+
+        Workspace::record_needs_attention(&pool, id, super::ATTENTION_EXECUTOR_ERROR, true)
+            .await
+            .unwrap();
+        Workspace::clear_attention(&pool, id).await.unwrap();
+        let row: (bool, Option<String>, bool) = sqlx::query_as(
+            "SELECT needs_attention, attention_reason, interrupted FROM workspaces WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !row.0 && row.1.is_none() && !row.2,
+            "needs_attention/reason/interrupted all cleared"
+        );
     }
 
     #[test]
