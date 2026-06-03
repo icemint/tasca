@@ -1,0 +1,15 @@
+[package]
+name = "assignment-engine"
+version = "0.1.44"
+edition = "2024"
+
+# Leaf crate (PRD §5.2): depends only on db + executors, and is consumed by
+# `services` at the start_workspace seam. Keep it a leaf — do NOT add `services`
+# here, or it would form a services → assignment-engine → services cycle.
+[dependencies]
+db = { path = "../db" }
+executors = { path = "../executors" }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+[dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
