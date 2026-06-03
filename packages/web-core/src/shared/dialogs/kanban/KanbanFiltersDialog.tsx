@@ -3,12 +3,18 @@ import { useTranslation } from 'react-i18next';
 import {
   SortAscendingIcon,
   SortDescendingIcon,
+  StackIcon,
   TagIcon,
   UsersIcon,
 } from '@phosphor-icons/react';
-import type { IssuePriority, Tag } from 'shared/remote-types';
+import type {
+  ComplexityTier,
+  IssuePriority,
+  Tag,
+} from 'shared/remote-types';
 import type { OrganizationMemberWithProfile } from 'shared/types';
 import { cn } from '@/shared/lib/utils';
+import { useFlag } from '@/shared/flags';
 import {
   KANBAN_ASSIGNEE_FILTER_VALUES,
   type KanbanFilterState,
@@ -55,6 +61,7 @@ interface KanbanFiltersDialogProps {
   showSubIssues: boolean;
   showWorkspaces: boolean;
   onPrioritiesChange: (priorities: IssuePriority[]) => void;
+  onComplexityTiersChange: (complexityTiers: ComplexityTier[]) => void;
   onAssigneesChange: (assigneeIds: string[]) => void;
   onTagsChange: (tagIds: string[]) => void;
   onSortChange: (
@@ -78,6 +85,7 @@ export function KanbanFiltersDialog({
   showSubIssues,
   showWorkspaces,
   onPrioritiesChange,
+  onComplexityTiersChange,
   onAssigneesChange,
   onTagsChange,
   onSortChange,
@@ -87,6 +95,18 @@ export function KanbanFiltersDialog({
   onHideBlockedChange,
 }: KanbanFiltersDialogProps) {
   const { t } = useTranslation('common');
+  const tiersEnabled = useFlag('tiers');
+
+  const tierOptions: MultiSelectDropdownOption<ComplexityTier>[] = useMemo(
+    () =>
+      (['basic', 'low', 'medium', 'hard', 'ultra'] as ComplexityTier[]).map(
+        (tier) => ({
+          value: tier,
+          label: tier.charAt(0).toUpperCase() + tier.slice(1),
+        })
+      ),
+    []
+  );
 
   const currentUser = useMemo(
     () => users.find((user) => user.user_id === currentUserId) ?? null,
@@ -245,6 +265,17 @@ export function KanbanFiltersDialog({
                 icon={TagIcon}
                 label={t('kanban.tags', 'Tags')}
                 menuLabel={t('kanban.filterByTag', 'Filter by tag')}
+              />
+            )}
+
+            {tiersEnabled && (
+              <MultiSelectDropdown
+                values={filters.complexityTiers}
+                options={tierOptions}
+                onChange={onComplexityTiersChange}
+                icon={StackIcon}
+                label="Tier"
+                menuLabel="Filter by tier"
               />
             )}
 

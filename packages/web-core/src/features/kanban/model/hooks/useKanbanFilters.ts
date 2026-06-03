@@ -105,6 +105,13 @@ export function useKanbanFilters({
       );
     }
 
+    // Complexity tier filter (OR within) — M1 #104
+    if (filters.complexityTiers.length > 0) {
+      result = result.filter((issue) =>
+        filters.complexityTiers.includes(issue.complexity_tier)
+      );
+    }
+
     // Assignee filter (OR within)
     if (filters.assigneeIds.length > 0) {
       const includeUnassigned = filters.assigneeIds.includes(

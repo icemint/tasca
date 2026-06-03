@@ -51,6 +51,7 @@ import {
   type DropResult,
 } from '@vibe/ui/components/KanbanBoard';
 import { KanbanCardContent } from '@vibe/ui/components/KanbanCardContent';
+import { useFlag } from '@/shared/flags';
 import {
   IssueWorkspaceCard,
   type WorkspaceWithStats,
@@ -69,7 +70,7 @@ import {
   DropdownMenuTrigger,
 } from '@vibe/ui/components/Dropdown';
 import { SearchableTagDropdownContainer } from '@/shared/components/SearchableTagDropdownContainer';
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 import { useIssueMultiSelect } from '@/shared/hooks/useIssueMultiSelect';
 import { useIssueSelectionStore } from '@/shared/stores/useIssueSelectionStore';
 import { BulkActionBarContainer } from './BulkActionBarContainer';
@@ -92,6 +93,10 @@ const areKanbanFiltersEqual = (
   }
 
   if (!areStringSetsEqual(left.priorities, right.priorities)) {
+    return false;
+  }
+
+  if (!areStringSetsEqual(left.complexityTiers, right.complexityTiers)) {
     return false;
   }
 
@@ -124,6 +129,7 @@ function LoadingState() {
  */
 export function KanbanContainer() {
   const isMobile = useIsMobile();
+  const tiersEnabled = useFlag('tiers');
   const { t } = useTranslation('common');
   const appNavigation = useAppNavigation();
   const routeState = useCurrentKanbanRouteState();
@@ -313,6 +319,16 @@ export function KanbanContainer() {
       setKanbanProjectViewFilters(projectId, activeViewId, {
         ...kanbanFilters,
         priorities,
+      });
+    },
+    [activeViewId, kanbanFilters, projectId, setKanbanProjectViewFilters]
+  );
+
+  const setKanbanComplexityTiers = useCallback(
+    (complexityTiers: ComplexityTier[]) => {
+      setKanbanProjectViewFilters(projectId, activeViewId, {
+        ...kanbanFilters,
+        complexityTiers,
       });
     },
     [activeViewId, kanbanFilters, projectId, setKanbanProjectViewFilters]
@@ -958,6 +974,7 @@ export function KanbanContainer() {
             hasActiveFilters={hasActiveFilters}
             onSearchQueryChange={setKanbanSearchQuery}
             onPrioritiesChange={setKanbanPriorities}
+            onComplexityTiersChange={setKanbanComplexityTiers}
             onAssigneesChange={setKanbanAssignees}
             onTagsChange={setKanbanTags}
             onSortChange={setKanbanSort}
@@ -1045,6 +1062,9 @@ export function KanbanContainer() {
                               title={issue.title}
                               description={issue.description}
                               priority={issue.priority}
+                              complexityTier={
+                                tiersEnabled ? issue.complexity_tier : null
+                              }
                               tags={getTagObjectsForIssue(issue.id)}
                               assignees={issueAssigneesMap[issue.id] ?? []}
                               pullRequests={issueCardPullRequests}

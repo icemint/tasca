@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { create } from 'zustand';
 import type { RepoAction } from '@vibe/ui/components/RepoCard';
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 
 export const RIGHT_MAIN_PANEL_MODES = {
   CHANGES: 'changes',
@@ -69,6 +69,7 @@ export type KanbanSortField =
 export type KanbanFilterState = {
   searchQuery: string;
   priorities: IssuePriority[];
+  complexityTiers: ComplexityTier[];
   assigneeIds: string[]; // 'unassigned' or '__self__' or user IDs
   tagIds: string[];
   sortField: KanbanSortField;
@@ -78,6 +79,7 @@ export type KanbanFilterState = {
 export const DEFAULT_KANBAN_FILTER_STATE: KanbanFilterState = {
   searchQuery: '',
   priorities: [],
+  complexityTiers: [],
   assigneeIds: [],
   tagIds: [],
   sortField: 'sort_order',
@@ -132,6 +134,7 @@ export type ResolvedKanbanProjectState = {
 const cloneKanbanFilters = (filters: KanbanFilterState): KanbanFilterState => ({
   searchQuery: filters.searchQuery,
   priorities: [...filters.priorities],
+  complexityTiers: [...filters.complexityTiers],
   assigneeIds: [...filters.assigneeIds],
   tagIds: [...filters.tagIds],
   sortField: filters.sortField,

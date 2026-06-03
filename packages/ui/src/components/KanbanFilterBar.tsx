@@ -27,9 +27,19 @@ export interface KanbanFilterUser {
   avatar_url?: string | null;
 }
 
+/** Complexity-tier values (M1 #104). Local to the decoupled ui package; matches
+ * the shared `ComplexityTier` union so callbacks/state stay assignable. */
+export type ComplexityTierLevel =
+  | 'basic'
+  | 'low'
+  | 'medium'
+  | 'hard'
+  | 'ultra';
+
 export interface KanbanFilterState<TSortField extends string = string> {
   searchQuery: string;
   priorities: PriorityLevel[];
+  complexityTiers: ComplexityTierLevel[];
   assigneeIds: string[];
   tagIds: string[];
   sortField: TSortField;
@@ -61,6 +71,7 @@ export interface RenderKanbanFiltersDialogProps<
   showSubIssues: boolean;
   showWorkspaces: boolean;
   onPrioritiesChange: (priorities: PriorityLevel[]) => void;
+  onComplexityTiersChange: (complexityTiers: ComplexityTierLevel[]) => void;
   onAssigneesChange: (assigneeIds: string[]) => void;
   onTagsChange: (tagIds: string[]) => void;
   onSortChange: (sortField: TSortField, sortDirection: 'asc' | 'desc') => void;
@@ -90,6 +101,7 @@ interface KanbanFilterBarProps<
   hasActiveFilters: boolean;
   onSearchQueryChange: (searchQuery: string) => void;
   onPrioritiesChange: (priorities: PriorityLevel[]) => void;
+  onComplexityTiersChange: (complexityTiers: ComplexityTierLevel[]) => void;
   onAssigneesChange: (assigneeIds: string[]) => void;
   onTagsChange: (tagIds: string[]) => void;
   onSortChange: (sortField: TSortField, sortDirection: 'asc' | 'desc') => void;
@@ -126,6 +138,7 @@ export function KanbanFilterBar<
   hasActiveFilters,
   onSearchQueryChange,
   onPrioritiesChange,
+  onComplexityTiersChange,
   onAssigneesChange,
   onTagsChange,
   onSortChange,
@@ -278,6 +291,7 @@ export function KanbanFilterBar<
         showSubIssues,
         showWorkspaces,
         onPrioritiesChange,
+        onComplexityTiersChange,
         onAssigneesChange,
         onTagsChange,
         onSortChange,

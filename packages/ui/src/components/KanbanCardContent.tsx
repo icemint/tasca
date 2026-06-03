@@ -121,11 +121,23 @@ function formatKanbanDescriptionPreview(
     .trim();
 }
 
+/** Tier badge label + HSL color, keyed by the complexity-tier value (M1 #104). */
+const TIER_BADGE: Record<string, { label: string; color: string }> = {
+  basic: { label: 'Basic', color: '210 9% 55%' },
+  low: { label: 'Low', color: '190 55% 45%' },
+  medium: { label: 'Medium', color: '45 90% 48%' },
+  hard: { label: 'Hard', color: '20 85% 52%' },
+  ultra: { label: 'Ultra', color: '0 72% 52%' },
+};
+
 export type KanbanCardContentProps<TTag extends KanbanTag = KanbanTag> = {
   displayId: string;
   title: string;
   description?: string | null;
   priority: PriorityLevel | null;
+  /** Complexity tier (M1 #104). Decoupled from shared types — pass the tier value
+   * string (basic/low/medium/hard/ultra); unknown/empty renders nothing. */
+  complexityTier?: string | null;
   tags: KanbanTag[];
   assignees: KanbanAssigneeUser[];
   pullRequests?: KanbanPullRequest[];
@@ -145,6 +157,7 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
   title,
   description,
   priority,
+  complexityTier,
   tags,
   assignees,
   pullRequests = [],
@@ -290,12 +303,19 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
         )}
       </div>
 
-      {/* Row 5: Tags, PRs, Relationships (own row to prevent overflow) */}
-      {(tags.length > 0 ||
+      {/* Row 5: Tier, Tags, PRs, Relationships (own row to prevent overflow) */}
+      {((complexityTier && TIER_BADGE[complexityTier]) ||
+        tags.length > 0 ||
         tagEditProps ||
         pullRequests.length > 0 ||
         relationships.length > 0) && (
         <div className="flex items-center gap-half flex-wrap min-w-0">
+          {complexityTier && TIER_BADGE[complexityTier] && (
+            <KanbanBadge
+              name={TIER_BADGE[complexityTier].label}
+              color={TIER_BADGE[complexityTier].color}
+            />
+          )}
           {tagEditProps ? (
             (tagEditProps.renderTagEditor?.({
               allTags: tagEditProps.allTags,
