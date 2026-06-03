@@ -103,6 +103,7 @@ export function KanbanIssuePanelContainer({
     projectId,
     issues,
     statuses,
+    sprints,
     tags,
     issueAssignees,
     issueTags,
@@ -185,9 +186,11 @@ export function KanbanIssuePanelContainer({
     openStatusSelection,
     openPrioritySelection,
     openTierSelection,
+    openSprintSelection,
     openAssigneeSelection,
   } = useActions();
   const tiersEnabled = useFlag('tiers');
+  const sprintsEnabled = useFlag('sprints');
 
   // Find selected issue if in edit mode
   const selectedIssue = useMemo(() => {
@@ -271,6 +274,7 @@ export function KanbanIssuePanelContainer({
       statusId: defaultStatusId,
       priority: kanbanCreateDefaultPriority ?? null,
       complexityTier: null,
+      sprintId: null,
       assigneeIds: [...(kanbanCreateDefaultAssigneeIds ?? [])],
       tagIds: [],
       createDraftWorkspace: createDraftWorkspaceByDefault,
@@ -346,6 +350,12 @@ export function KanbanIssuePanelContainer({
     displayData.description ?? null
   );
   latestDescriptionRef.current = displayData.description ?? null;
+
+  // Resolve the selected sprint's name for the picker button (M1 #107).
+  const selectedSprintName = useMemo(
+    () => sprints.find((s) => s.id === displayData.sprintId)?.name ?? null,
+    [sprints, displayData.sprintId]
+  );
 
   const isCreateDraftDirty = useMemo(() => {
     return selectIsCreateDraftDirty({
@@ -602,6 +612,8 @@ export function KanbanIssuePanelContainer({
               : composerDraft.priority,
           // Tier is not persisted in the create draft (#105 is edit-only).
           complexityTier: createModeDefaults.complexityTier,
+          // Sprint is not persisted in the create draft (#107 is edit-only).
+          sprintId: createModeDefaults.sprintId,
           assigneeIds:
             composerDraft.assigneeIds ?? createModeDefaults.assigneeIds,
           tagIds: composerDraft.tagIds ?? createModeDefaults.tagIds,
@@ -775,6 +787,9 @@ export function KanbanIssuePanelContainer({
       } else if (field === 'complexityTier') {
         // Tier changes go through the command bar tier selection (M1 #105)
         openTierSelection(projectId, [selectedKanbanIssueId]);
+      } else if (field === 'sprintId') {
+        // Sprint changes go through the command bar sprint selection (M1 #107)
+        openSprintSelection(projectId, [selectedKanbanIssueId]);
       } else if (field === 'assigneeIds') {
         // Assignee changes go through the assignee selection dialog
         openAssigneeSelection(projectId, [selectedKanbanIssueId], false);
@@ -819,6 +834,7 @@ export function KanbanIssuePanelContainer({
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       updateIssueComposerDraft,
       setCreateDraftWorkspaceByDefault,
@@ -1062,6 +1078,8 @@ export function KanbanIssuePanelContainer({
       statuses={sortedStatuses}
       tags={tags}
       showTierPicker={tiersEnabled}
+      showSprintPicker={sprintsEnabled}
+      sprintName={selectedSprintName}
       issueId={selectedKanbanIssueId}
       creatorUser={issueCreator}
       parentIssue={parentIssue}

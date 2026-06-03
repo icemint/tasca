@@ -100,6 +100,14 @@ interface TierItem {
   };
 }
 
+interface SprintItem {
+  type: 'sprint';
+  sprint: {
+    id: string;
+    name: string;
+  };
+}
+
 interface CreateSubIssueItem {
   type: 'createSubIssue';
 }
@@ -130,6 +138,7 @@ export type CommandBarGroupItem<
   | StatusItem
   | PriorityItem
   | TierItem
+  | SprintItem
   | CreateSubIssueItem
   | IssueItem
   | ActionItem<TAction>;
@@ -366,6 +375,18 @@ export function CommandBar<
                 );
               }
 
+              if (item.type === 'sprint') {
+                return (
+                  <CommandItem
+                    key={item.sprint.id}
+                    value={`${item.sprint.id} ${item.sprint.name}`}
+                    onSelect={() => onSelect(item)}
+                  >
+                    <span>{item.sprint.name}</span>
+                  </CommandItem>
+                );
+              }
+
               if (item.type === 'createSubIssue') {
                 return (
                   <CommandItem
@@ -466,6 +487,9 @@ function getItemSearchLabel<
   }
   if (item.type === 'tier') {
     return `${item.tier.id} ${item.tier.name}`;
+  }
+  if (item.type === 'sprint') {
+    return `${item.sprint.id} ${item.sprint.name}`;
   }
   if (item.type === 'issue') {
     return `${item.issue.id} ${item.issue.simple_id} ${item.issue.title}`;

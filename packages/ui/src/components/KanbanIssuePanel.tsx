@@ -56,6 +56,7 @@ export interface IssueFormData {
   statusId: string;
   priority: IssuePriority | null;
   complexityTier: string | null;
+  sprintId: string | null;
   assigneeIds: string[];
   tagIds: string[];
   createDraftWorkspace: boolean;
@@ -97,6 +98,11 @@ export interface KanbanIssuePanelProps {
 
   // Tier picker (M1 #105) — flag-gated upstream by the container
   showTierPicker?: boolean;
+
+  // Sprint picker (M1 #107) — flag-gated upstream by the container
+  showSprintPicker?: boolean;
+  // Resolved sprint name for the picker button (M1 #107)
+  sprintName?: string | null;
 
   // Resolved assignee profiles for avatar display
   assigneeUsers?: IssueAssignee[];
@@ -168,6 +174,8 @@ export function KanbanIssuePanel({
   statuses,
   tags,
   showTierPicker,
+  showSprintPicker,
+  sprintName,
   assigneeUsers,
   issueId,
   creatorUser,
@@ -308,6 +316,7 @@ export function KanbanIssuePanel({
             statusId={formData.statusId}
             priority={formData.priority}
             complexityTier={formData.complexityTier}
+            sprintName={sprintName}
             assigneeIds={formData.assigneeIds}
             assigneeUsers={assigneeUsers}
             statuses={statuses}
@@ -320,6 +329,11 @@ export function KanbanIssuePanel({
             onTierClick={
               showTierPicker
                 ? () => onFormChange('complexityTier', formData.complexityTier)
+                : undefined
+            }
+            onSprintClick={
+              showSprintPicker
+                ? () => onFormChange('sprintId', formData.sprintId)
                 : undefined
             }
             onAssigneeClick={() =>

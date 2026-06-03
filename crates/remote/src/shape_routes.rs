@@ -4,8 +4,8 @@ use api_types::{
     ListIssueAssigneesResponse, ListIssueCommentReactionsResponse, ListIssueCommentsResponse,
     ListIssueFollowersResponse, ListIssueRelationshipsResponse, ListIssueTagsResponse,
     ListIssuesResponse, ListProjectStatusesResponse, ListProjectsResponse,
-    ListPullRequestIssuesResponse, ListPullRequestsResponse, ListTagsResponse, Notification,
-    OrganizationMember, SearchIssuesRequest, User, Workspace,
+    ListPullRequestIssuesResponse, ListPullRequestsResponse, ListSprintsResponse, ListTagsResponse,
+    Notification, OrganizationMember, SearchIssuesRequest, User, Workspace,
 };
 use axum::{
     Json,
@@ -25,7 +25,7 @@ use crate::{
         issues::IssueRepository, notifications::NotificationRepository, organization_members,
         project_statuses::ProjectStatusRepository, projects::ProjectRepository,
         pull_request_issues::PullRequestIssueRepository, pull_requests::PullRequestRepository,
-        tags::TagRepository, workspaces::WorkspaceRepository,
+        sprints::SprintRepository, tags::TagRepository, workspaces::WorkspaceRepository,
     },
     routes::{
         error::ErrorResponse,
@@ -102,6 +102,12 @@ pub fn all_shape_routes() -> Vec<ShapeRoute> {
             ShapeScope::Project,
             "/fallback/tags",
             fallback_list_tags,
+        ),
+        ShapeRoute::new(
+            &shapes::PROJECT_SPRINTS_SHAPE,
+            ShapeScope::Project,
+            "/fallback/sprints",
+            fallback_list_sprints,
         ),
         ShapeRoute::new(
             &shapes::PROJECT_PROJECT_STATUSES_SHAPE,
@@ -283,6 +289,23 @@ async fn fallback_list_tags(
         })?;
 
     Ok(Json(ListTagsResponse { tags }))
+}
+
+async fn fallback_list_sprints(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
+    Query(query): Query<ProjectFallbackQuery>,
+) -> Result<Json<ListSprintsResponse>, ErrorResponse> {
+    ensure_project_access(state.pool(), ctx.user.id, query.project_id).await?;
+
+    let sprints = SprintRepository::list_by_project(state.pool(), query.project_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, project_id = %query.project_id, "failed to list sprints (fallback)");
+            ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, "failed to list sprints")
+        })?;
+
+    Ok(Json(ListSprintsResponse { sprints }))
 }
 
 async fn fallback_list_project_statuses(

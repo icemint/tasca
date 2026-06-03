@@ -148,6 +148,20 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
     []
   );
 
+  // Open sprint selection dialog (M1 #107; dynamic import to avoid circular deps)
+  const openSprintSelection = useCallback(
+    async (projectId: string, issueIds: string[]) => {
+      const { ProjectSelectionDialog } = await import(
+        '@/shared/dialogs/command-bar/selections/ProjectSelectionDialog'
+      );
+      await ProjectSelectionDialog.show({
+        projectId,
+        selection: { type: 'sprint', issueIds },
+      });
+    },
+    []
+  );
+
   // Open assignee selection dialog (uses dynamic import to avoid circular deps)
   const openAssigneeSelection = useCallback(
     async (projectId: string, issueIds: string[], isCreateMode = false) => {
@@ -231,6 +245,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -265,6 +280,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
     openStatusSelection,
     openPrioritySelection,
     openTierSelection,
+    openSprintSelection,
     openAssigneeSelection,
     openSubIssueSelection,
     openWorkspaceSelection,
@@ -359,6 +375,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -373,6 +390,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,

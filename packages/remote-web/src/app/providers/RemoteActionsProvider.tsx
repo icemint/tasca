@@ -84,6 +84,10 @@ export function RemoteActionsProvider({
     noOpSelection("Tier selection");
   }, []);
 
+  const openSprintSelection = useCallback(async () => {
+    noOpSelection("Sprint selection");
+  }, []);
+
   const openAssigneeSelection = useCallback(async () => {
     noOpSelection("Assignee selection");
   }, []);
@@ -125,6 +129,7 @@ export function RemoteActionsProvider({
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -143,6 +148,7 @@ export function RemoteActionsProvider({
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -204,6 +210,7 @@ export function RemoteActionsProvider({
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -218,6 +225,7 @@ export function RemoteActionsProvider({
       openStatusSelection,
       openPrioritySelection,
       openTierSelection,
+      openSprintSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,

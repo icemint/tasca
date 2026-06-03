@@ -3,7 +3,7 @@
 use api_types::{
     Issue, IssueAssignee, IssueComment, IssueCommentReaction, IssueFollower, IssueRelationship,
     IssueTag, Notification, OrganizationMember, Project, ProjectStatus, PullRequest,
-    PullRequestIssue, Tag, User, Workspace,
+    PullRequestIssue, Sprint, Tag, User, Workspace,
 };
 
 use crate::shape_definition::ShapeDefinition;
@@ -53,6 +53,14 @@ pub const PROJECT_TAGS_SHAPE: ShapeDefinition<Tag> = crate::define_shape!(
     table: "tags",
     where_clause: r#""project_id" = $1"#,
     url: "/shape/project/{project_id}/tags",
+    params: ["project_id"],
+);
+
+pub const PROJECT_SPRINTS_SHAPE: ShapeDefinition<Sprint> = crate::define_shape!(
+    name: "PROJECT_SPRINTS_SHAPE",
+    table: "sprints",
+    where_clause: r#""project_id" = $1"#,
+    url: "/shape/project/{project_id}/sprints",
     params: ["project_id"],
 );
 

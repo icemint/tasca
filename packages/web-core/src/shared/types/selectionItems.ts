@@ -10,6 +10,11 @@ export interface TierItem {
   name: string;
 }
 
+export interface SprintItem {
+  id: string;
+  name: string;
+}
+
 export interface StatusItem {
   id: string;
   name: string;

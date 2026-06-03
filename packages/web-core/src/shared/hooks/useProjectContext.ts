@@ -5,6 +5,7 @@ import type { SyncError } from '@/shared/lib/electric/types';
 import type {
   Issue,
   ProjectStatus,
+  Sprint,
   Tag,
   IssueAssignee,
   IssueFollower,
@@ -33,6 +34,7 @@ import type {
  * - Issues (data + mutations)
  * - ProjectStatuses (data + mutations)
  * - Tags (data + mutations)
+ * - Sprints (data only)
  * - IssueAssignees (data + mutations)
  * - IssueFollowers (data + mutations)
  * - IssueTags (data + mutations)
@@ -47,6 +49,7 @@ export interface ProjectContextValue {
   // Normalized data arrays
   issues: Issue[];
   statuses: ProjectStatus[];
+  sprints: Sprint[];
   tags: Tag[];
   issueAssignees: IssueAssignee[];
   issueFollowers: IssueFollower[];
