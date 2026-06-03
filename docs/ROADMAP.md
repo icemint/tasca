@@ -1,13 +1,13 @@
 # Tasca — Roadmap & Statement of Work
 
-> Derived from [`docs/PRD.md`](PRD.md) by a 3×Architect + 3×SWE + DevOps review of the PRD against the current codebase. **Phase 0 severance + rebrand is ✅ complete** (this is the remaining SoW). Issues are tracked in GitHub milestones M0–M5.
+> Derived from [`docs/PRD.md`](PRD.md) by a 3×Architect + 3×SWE + DevOps review of the PRD against the current codebase. **Phase 0 severance + rebrand is ✅ complete**; **M1 · Routing core backend is ✅ complete and merged** (#8–#20, #143), with the M1 app-UI tail in progress (see M-AppUI). Remaining SoW below covers M2–M5 plus the M1 UI tail. Issues are tracked in GitHub milestones M0–M5 and M-AppUI.
 
 ## Milestones
 
 | Milestone | PRD phase | Issues | Est. |
 |---|---|---|---|
 | **M0 · CI/CD & release foundation** | Phase 0 (CI/CD) | 6 | ~8 pts |
-| **M1 · Routing core** | Phase 1 | 13 | ~31 pts |
+| **M1 · Routing core** ✅ *backend done* | Phase 1 | 14 | ~31 pts |
 | **M2 · Team + multi-user auth** | Phase 2 | 12 | ~22 pts |
 | **M3 · PM-assistant** | Phase 3 | 9 | ~26 pts |
 | **M4 · GitHub PR↔ticket automation** | Phase 4 | 14 | ~30 pts |
@@ -133,7 +133,11 @@ S
 
 ## M1 · Routing core
 
-### `S` · `db` — Add complexity_tier columns to local tasks table (additive migration)
+> **Status: backend ✅ COMPLETE & MERGED (panel-approved).** All backend tickets below (#8–#20) are closed, plus #143 (persist workspace→issue link; resolve tier from the linked Issue at the seam — the change that makes the engine fire). **Implementation note vs. the original spike framing:** tier is resolved from the linked **remote Issue** and denormalized onto the Workspace (`Workspace::assignment_context` / `set_assignment_context`) — the local `tasks` table is legacy/dead (no writes; Electric syncs Issues to the frontend PGlite) and `workspace.task_id` is never populated. The verified seam on `main` is `ContainerService::start_workspace` (`crates/services/src/services/container.rs:1079`) with `Session::create` at `:1156`; the engine call fires before it. `SERVER_ENCRYPTION_KEY` / envelope encryption is **not** built (M3); provider tokens are currently encrypted under the JWT secret.
+>
+> **M1 app-UI tail (milestone `M-AppUI`):** #104 board tier badge + filter ✅ DONE (flag-gated `tiers`); #105 TierPicker / #107 Sprint selector / #117 flag-flip ⏳ PENDING; #106 agent-assignee picker / #109 activity timeline ⏭ DEFERRED to M3 (synthetic agent-as-member is M3, #14/#114).
+
+### `S` · `db` — ✅ #8 — Add complexity_tier columns to local tasks table (additive migration)
 
 ## Context
 `crates/db/src/models/task.rs:23-33` has an 8-field Task with no tiering, and no tier migration exists in `crates/db/migrations/`. Add an additive SQLite migration per PRD 4.1. SQLx auto-discovers migrations; the DEFAULT keeps existing rows valid.
@@ -152,7 +156,7 @@ none
 ## Estimate
 S
 
-### `S` · `backend` — Surface complexity_tier on the local Task model and all query_as! sites
+### `S` · `backend` — ✅ #9 — Surface complexity_tier on the local Task model and all query_as! sites
 
 ## Context
 The Task struct (`task.rs:24-33`) and its `query_as!` statements (`find_all :37-45`, `find_by_id :47-57`) select explicit column lists that won't compile against the new tier columns.
@@ -172,7 +176,7 @@ Add complexity_tier columns to local tasks table (additive migration)
 ## Estimate
 S
 
-### `M` · `db` — Add complexity_tier fields to remote issues table and Issue API type
+### `M` · `db` — ✅ #10 — Add complexity_tier fields to remote issues table and Issue API type
 
 ## Context
 Remote issues live in Postgres. `crates/api-types/src/issue.rs:20-40` (Issue, shared local+remote via ts-rs) has no tier field, and `crates/remote/src/db/issues.rs` uses compile-time `query_as!` with explicit column lists (e.g. INSERT at :349).
@@ -192,7 +196,7 @@ Surface complexity_tier on the local Task model and all query_as! sites
 ## Estimate
 M
 
-### `M` · `db` — Create Agent entity migration and local Agent model (claim/release)
+### `M` · `db` — ✅ #11 — Create Agent entity migration and local Agent model (claim/release)
 
 ## Context
 No agent concept exists in the local DB (`models/mod.rs` lists 16 modules, none for agents). Add a migration per PRD 4.2: `agents(id, org_id NULL, name, executor_profile, base_url NULL, credential_ref NULL, max_complexity_tier, min_complexity_tier DEFAULT 'basic', availability DEFAULT 'free' CHECK in (free,busy,offline,paused), concurrency_limit INT DEFAULT 1, active_sessions INT DEFAULT 0, sandbox_profile NULL, timestamps)`.
@@ -211,7 +215,9 @@ Add complexity_tier columns to local tasks table (additive migration)
 ## Estimate
 M
 
-### `M` · `db` — Add sprints table and sprint_id scoping
+### `M` · `db` — ✅ #12 — Add sprints table and sprint_id scoping
+
+> **Note:** the `sprints` table exists in both DBs (#139), but the sprints Electric SHAPE is **not** published yet — deferred to #107 (Sprint selector).
 
 ## Context
 No sprints exist. PRD 4.3 makes sprints first-class for assignment scoping. Add a `sprints(id, project_id, name, starts_at, ends_at, state)` table and an additive `sprint_id UUID NULL` on tasks (local) and issues (remote), with a Sprint model exposing the active sprint per project. The engine restricts pickup to the active sprint, so this is a hard dependency. Treat `NULL sprint_id` as no-filter for backward compatibility.
@@ -230,7 +236,9 @@ Add complexity_tier columns to local tasks table (additive migration)
 ## Estimate
 M
 
-### `S` · `backend` — Spike: resolve Task/tier linkage at start_workspace (corrected seam)
+### `S` · `backend` — ✅ #13 — Spike: resolve Task/tier linkage at start_workspace (corrected seam)
+
+> **Outcome:** the implemented linkage resolves tier from the **linked remote Issue** denormalized onto the Workspace (`assignment_context`), not via `workspace.task_id` (never populated) — see #143.
 
 ## Context
 PRD 5.2 cites `container.rs:1063`, but the verified seam is `start_workspace(workspace, executor_config, prompt)` at `crates/services/src/services/container.rs:1003`, with `Session::create` at **:1019**. The task FK was removed (20260217120312). Document how the engine resolves a Task and its `complexity_tier` at the seam — via `workspace.task_id` (Option<Uuid>, `workspace.rs:44`), `parent_workspace_id`, or `linked_issue` (`create.rs:253`) — and whether branch-per-attempt changes what "unassigned"/"in-flight" mean. Documentation only; may surface a needed `start_workspace` signature change.
@@ -247,7 +255,9 @@ Surface complexity_tier on the local Task model and all query_as! sites
 ## Estimate
 S
 
-### `M` · `backend` — Model agents as org members of type agent for the assignee picker (local)
+### `M` · `backend` — ⏭ DEFERRED to M3 (#14) — Model agents as org members of type agent for the assignee picker (local)
+
+> **Not part of shipped M1.** This is GitHub issue #14 in milestone **M3 · PM-assistant** (synthetic agent-as-member, with #114). M1 routing fires without it.
 
 ## Context
 PRD 4.2 requires agents to appear in the assignee picker by being modeled as an org member of type `agent`, reusing `issue_assignees`. **Decision (default): synthetic-user representation** — each Agent gets a synthetic users row + member row flagged `agent`/`is_system` so existing `issue_assignees.user_id` / `activity.assignee_user_id` joins work unchanged, with the flag excluding agents from human auth/member-list UIs. This issue feeds the engine's `unassigned` predicate.
@@ -264,7 +274,7 @@ Create Agent entity migration and local Agent model (claim/release)
 ## Estimate
 M
 
-### `L` · `backend` — Scaffold crates/assignment-engine with a pure decide() and eligibility predicate
+### `L` · `backend` — ✅ #15 — Scaffold crates/assignment-engine with a pure decide() and eligibility predicate
 
 ## Context
 No assignment intelligence exists today; executor choice is client-supplied (`executor_config` from the HTTP request, `crates/server/src/routes/workspaces/create.rs:300`). Add `crates/assignment-engine/` (deps: db, executors) exposing a side-effect-free `decide()`: given a Task (tier, sprint, blocked-by, assignee state) and the agent pool, return `AssignmentDecision` — `Assigned{agent, executor_config}`, `Queued{AllBusy}`, `NoCapableAgent`, `Blocked`, or `ManualOverride{executor_config, warn}`.
@@ -284,7 +294,9 @@ Create Agent entity migration and local Agent model (claim/release); Add sprints
 ## Estimate
 L
 
-### `L` · `backend` — Wire the assignment engine into start_workspace before Session::create
+### `L` · `backend` — ✅ #16 — Wire the assignment engine into start_workspace before Session::create
+
+> **As shipped:** wired in `ContainerService::start_workspace` (`crates/services/src/services/container.rs:1079`) before `Session::create` (`:1156`); the impure helper is `services::services::assignment::{context_for_workspace, claim_assignment}` → `ClaimOutcome::{Assigned,Queue,Upstream}`, with atomic `Agent::claim` and exactly-once release via `Session::take_claimed_agent` in `finalize_task`. (Original ':1003/:1019' line numbers were pre-merge estimates.)
 
 ## Context
 The corrected seam: `start_workspace` is at `crates/services/src/services/container.rs:1003`; `Session::create` runs at **:1019** with `executor: Some(executor_config.executor.to_string())`. Just before :1019, resolve `Task::find_by_id`, call `decide()`, and:
@@ -307,7 +319,9 @@ Scaffold crates/assignment-engine with a pure decide() and eligibility predicate
 ## Estimate
 L
 
-### `L` · `backend` — Implement escalation + edge-case state transitions on assignment/attempt failure
+### `L` · `backend` — ✅ #17 — Implement escalation + edge-case state transitions on assignment/attempt failure
+
+> **As shipped:** human-gated, no auto tier-bump; deferred-start + agent-release FIFO re-dispatch. `escalate_workspace_tier` writes the tier to the **remote Issue first** (remote-authoritative), then syncs local + clears attention (idempotent/self-healing on partial failure); remote audit `AuditAction::IssueEscalateTier`. Operational/attention state (`dispatch_state`, `needs_attention`, `attention_reason`, `interrupted`) lives on the **Workspace** (off-struct accessors), not the dead tasks table.
 
 ## Context
 PRD 5.3/5.4 require human-gated escalation (no auto tier-bump in v1) and explicit handling of: no eligible agent (ticket stays todo, flagged `no_capable_agent`, notify leads); all-capable-busy (queue ready, FIFO by priority then sort_order, picked up on agent-release event); agent-offline-mid-run (Session `interrupted`, worktree preserved, ticket `needs_attention`, resumable not silent-retry); tier-downgrade-after-start (in-flight unaffected); manual-override-vs-ceiling (allowed, warns, audit-tagged).
@@ -327,7 +341,7 @@ Wire the assignment engine into start_workspace before Session::create
 ## Estimate
 L
 
-### `M` · `backend` — Inject Ollama/cloud base_url + credential env for ClaudeCode and QwenCode
+### `M` · `backend` — ✅ #18 — Inject Ollama/cloud base_url + credential env for ClaudeCode and QwenCode
 
 ## Context
 `crates/executors/src/executors/claude.rs:640-642` merges `CmdOverrides.env` over the runtime env, and :645-648 removes `ANTHROPIC_API_KEY` only when `disable_api_key=true`. Qwen applies env identically (`qwen.rs:36`, `with_profile` in `env.rs:118`). Note `ExecutorConfig` (`profile.rs:124-144`) has NO env/base_url field — injection is per-CodingAgent `CmdOverrides.env`.
@@ -348,7 +362,9 @@ Create Agent entity migration and local Agent model (claim/release)
 ## Estimate
 M
 
-### `M` · `backend` — Build per-tier required-field validation gate for ticket start
+### `M` · `backend` — ✅ #19 — Build per-tier required-field validation gate for ticket start
+
+> **As shipped:** `assignment_engine::validation`, enforced in `create_and_start_workspace` only when agents are configured.
 
 ## Context
 PRD 6.1 defines escalating required fields per tier (basic: title + exact files + IO contract + acceptance gate + edge cases; low: + affected modules + constrained tools; medium: + design note; hard: + human plan; ultra: human+cloud only). No validation exists. Build `validate_required_fields(tier, fields)` in/beside `crates/assignment-engine` returning the missing-field checklist, and gate the start path so `start_workspace` rejects with a checklist when fields are absent.
@@ -368,7 +384,19 @@ Surface complexity_tier on the local Task model and all query_as! sites
 ## Estimate
 M
 
-### `L` · `backend` — Scaffold versioned per-tier prompt templates injected via the executor prompt
+### `L` · `backend` — ✅ #20 — Scaffold versioned per-tier prompt templates injected via the executor prompt
+
+### M1 app-UI tail (milestone `M-AppUI`)
+
+- ✅ **#104** — Board tier badge + filter (flag-gated `tiers`; live in `packages/web-core/src/features/kanban/ui/KanbanContainer.tsx`).
+- ⏳ **#105** — Issue Drawer TierPicker + RequiredFieldsChecklist (`flag.tiers`) — PENDING.
+- ⏳ **#107** — Issue Drawer Sprint selector (`flag.sprints`) — PENDING (needs the sprints Electric shape, deferred from #12).
+- ⏳ **#117** — Flip M1 app-UI flags when routing-core schema lands — PENDING.
+- ⏭ **#106** — Issue Drawer AssigneePicker (agent vs human) — DEFERRED to M3 (needs synthetic agent-as-member #14).
+- ⏭ **#109** — Activity timeline (agent/assistant actors) — DEFERRED to M3.
+
+
+> **As shipped:** `services::services::prompt_templates`, wrapped at the seam; `--max-turns` applied only for ClaudeCode.
 
 ## Context
 PRD 6.2 requires editable, versioned, per-org per-tier system-prompt wrappers that constrain tool surface, cap `max_turns`, and forbid open-ended planning for low/basic tiers, injected via the executor prompt (assembled before `start_workspace` and passed as a plain String, `container.rs:1007`).
