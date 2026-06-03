@@ -190,6 +190,10 @@ export type Agent = { id: string, org_id: string | null, name: string, executor_
 
 export type Availability = "free" | "busy" | "offline" | "paused";
 
+export type Sprint = { id: string, project_id: string, name: string, starts_at: string | null, ends_at: string | null, state: SprintState, created_at: string, updated_at: string, };
+
+export type SprintState = "planned" | "active" | "closed";
+
 export type ApprovalInfo = { approval_id: string, tool_name: string, execution_process_id: string, is_question: boolean, created_at: string, timeout_at: string, };
 
 export type ApprovalStatus = { "status": "pending" } | { "status": "approved" } | { "status": "denied", reason?: string, } | { "status": "timed_out" };

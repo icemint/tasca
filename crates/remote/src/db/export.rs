@@ -106,6 +106,7 @@ impl ExportRepository {
                 complexity_tier     AS "complexity_tier!: ComplexityTier",
                 tier_source         AS "tier_source!: TierSource",
                 tier_confidence     AS "tier_confidence?",
+                sprint_id           AS "sprint_id?: Uuid",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",

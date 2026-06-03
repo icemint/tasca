@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            UPDATE issues\n            SET\n                status_id = COALESCE($1, status_id),\n                title = COALESCE($2, title),\n                description = CASE WHEN $3 THEN $4 ELSE description END,\n                priority = CASE WHEN $5 THEN $6 ELSE priority END,\n                start_date = CASE WHEN $7 THEN $8 ELSE start_date END,\n                target_date = CASE WHEN $9 THEN $10 ELSE target_date END,\n                completed_at = CASE WHEN $11 THEN $12 ELSE completed_at END,\n                sort_order = COALESCE($13, sort_order),\n                parent_issue_id = CASE WHEN $14 THEN $15 ELSE parent_issue_id END,\n                parent_issue_sort_order = CASE WHEN $16 THEN $17 ELSE parent_issue_sort_order END,\n                extension_metadata = COALESCE($18, extension_metadata),\n                complexity_tier = COALESCE($20, complexity_tier),\n                tier_source = COALESCE($21, tier_source),\n                tier_confidence = CASE WHEN $22 THEN $23 ELSE tier_confidence END,\n                updated_at = NOW()\n            WHERE id = $19\n            RETURNING\n                id                  AS \"id!: Uuid\",\n                project_id          AS \"project_id!: Uuid\",\n                issue_number        AS \"issue_number!\",\n                simple_id           AS \"simple_id!\",\n                status_id           AS \"status_id!: Uuid\",\n                title               AS \"title!\",\n                description         AS \"description?\",\n                priority            AS \"priority: IssuePriority\",\n                complexity_tier     AS \"complexity_tier!: ComplexityTier\",\n                tier_source         AS \"tier_source!: TierSource\",\n                tier_confidence     AS \"tier_confidence?\",\n                start_date          AS \"start_date?: DateTime<Utc>\",\n                target_date         AS \"target_date?: DateTime<Utc>\",\n                completed_at        AS \"completed_at?: DateTime<Utc>\",\n                sort_order          AS \"sort_order!\",\n                parent_issue_id     AS \"parent_issue_id?: Uuid\",\n                parent_issue_sort_order AS \"parent_issue_sort_order?\",\n                extension_metadata  AS \"extension_metadata!: Value\",\n                creator_user_id     AS \"creator_user_id?: Uuid\",\n                created_at          AS \"created_at!: DateTime<Utc>\",\n                updated_at          AS \"updated_at!: DateTime<Utc>\"\n            ",
+  "query": "\n            UPDATE issues\n            SET\n                status_id = COALESCE($1, status_id),\n                title = COALESCE($2, title),\n                description = CASE WHEN $3 THEN $4 ELSE description END,\n                priority = CASE WHEN $5 THEN $6 ELSE priority END,\n                start_date = CASE WHEN $7 THEN $8 ELSE start_date END,\n                target_date = CASE WHEN $9 THEN $10 ELSE target_date END,\n                completed_at = CASE WHEN $11 THEN $12 ELSE completed_at END,\n                sort_order = COALESCE($13, sort_order),\n                parent_issue_id = CASE WHEN $14 THEN $15 ELSE parent_issue_id END,\n                parent_issue_sort_order = CASE WHEN $16 THEN $17 ELSE parent_issue_sort_order END,\n                extension_metadata = COALESCE($18, extension_metadata),\n                complexity_tier = COALESCE($20, complexity_tier),\n                tier_source = COALESCE($21, tier_source),\n                tier_confidence = CASE WHEN $22 THEN $23 ELSE tier_confidence END,\n                sprint_id = CASE WHEN $24 THEN $25 ELSE sprint_id END,\n                updated_at = NOW()\n            WHERE id = $19\n            RETURNING\n                id                  AS \"id!: Uuid\",\n                project_id          AS \"project_id!: Uuid\",\n                issue_number        AS \"issue_number!\",\n                simple_id           AS \"simple_id!\",\n                status_id           AS \"status_id!: Uuid\",\n                title               AS \"title!\",\n                description         AS \"description?\",\n                priority            AS \"priority: IssuePriority\",\n                complexity_tier     AS \"complexity_tier!: ComplexityTier\",\n                tier_source         AS \"tier_source!: TierSource\",\n                tier_confidence     AS \"tier_confidence?\",\n                sprint_id           AS \"sprint_id?: Uuid\",\n                start_date          AS \"start_date?: DateTime<Utc>\",\n                target_date         AS \"target_date?: DateTime<Utc>\",\n                completed_at        AS \"completed_at?: DateTime<Utc>\",\n                sort_order          AS \"sort_order!\",\n                parent_issue_id     AS \"parent_issue_id?: Uuid\",\n                parent_issue_sort_order AS \"parent_issue_sort_order?\",\n                extension_metadata  AS \"extension_metadata!: Value\",\n                creator_user_id     AS \"creator_user_id?: Uuid\",\n                created_at          AS \"created_at!: DateTime<Utc>\",\n                updated_at          AS \"updated_at!: DateTime<Utc>\"\n            ",
   "describe": {
     "columns": [
       {
@@ -96,51 +96,56 @@
       },
       {
         "ordinal": 11,
+        "name": "sprint_id?: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
         "name": "start_date?: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "target_date?: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "completed_at?: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "sort_order!",
         "type_info": "Float8"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "parent_issue_id?: Uuid",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "parent_issue_sort_order?",
         "type_info": "Float8"
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "extension_metadata!: Value",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "creator_user_id?: Uuid",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "created_at!: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "updated_at!: DateTime<Utc>",
         "type_info": "Timestamptz"
       }
@@ -205,7 +210,9 @@
           }
         },
         "Bool",
-        "Float8"
+        "Float8",
+        "Bool",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -223,6 +230,7 @@
       true,
       true,
       true,
+      true,
       false,
       true,
       true,
@@ -232,5 +240,5 @@
       false
     ]
   },
-  "hash": "3f1e14cae0a9834f3ca55dfeb3139b8b5ed705d979d31ceb5eb52c6b5645a805"
+  "hash": "b2d48d88e497a17e266c9570dfdced3ced6b2dd75e1e19e102aa3c6029e0ffc4"
 }

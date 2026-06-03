@@ -152,6 +152,7 @@ impl IssueRepository {
                 i.complexity_tier     AS "complexity_tier!: ComplexityTier",
                 i.tier_source         AS "tier_source!: TierSource",
                 i.tier_confidence     AS "tier_confidence?",
+                i.sprint_id           AS "sprint_id?: Uuid",
                 i.start_date          AS "start_date?: DateTime<Utc>",
                 i.target_date         AS "target_date?: DateTime<Utc>",
                 i.completed_at        AS "completed_at?: DateTime<Utc>",
@@ -287,6 +288,7 @@ impl IssueRepository {
                 complexity_tier     AS "complexity_tier!: ComplexityTier",
                 tier_source         AS "tier_source!: TierSource",
                 tier_confidence     AS "tier_confidence?",
+                sprint_id           AS "sprint_id?: Uuid",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
@@ -338,6 +340,7 @@ impl IssueRepository {
         priority: Option<IssuePriority>,
         complexity_tier: Option<ComplexityTier>,
         tier_source: Option<TierSource>,
+        sprint_id: Option<Uuid>,
         start_date: Option<DateTime<Utc>>,
         target_date: Option<DateTime<Utc>>,
         completed_at: Option<DateTime<Utc>>,
@@ -358,9 +361,9 @@ impl IssueRepository {
                 id, project_id, status_id, title, description, priority,
                 start_date, target_date, completed_at, sort_order,
                 parent_issue_id, parent_issue_sort_order, extension_metadata,
-                creator_user_id, complexity_tier, tier_source
+                creator_user_id, complexity_tier, tier_source, sprint_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING
                 id                  AS "id!: Uuid",
                 project_id          AS "project_id!: Uuid",
@@ -373,6 +376,7 @@ impl IssueRepository {
                 complexity_tier     AS "complexity_tier!: ComplexityTier",
                 tier_source         AS "tier_source!: TierSource",
                 tier_confidence     AS "tier_confidence?",
+                sprint_id           AS "sprint_id?: Uuid",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
@@ -399,7 +403,8 @@ impl IssueRepository {
             extension_metadata,
             creator_user_id,
             complexity_tier.unwrap_or_default() as ComplexityTier,
-            tier_source.unwrap_or_default() as TierSource
+            tier_source.unwrap_or_default() as TierSource,
+            sprint_id
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -428,6 +433,7 @@ impl IssueRepository {
         complexity_tier: Option<ComplexityTier>,
         tier_source: Option<TierSource>,
         tier_confidence: Option<Option<f64>>,
+        sprint_id: Option<Option<Uuid>>,
         start_date: Option<Option<DateTime<Utc>>>,
         target_date: Option<Option<DateTime<Utc>>>,
         completed_at: Option<Option<DateTime<Utc>>>,
@@ -447,6 +453,8 @@ impl IssueRepository {
         let priority_value = priority.flatten();
         let update_tier_confidence = tier_confidence.is_some();
         let tier_confidence_value = tier_confidence.flatten();
+        let update_sprint_id = sprint_id.is_some();
+        let sprint_id_value = sprint_id.flatten();
         let update_start_date = start_date.is_some();
         let start_date_value = start_date.flatten();
         let update_target_date = target_date.is_some();
@@ -477,6 +485,7 @@ impl IssueRepository {
                 complexity_tier = COALESCE($20, complexity_tier),
                 tier_source = COALESCE($21, tier_source),
                 tier_confidence = CASE WHEN $22 THEN $23 ELSE tier_confidence END,
+                sprint_id = CASE WHEN $24 THEN $25 ELSE sprint_id END,
                 updated_at = NOW()
             WHERE id = $19
             RETURNING
@@ -491,6 +500,7 @@ impl IssueRepository {
                 complexity_tier     AS "complexity_tier!: ComplexityTier",
                 tier_source         AS "tier_source!: TierSource",
                 tier_confidence     AS "tier_confidence?",
+                sprint_id           AS "sprint_id?: Uuid",
                 start_date          AS "start_date?: DateTime<Utc>",
                 target_date         AS "target_date?: DateTime<Utc>",
                 completed_at        AS "completed_at?: DateTime<Utc>",
@@ -524,7 +534,9 @@ impl IssueRepository {
             complexity_tier as Option<ComplexityTier>,
             tier_source as Option<TierSource>,
             update_tier_confidence,
-            tier_confidence_value
+            tier_confidence_value,
+            update_sprint_id,
+            sprint_id_value
         )
         .fetch_one(executor)
         .await?;
@@ -598,6 +610,7 @@ impl IssueRepository {
             None,
             None,
             None,
+            None,
         )
         .await?;
 
@@ -648,6 +661,7 @@ impl IssueRepository {
                 &mut *conn,
                 issue_id,
                 Some(target_status_id),
+                None,
                 None,
                 None,
                 None,

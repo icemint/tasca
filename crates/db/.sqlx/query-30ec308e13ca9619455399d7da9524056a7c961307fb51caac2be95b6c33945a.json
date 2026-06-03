@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: Uuid\", project_id as \"project_id!: Uuid\", title, description, status as \"status!: TaskStatus\", complexity_tier as \"complexity_tier!: ComplexityTier\", tier_source as \"tier_source!: TierSource\", tier_confidence, parent_workspace_id as \"parent_workspace_id: Uuid\", created_at as \"created_at!: DateTime<Utc>\", updated_at as \"updated_at!: DateTime<Utc>\"\n               FROM tasks\n               ORDER BY created_at ASC",
+  "query": "SELECT id as \"id!: Uuid\", project_id as \"project_id!: Uuid\", title, description, status as \"status!: TaskStatus\", complexity_tier as \"complexity_tier!: ComplexityTier\", tier_source as \"tier_source!: TierSource\", tier_confidence, sprint_id as \"sprint_id: Uuid\", parent_workspace_id as \"parent_workspace_id: Uuid\", created_at as \"created_at!: DateTime<Utc>\", updated_at as \"updated_at!: DateTime<Utc>\"\n               FROM tasks\n               ORDER BY created_at ASC",
   "describe": {
     "columns": [
       {
@@ -44,18 +44,23 @@
         "type_info": "Float"
       },
       {
-        "name": "parent_workspace_id: Uuid",
+        "name": "sprint_id: Uuid",
         "ordinal": 8,
         "type_info": "Blob"
       },
       {
-        "name": "created_at!: DateTime<Utc>",
+        "name": "parent_workspace_id: Uuid",
         "ordinal": 9,
+        "type_info": "Blob"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 10,
         "type_info": "Text"
       },
       {
         "name": "updated_at!: DateTime<Utc>",
-        "ordinal": 10,
+        "ordinal": 11,
         "type_info": "Text"
       }
     ],
@@ -72,9 +77,10 @@
       false,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "c8aa369c95f57ac97e0529bcb3a6ee57bfbb09c928a19e40e811f64f5d6c56ae"
+  "hash": "30ec308e13ca9619455399d7da9524056a7c961307fb51caac2be95b6c33945a"
 }

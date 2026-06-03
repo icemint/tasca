@@ -11,6 +11,7 @@ pub mod repo;
 pub mod requests;
 pub mod scratch;
 pub mod session;
+pub mod sprint;
 pub mod tag;
 pub mod task;
 pub mod workspace;

@@ -59,6 +59,8 @@ fn generate_types_content() -> String {
         db::models::task::TierSource::decl(),
         db::models::agent::Agent::decl(),
         db::models::agent::Availability::decl(),
+        db::models::sprint::Sprint::decl(),
+        db::models::sprint::SprintState::decl(),
         services::services::approvals::ApprovalInfo::decl(),
         utils::approvals::ApprovalStatus::decl(),
         utils::approvals::QuestionAnswer::decl(),
