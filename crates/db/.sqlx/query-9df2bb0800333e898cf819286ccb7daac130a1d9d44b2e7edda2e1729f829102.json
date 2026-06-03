@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks\n               SET complexity_tier = $1, tier_source = $2, tier_confidence = $3,\n                   updated_at = datetime('now', 'subsec')\n               WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "9df2bb0800333e898cf819286ccb7daac130a1d9d44b2e7edda2e1729f829102"
+}
