@@ -28,6 +28,11 @@ pub struct CodingAgentInitialRequest {
     /// behavior. Merged into the resolved executor's command env at spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_overrides: Option<HashMap<String, String>>,
+    /// Per-run extra CLI params from the tier prompt template (M1 #20): e.g.
+    /// `["--max-turns", "15"]` to cap a basic/low run. `None` ⇒ no cap. Merged into
+    /// the resolved executor's command (appended to `additional_params`) at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_params: Option<Vec<String>>,
 }
 
 impl CodingAgentInitialRequest {
@@ -66,6 +71,11 @@ impl Executable for CodingAgentInitialRequest {
         // carry a command env (only ClaudeCode/QwenCode are engine-routable).
         if let Some(env_overrides) = &self.env_overrides {
             agent.merge_env(env_overrides);
+        }
+        // M1 #20: append the tier template's extra CLI params (e.g. --max-turns) to
+        // the resolved executor's command. No-op for executors without a command.
+        if let Some(extra_params) = &self.extra_params {
+            agent.merge_params(extra_params);
         }
         agent.use_approvals(approvals.clone());
 

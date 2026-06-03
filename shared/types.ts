@@ -704,7 +704,13 @@ working_dir: string | null,
  * agent at its assigned endpoint. `None` ⇒ no engine routing, i.e. upstream
  * behavior. Merged into the resolved executor's command env at spawn.
  */
-env_overrides?: { [key in string]?: string } | null, };
+env_overrides?: { [key in string]?: string } | null, 
+/**
+ * Per-run extra CLI params from the tier prompt template (M1 #20): e.g.
+ * `["--max-turns", "15"]` to cap a basic/low run. `None` ⇒ no cap. Merged into
+ * the resolved executor's command (appended to `additional_params`) at spawn.
+ */
+extra_params?: Array<string> | null, };
 
 export type CodingAgentFollowUpRequest = { prompt: string, session_id: string, reset_to_message_id: string | null, 
 /**

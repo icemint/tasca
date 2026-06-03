@@ -351,6 +351,16 @@ impl StandardCodingAgentExecutor for ClaudeCode {
             .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
 
+    fn merge_params(&mut self, params: &[String]) {
+        if params.is_empty() {
+            return;
+        }
+        self.cmd
+            .additional_params
+            .get_or_insert_with(Vec::new)
+            .extend(params.iter().cloned());
+    }
+
     fn use_approvals(&mut self, approvals: Arc<dyn ExecutorApprovalService>) {
         self.approvals_service = Some(approvals);
     }
@@ -2834,6 +2844,21 @@ mod tests {
             Some("v"),
             "unrelated configured vars are retained"
         );
+    }
+
+    /// M1 #20: the tier template's `--max-turns` params append to the command.
+    #[test]
+    fn merge_params_appends_cli_params() {
+        let mut agent = claude_with_env(None);
+        agent.merge_params(&["--max-turns".to_string(), "15".to_string()]);
+        assert_eq!(
+            agent.cmd.additional_params,
+            Some(vec!["--max-turns".to_string(), "15".to_string()])
+        );
+        // Empty params are a no-op.
+        let mut agent2 = claude_with_env(None);
+        agent2.merge_params(&[]);
+        assert_eq!(agent2.cmd.additional_params, None);
     }
 
     /// M1 #16: merge into an executor with no configured env starts a fresh map.

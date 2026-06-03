@@ -16,6 +16,7 @@ pub mod filesystem_watcher;
 pub mod notification;
 pub mod oauth_credentials;
 pub mod pr_monitor;
+pub mod prompt_templates;
 
 pub mod queued_message;
 pub mod remote_client;

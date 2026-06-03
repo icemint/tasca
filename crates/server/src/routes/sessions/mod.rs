@@ -204,6 +204,7 @@ pub async fn follow_up(
                 executor_config: payload.executor_config.clone(),
                 working_dir,
                 env_overrides: None,
+                extra_params: None,
             },
         )
     };
