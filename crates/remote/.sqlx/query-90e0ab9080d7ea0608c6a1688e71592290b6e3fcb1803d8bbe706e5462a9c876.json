@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO issues (\n                id, project_id, status_id, title, description, priority,\n                start_date, target_date, completed_at, sort_order,\n                parent_issue_id, parent_issue_sort_order, extension_metadata,\n                creator_user_id, complexity_tier, tier_source\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)\n            RETURNING\n                id                  AS \"id!: Uuid\",\n                project_id          AS \"project_id!: Uuid\",\n                issue_number        AS \"issue_number!\",\n                simple_id           AS \"simple_id!\",\n                status_id           AS \"status_id!: Uuid\",\n                title               AS \"title!\",\n                description         AS \"description?\",\n                priority            AS \"priority: IssuePriority\",\n                complexity_tier     AS \"complexity_tier!: ComplexityTier\",\n                tier_source         AS \"tier_source!: TierSource\",\n                tier_confidence     AS \"tier_confidence?\",\n                start_date          AS \"start_date?: DateTime<Utc>\",\n                target_date         AS \"target_date?: DateTime<Utc>\",\n                completed_at        AS \"completed_at?: DateTime<Utc>\",\n                sort_order          AS \"sort_order!\",\n                parent_issue_id     AS \"parent_issue_id?: Uuid\",\n                parent_issue_sort_order AS \"parent_issue_sort_order?\",\n                extension_metadata  AS \"extension_metadata!: Value\",\n                creator_user_id     AS \"creator_user_id?: Uuid\",\n                created_at          AS \"created_at!: DateTime<Utc>\",\n                updated_at          AS \"updated_at!: DateTime<Utc>\"\n            ",
+  "query": "\n            INSERT INTO issues (\n                id, project_id, status_id, title, description, priority,\n                start_date, target_date, completed_at, sort_order,\n                parent_issue_id, parent_issue_sort_order, extension_metadata,\n                creator_user_id, complexity_tier, tier_source, sprint_id\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)\n            RETURNING\n                id                  AS \"id!: Uuid\",\n                project_id          AS \"project_id!: Uuid\",\n                issue_number        AS \"issue_number!\",\n                simple_id           AS \"simple_id!\",\n                status_id           AS \"status_id!: Uuid\",\n                title               AS \"title!\",\n                description         AS \"description?\",\n                priority            AS \"priority: IssuePriority\",\n                complexity_tier     AS \"complexity_tier!: ComplexityTier\",\n                tier_source         AS \"tier_source!: TierSource\",\n                tier_confidence     AS \"tier_confidence?\",\n                sprint_id           AS \"sprint_id?: Uuid\",\n                start_date          AS \"start_date?: DateTime<Utc>\",\n                target_date         AS \"target_date?: DateTime<Utc>\",\n                completed_at        AS \"completed_at?: DateTime<Utc>\",\n                sort_order          AS \"sort_order!\",\n                parent_issue_id     AS \"parent_issue_id?: Uuid\",\n                parent_issue_sort_order AS \"parent_issue_sort_order?\",\n                extension_metadata  AS \"extension_metadata!: Value\",\n                creator_user_id     AS \"creator_user_id?: Uuid\",\n                created_at          AS \"created_at!: DateTime<Utc>\",\n                updated_at          AS \"updated_at!: DateTime<Utc>\"\n            ",
   "describe": {
     "columns": [
       {
@@ -96,51 +96,56 @@
       },
       {
         "ordinal": 11,
+        "name": "sprint_id?: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
         "name": "start_date?: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "target_date?: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "completed_at?: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "sort_order!",
         "type_info": "Float8"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "parent_issue_id?: Uuid",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "parent_issue_sort_order?",
         "type_info": "Float8"
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "extension_metadata!: Value",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "creator_user_id?: Uuid",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "created_at!: DateTime<Utc>",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "updated_at!: DateTime<Utc>",
         "type_info": "Timestamptz"
       }
@@ -198,7 +203,8 @@
               ]
             }
           }
-        }
+        },
+        "Uuid"
       ]
     },
     "nullable": [
@@ -216,6 +222,7 @@
       true,
       true,
       true,
+      true,
       false,
       true,
       true,
@@ -225,5 +232,5 @@
       false
     ]
   },
-  "hash": "ec027b63b15ba03e0d9050ee3cb5cfc528a77c5c2688885faaee00dba670d4f6"
+  "hash": "90e0ab9080d7ea0608c6a1688e71592290b6e3fcb1803d8bbe706e5462a9c876"
 }

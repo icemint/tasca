@@ -56,6 +56,7 @@ pub struct Issue {
     pub complexity_tier: ComplexityTier,
     pub tier_source: TierSource,
     pub tier_confidence: Option<f64>,
+    pub sprint_id: Option<Uuid>,
     pub start_date: Option<DateTime<Utc>>,
     pub target_date: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -100,6 +101,8 @@ pub struct CreateIssueRequest {
     pub complexity_tier: Option<ComplexityTier>,
     #[ts(optional)]
     pub tier_source: Option<TierSource>,
+    #[ts(optional)]
+    pub sprint_id: Option<Uuid>,
     pub start_date: Option<DateTime<Utc>>,
     pub target_date: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -153,6 +156,12 @@ pub struct UpdateIssueRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub tier_confidence: Option<Option<f64>>,
+    #[serde(
+        default,
+        deserialize_with = "some_if_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sprint_id: Option<Option<Uuid>>,
     #[serde(
         default,
         deserialize_with = "some_if_present",

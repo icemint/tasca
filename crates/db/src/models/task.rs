@@ -88,6 +88,7 @@ pub struct Task {
     pub complexity_tier: ComplexityTier,
     pub tier_source: TierSource,
     pub tier_confidence: Option<f64>,
+    pub sprint_id: Option<Uuid>, // Active-sprint scoping for assignment (PRD §4.3)
     pub parent_workspace_id: Option<Uuid>, // Foreign key to parent Workspace
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -97,7 +98,7 @@ impl Task {
     pub async fn find_all(pool: &SqlitePool) -> Result<Vec<Self>, sqlx::Error> {
         sqlx::query_as!(
             Task,
-            r#"SELECT id as "id!: Uuid", project_id as "project_id!: Uuid", title, description, status as "status!: TaskStatus", complexity_tier as "complexity_tier!: ComplexityTier", tier_source as "tier_source!: TierSource", tier_confidence, parent_workspace_id as "parent_workspace_id: Uuid", created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>"
+            r#"SELECT id as "id!: Uuid", project_id as "project_id!: Uuid", title, description, status as "status!: TaskStatus", complexity_tier as "complexity_tier!: ComplexityTier", tier_source as "tier_source!: TierSource", tier_confidence, sprint_id as "sprint_id: Uuid", parent_workspace_id as "parent_workspace_id: Uuid", created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>"
                FROM tasks
                ORDER BY created_at ASC"#
         )
@@ -108,7 +109,7 @@ impl Task {
     pub async fn find_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<Self>, sqlx::Error> {
         sqlx::query_as!(
             Task,
-            r#"SELECT id as "id!: Uuid", project_id as "project_id!: Uuid", title, description, status as "status!: TaskStatus", complexity_tier as "complexity_tier!: ComplexityTier", tier_source as "tier_source!: TierSource", tier_confidence, parent_workspace_id as "parent_workspace_id: Uuid", created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>"
+            r#"SELECT id as "id!: Uuid", project_id as "project_id!: Uuid", title, description, status as "status!: TaskStatus", complexity_tier as "complexity_tier!: ComplexityTier", tier_source as "tier_source!: TierSource", tier_confidence, sprint_id as "sprint_id: Uuid", parent_workspace_id as "parent_workspace_id: Uuid", created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>"
                FROM tasks
                WHERE id = $1"#,
             id

@@ -10,9 +10,10 @@ use api_types::{
     IssueRelationshipType, IssueSortField, IssueTag, ListIssuesQuery, ListIssuesResponse,
     MemberRole, Notification, NotificationGroupKind, NotificationPayload, NotificationType,
     OrganizationMember, Project, ProjectStatus, PullRequest, PullRequestIssue, PullRequestStatus,
-    SearchIssuesRequest, SortDirection, Tag, TierSource, UpdateIssueCommentReactionRequest,
-    UpdateIssueCommentRequest, UpdateIssueRequest, UpdateNotificationRequest, UpdateProjectRequest,
-    UpdateProjectStatusRequest, UpdateTagRequest, User, UserData, Workspace,
+    SearchIssuesRequest, SortDirection, Sprint, SprintState, Tag, TierSource,
+    UpdateIssueCommentReactionRequest, UpdateIssueCommentRequest, UpdateIssueRequest,
+    UpdateNotificationRequest, UpdateProjectRequest, UpdateProjectStatusRequest, UpdateTagRequest,
+    User, UserData, Workspace,
 };
 use relay_types::{CreateRemoteSessionResponse, ListRelayHostsResponse, RelayHost};
 use remote::{
@@ -84,6 +85,8 @@ fn export_shapes() -> String {
         Issue::decl(),
         ComplexityTier::decl(),
         TierSource::decl(),
+        Sprint::decl(),
+        SprintState::decl(),
         IssueAssignee::decl(),
         Blob::decl(),
         Attachment::decl(),
