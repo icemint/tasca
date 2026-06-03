@@ -214,6 +214,12 @@ impl AvailabilityInfo {
 pub trait StandardCodingAgentExecutor {
     fn apply_overrides(&mut self, _executor_config: &ExecutorConfig) {}
 
+    /// Merge per-run environment overrides into this executor's command env
+    /// (M1 #16). Default no-op: only executors that carry a command env
+    /// (ClaudeCode, QwenCode — the engine-routable ones) override this. Explicit
+    /// per-key entries win over the executor's configured env.
+    fn merge_env(&mut self, _env: &std::collections::HashMap<String, String>) {}
+
     fn use_approvals(&mut self, _approvals: Arc<dyn ExecutorApprovalService>) {}
 
     async fn spawn(

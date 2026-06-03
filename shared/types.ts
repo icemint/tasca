@@ -156,7 +156,13 @@ export type Workspace = { id: string, task_id: string | null, container_ref: str
 
 export type WorkspaceWithStatus = { is_running: boolean, is_errored: boolean, id: string, task_id: string | null, container_ref: string | null, branch: string, setup_completed_at: string | null, created_at: string, updated_at: string, archived: boolean, pinned: boolean, name: string | null, worktree_deleted: boolean, };
 
-export type Session = { id: string, workspace_id: string, name: string | null, executor: string | null, agent_working_dir: string | null, created_at: string, updated_at: string, };
+export type Session = { id: string, workspace_id: string, name: string | null, executor: string | null, agent_working_dir: string | null, 
+/**
+ * The Agent whose concurrency slot this session holds (M1 #16). `Some` only
+ * when the assignment engine routed the workspace; cleared to `None` exactly
+ * once when the run finalizes (see [`Session::take_claimed_agent`]).
+ */
+claimed_agent_id: string | null, created_at: string, updated_at: string, };
 
 export type ExecutionProcess = { id: string, session_id: string, run_reason: ExecutionProcessRunReason, executor_action: ExecutorAction, status: ExecutionProcessStatus, exit_code: bigint | null, 
 /**
@@ -686,7 +692,14 @@ executor_config: ExecutorConfig,
  * Optional relative path to execute the agent in (relative to container_ref).
  * If None, uses the container_ref directory directly.
  */
-working_dir: string | null, };
+working_dir: string | null, 
+/**
+ * Per-run environment overrides injected by the assignment engine (M1 #16):
+ * `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_API_KEY`) pointing the
+ * agent at its assigned endpoint. `None` ⇒ no engine routing, i.e. upstream
+ * behavior. Merged into the resolved executor's command env at spawn.
+ */
+env_overrides?: { [key in string]?: string } | null, };
 
 export type CodingAgentFollowUpRequest = { prompt: string, session_id: string, reset_to_message_id: string | null, 
 /**

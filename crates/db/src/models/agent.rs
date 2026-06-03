@@ -67,6 +67,23 @@ impl Agent {
         .await
     }
 
+    /// The full agent pool. The assignment engine ([`decide`]) needs every agent
+    /// — not a pre-filtered subset — to distinguish "no agents configured" (→
+    /// manual override) from "agents exist but none covers the tier" (→ no capable
+    /// agent). Ordered least-loaded-first so the engine's selection is stable.
+    ///
+    /// [`decide`]: assignment_engine::decide
+    pub async fn list(pool: &SqlitePool) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as!(
+            Agent,
+            r#"SELECT id as "id!: Uuid", org_id as "org_id: Uuid", name, executor_profile, base_url, credential_ref as "credential_ref: Uuid", max_complexity_tier as "max_complexity_tier!: ComplexityTier", min_complexity_tier as "min_complexity_tier!: ComplexityTier", availability as "availability!: Availability", concurrency_limit as "concurrency_limit!: i64", active_sessions as "active_sessions!: i64", sandbox_profile, created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>"
+               FROM agents
+               ORDER BY active_sessions ASC, created_at ASC"#
+        )
+        .fetch_all(pool)
+        .await
+    }
+
     /// Agents that could take a task of `tier`: `free`, with spare capacity, and
     /// whose `[min, max]` band contains `tier`. SQL prefilters availability +
     /// capacity; the ordinal tier band is checked in Rust (TEXT tiers don't sort

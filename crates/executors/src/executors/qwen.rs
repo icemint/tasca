@@ -74,6 +74,16 @@ impl StandardCodingAgentExecutor for QwenCode {
         }
     }
 
+    fn merge_env(&mut self, env: &std::collections::HashMap<String, String>) {
+        if env.is_empty() {
+            return;
+        }
+        self.cmd
+            .env
+            .get_or_insert_with(std::collections::HashMap::new)
+            .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
     fn use_approvals(&mut self, approvals: Arc<dyn ExecutorApprovalService>) {
         self.approvals = Some(approvals);
     }

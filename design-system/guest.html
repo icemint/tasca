@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Guest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="assets/theme.js"></script>
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/mockups.css">
+<link rel="stylesheet" href="assets/app.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/states.css">
+<link rel="stylesheet" href="assets/a11y.css">
+<link rel="stylesheet" href="assets/components.css">
+<style>
+.guest-banner { display: flex; align-items: center; gap: 11px; padding: 11px 18px; border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--signal) 8%, var(--bg-sub)); font-size: 13.5px; color: var(--fg-2); flex: none; }
+.guest-banner svg { width: 17px; height: 17px; color: var(--signal-2); flex: none; }
+.guest-banner b { color: var(--fg); font-weight: 600; }
+.guest-banner .gb-tag { margin-left: auto; }
+/* read-only board cards */
+.kanban.ro .kc { cursor: default; }
+.kanban.ro .kc:hover { transform: none; border-color: var(--line); }
+.col-line.cl-proposed { background: var(--purple); }
+.pending { color: var(--purple); background: color-mix(in srgb, var(--purple) 14%, transparent); }
+
+/* modal */
+.modal-scrim { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); opacity: 0; pointer-events: none; transition: opacity 0.22s var(--ease); z-index: var(--z-scrim); display: grid; place-items: center; padding: 24px; }
+.modal-scrim.open { opacity: 1; pointer-events: auto; }
+.modal { width: 560px; max-width: 100%; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-xl); transform: translateY(12px) scale(0.99); transition: transform 0.22s var(--ease); max-height: 90vh; display: flex; flex-direction: column; }
+.modal-scrim.open .modal { transform: none; }
+.modal-head { padding: 20px 22px 0; }
+.modal-head .mt { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--fg); }
+.modal-head .ms { font-size: 13.5px; color: var(--fg-3); margin-top: 6px; }
+.modal-body { padding: 20px 22px; overflow-y: auto; }
+.modal-foot { padding: 16px 22px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 10px; background: var(--bg-sub); border-radius: 0 0 var(--radius-card) var(--radius-card); }
+.modal textarea.input { resize: vertical; min-height: 96px; font-family: var(--font-body); line-height: 1.6; }
+.char { font-family: var(--font-mono); font-size: 11px; color: var(--fg-faint); text-align: right; margin-top: 6px; }
+
+/* toast */
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  display: flex; align-items: center; gap: 10px; background: var(--surface-2); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent);
+  border-radius: var(--radius-md); padding: 12px 16px; font-size: 14px; color: var(--fg); box-shadow: var(--shadow-lg); z-index: var(--z-toast); transition: opacity 0.25s, transform 0.25s; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast svg { width: 18px; height: 18px; color: var(--green); }
+</style>
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to content</a>
+<div class="shell">
+  <!-- RAIL (guest: limited) -->
+  <nav class="rail">
+    <a class="rail-brand" href="index.html" title="Tasca home">
+      <svg viewBox="0 0 26 26" fill="none" aria-hidden="true"><rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/><rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/><rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/><rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/></svg>
+    </a>
+    <button class="rail-btn active" title="Board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/></svg></button>
+    <button class="rail-btn" title="My proposals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h7"/></svg></button>
+    <div class="rail-sep"></div>
+    <div class="rail-av" style="background:var(--surface-3);color:var(--fg-2)" title="Acme Corp · guest">AC</div>
+  </nav>
+
+  <!-- MAIN -->
+  <div class="main" id="main">
+    <div class="topbar">
+      <div class="tb-crumb"><span class="pj">T</span><span class="nm">tasca</span><span class="sep">/</span><span style="color:var(--fg-3)">Board</span></div>
+      <div class="tb-right">
+        <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input type="text" placeholder="Search issues…"></div>
+        <button class="btn btn-primary btn-sm" id="propose-btn" style="padding:8px 14px">+ Propose issue</button>
+      </div>
+    </div>
+
+    <div class="guest-banner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span>You're viewing as a <b>guest</b>. You can propose issues and comment — an admin promotes proposals onto the board. You can't assign agents or trigger runs.</span>
+      <span class="chip gb-tag" style="font-size:11px">propose-only</span>
+    </div>
+
+    <!-- READ-ONLY BOARD -->
+    <div class="kanban ro" id="kanban">
+      <!-- Proposed -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-proposed" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">Proposed</span><span class="ct" id="proposed-ct">1</span></div>
+        <div class="kcol-body" id="proposed-col">
+          <div class="kc">
+            <div class="kc-top"><span class="kc-id">PROP-07</span><span class="status-badge pending">Pending review</span></div>
+            <div class="kc-title">Export audit log to CSV for compliance</div>
+            <div class="kc-foot"><span class="kc-meta">Acme Corp</span><span class="spacer"></span><span class="kc-meta">2d ago</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- In progress -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-prog" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">In progress</span><span class="ct">2</span></div>
+        <div class="kcol-body">
+          <div class="kc"><div class="kc-top"><span class="kc-id">TAS-1042</span><span class="tdot" style="color:var(--t-medium)"><i style="background:var(--t-medium)"></i>Medium</span></div><div class="kc-title">argon2id hashing module + repo methods</div><div class="kc-foot"><span class="kc-meta">In progress</span></div></div>
+          <div class="kc"><div class="kc-top"><span class="kc-id">TAS-1009</span><span class="tdot" style="color:var(--t-hard)"><i style="background:var(--t-hard)"></i>Hard</span></div><div class="kc-title">Per-tier required-field validation gate</div><div class="kc-foot"><span class="kc-meta">In progress</span></div></div>
+        </div>
+      </div>
+      <!-- In review -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-review" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">In review</span><span class="ct">1</span></div>
+        <div class="kcol-body">
+          <div class="kc"><div class="kc-top"><span class="kc-id">TAS-1055</span><span class="tdot" style="color:var(--t-low)"><i style="background:var(--t-low)"></i>Low</span></div><div class="kc-title">Rate-limit /auth/local/login</div><div class="kc-foot"><span class="status-badge sb-approved">Approved</span></div></div>
+        </div>
+      </div>
+      <!-- Done -->
+      <div class="kcol">
+        <div class="kcol-head"><span class="col-line cl-done" style="width:18px;height:2px;border-radius:2px"></span><span class="nm">Done</span><span class="ct">1</span></div>
+        <div class="kcol-body">
+          <div class="kc"><div class="kc-top"><span class="kc-id">TAS-0980</span><span class="tdot" style="color:var(--t-basic)"><i style="background:var(--t-basic)"></i>Basic</span></div><div class="kc-title">complexity_tier columns migration</div><div class="kc-foot"><span class="status-badge sb-merged">Merged</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PROPOSE MODAL -->
+<div class="modal-scrim" id="modal-scrim">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <div class="mt" id="modal-title">Propose a new issue</div>
+      <div class="ms">Submit a proposal for the team to review. They'll add tier, assignee, and priority when they accept it.</div>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="label" for="p-title">Title <span style="color:var(--red)">*</span></label>
+        <input class="input" id="p-title" type="text" placeholder="What needs to be done?" maxlength="120">
+        <div class="char"><span id="p-count">0</span>/120</div>
+      </div>
+      <div class="field">
+        <label class="label" for="p-desc">Description</label>
+        <textarea class="input" id="p-desc" placeholder="Context, links, acceptance criteria…"></textarea>
+      </div>
+      <div class="field">
+        <label class="label" for="p-cat">Category</label>
+        <div class="c-select" style="width:220px"><select id="p-cat"><option>Feature request</option><option>Bug</option><option>Compliance</option><option>Other</option></select></div>
+      </div>
+      <div class="field-msg hint" style="margin-top:4px">Assignee, status, tier, and priority are set by the team after review.</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost2 btn-sm" id="modal-cancel">Dismiss</button>
+      <button class="btn btn-primary btn-sm" id="modal-submit" disabled>Propose issue</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg><span>Your proposal was submitted. The team will review it.</span></div>
+
+<script>
+(function(){
+  var scrim = document.getElementById('modal-scrim');
+  var titleInput = document.getElementById('p-title');
+  var submit = document.getElementById('modal-submit');
+  var count = document.getElementById('p-count');
+  function open(){ scrim.classList.add('open'); setTimeout(function(){ titleInput.focus(); }, 80); }
+  function close(){ scrim.classList.remove('open'); }
+  document.getElementById('propose-btn').addEventListener('click', open);
+  document.getElementById('modal-cancel').addEventListener('click', close);
+  scrim.addEventListener('click', function(e){ if(e.target === scrim) close(); });
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') close(); });
+  titleInput.addEventListener('input', function(){
+    count.textContent = titleInput.value.length;
+    submit.disabled = titleInput.value.trim().length === 0;
+  });
+  var n = 8;
+  submit.addEventListener('click', function(){
+    if (titleInput.value.trim().length === 0) return;
+    submit.classList.add('is-loading');
+    setTimeout(function(){
+      submit.classList.remove('is-loading');
+      // add card to Proposed column
+      var col = document.getElementById('proposed-col');
+      var card = document.createElement('div');
+      card.className = 'kc';
+      card.innerHTML = '<div class="kc-top"><span class="kc-id">PROP-0'+n+'</span><span class="status-badge pending">Pending review</span></div><div class="kc-title"></div><div class="kc-foot"><span class="kc-meta">Acme Corp</span><span class="spacer"></span><span class="kc-meta">just now</span></div>';
+      card.querySelector('.kc-title').textContent = titleInput.value.trim();
+      col.insertBefore(card, col.firstChild);
+      document.getElementById('proposed-ct').textContent = String(col.querySelectorAll('.kc').length);
+      n++;
+      // reset + close + toast
+      titleInput.value = ''; document.getElementById('p-desc').value = ''; count.textContent = '0'; submit.disabled = true;
+      close();
+      var t = document.getElementById('toast'); t.classList.add('show');
+      setTimeout(function(){ t.classList.remove('show'); }, 3200);
+    }, 700);
+  });
+})();
+</script>
+<script src="assets/a11y.js" defer></script>
+</body>
+</html>

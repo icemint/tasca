@@ -26,6 +26,10 @@ pub struct Session {
     pub name: Option<String>,
     pub executor: Option<String>,
     pub agent_working_dir: Option<String>,
+    /// The Agent whose concurrency slot this session holds (M1 #16). `Some` only
+    /// when the assignment engine routed the workspace; cleared to `None` exactly
+    /// once when the run finalizes (see [`Session::take_claimed_agent`]).
+    pub claimed_agent_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -45,6 +49,7 @@ impl Session {
                       name,
                       executor,
                       agent_working_dir,
+                      claimed_agent_id AS "claimed_agent_id: Uuid",
                       created_at AS "created_at!: DateTime<Utc>",
                       updated_at AS "updated_at!: DateTime<Utc>"
                FROM sessions
@@ -69,6 +74,7 @@ impl Session {
                       s.name,
                       s.executor,
                       s.agent_working_dir,
+                      s.claimed_agent_id AS "claimed_agent_id: Uuid",
                       s.created_at AS "created_at!: DateTime<Utc>",
                       s.updated_at AS "updated_at!: DateTime<Utc>"
                FROM sessions s
@@ -100,6 +106,7 @@ impl Session {
                       s.name,
                       s.executor,
                       s.agent_working_dir,
+                      s.claimed_agent_id AS "claimed_agent_id: Uuid",
                       s.created_at AS "created_at!: DateTime<Utc>",
                       s.updated_at AS "updated_at!: DateTime<Utc>"
                FROM sessions s
@@ -130,6 +137,7 @@ impl Session {
                       name,
                       executor,
                       agent_working_dir,
+                      claimed_agent_id,
                       created_at,
                       updated_at
                FROM sessions
@@ -160,6 +168,7 @@ impl Session {
                          name,
                          executor,
                          agent_working_dir,
+                         claimed_agent_id AS "claimed_agent_id: Uuid",
                          created_at AS "created_at!: DateTime<Utc>",
                          updated_at AS "updated_at!: DateTime<Utc>""#,
             id,
@@ -170,6 +179,46 @@ impl Session {
         )
         .fetch_one(pool)
         .await?)
+    }
+
+    /// Record the Agent whose concurrency slot this session holds (M1 #16).
+    /// Called once, right after [`Session::create`], when the assignment engine
+    /// routed the workspace to an agent.
+    pub async fn set_claimed_agent(
+        pool: &SqlitePool,
+        id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE sessions
+               SET claimed_agent_id = $2, updated_at = datetime('now', 'subsec')
+               WHERE id = $1"#,
+            id,
+            agent_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Atomically take (read-and-clear) the claimed agent id, if any (M1 #16).
+    /// The `WHERE claimed_agent_id IS NOT NULL` guard makes this exactly-once:
+    /// only the first caller to finalize this session gets `Some(agent_id)` and
+    /// must release the slot; concurrent/later finalizes (e.g. follow-up runs on
+    /// the same session) get `None` and must not double-release.
+    pub async fn take_claimed_agent(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<Uuid>, sqlx::Error> {
+        sqlx::query_scalar!(
+            r#"UPDATE sessions
+               SET claimed_agent_id = NULL, updated_at = datetime('now', 'subsec')
+               WHERE id = $1 AND claimed_agent_id IS NOT NULL
+               RETURNING claimed_agent_id AS "claimed_agent_id!: Uuid""#,
+            id
+        )
+        .fetch_optional(pool)
+        .await
     }
 
     async fn resolve_agent_working_dir(
