@@ -17,6 +17,32 @@ pub enum IssuePriority {
     Low,
 }
 
+/// Capability tier of an issue (PRD §4.1) — the remote mirror of the local
+/// `Task` tier. Drives the board tier badge/filter and the assignment hand-off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, TS, Default)]
+#[sqlx(type_name = "complexity_tier", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ComplexityTier {
+    Basic,
+    Low,
+    #[default]
+    Medium,
+    Hard,
+    Ultra,
+}
+
+/// How an issue's tier was set (PRD §4.1 / §13.4): manual, PM-assistant, or
+/// (v2) auto-classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, TS, Default)]
+#[sqlx(type_name = "tier_source", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum TierSource {
+    #[default]
+    Manual,
+    Assistant,
+    Classifier,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS, sqlx::FromRow)]
 pub struct Issue {
     pub id: Uuid,
@@ -27,6 +53,9 @@ pub struct Issue {
     pub title: String,
     pub description: Option<String>,
     pub priority: Option<IssuePriority>,
+    pub complexity_tier: ComplexityTier,
+    pub tier_source: TierSource,
+    pub tier_confidence: Option<f64>,
     pub start_date: Option<DateTime<Utc>>,
     pub target_date: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -67,6 +96,10 @@ pub struct CreateIssueRequest {
     pub title: String,
     pub description: Option<String>,
     pub priority: Option<IssuePriority>,
+    #[ts(optional)]
+    pub complexity_tier: Option<ComplexityTier>,
+    #[ts(optional)]
+    pub tier_source: Option<TierSource>,
     pub start_date: Option<DateTime<Utc>>,
     pub target_date: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -102,6 +135,24 @@ pub struct UpdateIssueRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub priority: Option<Option<IssuePriority>>,
+    #[serde(
+        default,
+        deserialize_with = "some_if_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub complexity_tier: Option<ComplexityTier>,
+    #[serde(
+        default,
+        deserialize_with = "some_if_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tier_source: Option<TierSource>,
+    #[serde(
+        default,
+        deserialize_with = "some_if_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tier_confidence: Option<Option<f64>>,
     #[serde(
         default,
         deserialize_with = "some_if_present",
