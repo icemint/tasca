@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { OrganizationMemberWithProfile } from 'shared/types';
 import type { IssuePriority } from 'shared/remote-types';
 import { useDebouncedCallback } from '@/shared/hooks/useDebouncedCallback';
+import { useFlag } from '@/shared/flags';
 import { useProjectContext } from '@/shared/hooks/useProjectContext';
 import { useOrgContext } from '@/shared/hooks/useOrgContext';
 import { useProjectWorkspaceCreateDraft } from '@/shared/hooks/useProjectWorkspaceCreateDraft';
@@ -180,8 +181,13 @@ export function KanbanIssuePanelContainer({
   const { isLoading: orgLoading, membersWithProfilesById } = useOrgContext();
 
   // Get action methods from actions context
-  const { openStatusSelection, openPrioritySelection, openAssigneeSelection } =
-    useActions();
+  const {
+    openStatusSelection,
+    openPrioritySelection,
+    openTierSelection,
+    openAssigneeSelection,
+  } = useActions();
+  const tiersEnabled = useFlag('tiers');
 
   // Find selected issue if in edit mode
   const selectedIssue = useMemo(() => {
@@ -264,6 +270,7 @@ export function KanbanIssuePanelContainer({
       description: null,
       statusId: defaultStatusId,
       priority: kanbanCreateDefaultPriority ?? null,
+      complexityTier: null,
       assigneeIds: [...(kanbanCreateDefaultAssigneeIds ?? [])],
       tagIds: [],
       createDraftWorkspace: createDraftWorkspaceByDefault,
@@ -593,6 +600,8 @@ export function KanbanIssuePanelContainer({
             composerDraft.priority === undefined
               ? createModeDefaults.priority
               : composerDraft.priority,
+          // Tier is not persisted in the create draft (#105 is edit-only).
+          complexityTier: createModeDefaults.complexityTier,
           assigneeIds:
             composerDraft.assigneeIds ?? createModeDefaults.assigneeIds,
           tagIds: composerDraft.tagIds ?? createModeDefaults.tagIds,
@@ -763,6 +772,9 @@ export function KanbanIssuePanelContainer({
       } else if (field === 'priority') {
         // Priority changes go through the command bar priority selection
         openPrioritySelection(projectId, [selectedKanbanIssueId]);
+      } else if (field === 'complexityTier') {
+        // Tier changes go through the command bar tier selection (M1 #105)
+        openTierSelection(projectId, [selectedKanbanIssueId]);
       } else if (field === 'assigneeIds') {
         // Assignee changes go through the assignee selection dialog
         openAssigneeSelection(projectId, [selectedKanbanIssueId], false);
@@ -806,6 +818,7 @@ export function KanbanIssuePanelContainer({
       debouncedSaveDescription,
       openStatusSelection,
       openPrioritySelection,
+      openTierSelection,
       openAssigneeSelection,
       updateIssueComposerDraft,
       setCreateDraftWorkspaceByDefault,
@@ -1048,6 +1061,7 @@ export function KanbanIssuePanelContainer({
       onFormChange={handlePropertyChange}
       statuses={sortedStatuses}
       tags={tags}
+      showTierPicker={tiersEnabled}
       issueId={selectedKanbanIssueId}
       creatorUser={issueCreator}
       parentIssue={parentIssue}

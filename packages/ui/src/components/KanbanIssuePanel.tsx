@@ -55,6 +55,7 @@ export interface IssueFormData {
   description: string | null;
   statusId: string;
   priority: IssuePriority | null;
+  complexityTier: string | null;
   assigneeIds: string[];
   tagIds: string[];
   createDraftWorkspace: boolean;
@@ -93,6 +94,9 @@ export interface KanbanIssuePanelProps {
   // Options for dropdowns
   statuses: IssueStatus[];
   tags: KanbanIssueTag[];
+
+  // Tier picker (M1 #105) — flag-gated upstream by the container
+  showTierPicker?: boolean;
 
   // Resolved assignee profiles for avatar display
   assigneeUsers?: IssueAssignee[];
@@ -163,6 +167,7 @@ export function KanbanIssuePanel({
   onFormChange,
   statuses,
   tags,
+  showTierPicker,
   assigneeUsers,
   issueId,
   creatorUser,
@@ -302,6 +307,7 @@ export function KanbanIssuePanel({
           <IssuePropertyRow
             statusId={formData.statusId}
             priority={formData.priority}
+            complexityTier={formData.complexityTier}
             assigneeIds={formData.assigneeIds}
             assigneeUsers={assigneeUsers}
             statuses={statuses}
@@ -311,6 +317,11 @@ export function KanbanIssuePanel({
             onRemoveParentIssue={onRemoveParentIssue}
             onStatusClick={() => onFormChange('statusId', formData.statusId)}
             onPriorityClick={() => onFormChange('priority', formData.priority)}
+            onTierClick={
+              showTierPicker
+                ? () => onFormChange('complexityTier', formData.complexityTier)
+                : undefined
+            }
             onAssigneeClick={() =>
               onFormChange('assigneeIds', formData.assigneeIds)
             }

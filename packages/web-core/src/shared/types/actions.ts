@@ -74,6 +74,7 @@ export interface ActionExecutorContext {
     projectId: string,
     issueIds: string[]
   ) => Promise<void>;
+  openTierSelection: (projectId: string, issueIds: string[]) => Promise<void>;
   openAssigneeSelection: (
     projectId: string,
     issueIds: string[],

@@ -1,8 +1,13 @@
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 
 export interface RepoItem {
   id: string;
   display_name: string;
+}
+
+export interface TierItem {
+  id: ComplexityTier;
+  name: string;
 }
 
 export interface StatusItem {

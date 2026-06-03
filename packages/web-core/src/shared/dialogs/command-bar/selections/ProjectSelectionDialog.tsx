@@ -13,12 +13,14 @@ import type { StatusItem } from '@/shared/types/selectionItems';
 import type { Issue } from 'shared/remote-types';
 import { buildStatusSelectionPages } from './statusSelection';
 import { buildPrioritySelectionPages } from './prioritySelection';
+import { buildTierSelectionPages } from './tierSelection';
 import { buildSubIssueSelectionPages } from './subIssueSelection';
 import { buildRelationshipSelectionPages } from './relationshipSelection';
 import { resolveLabel, type ActionDefinition } from '@/shared/types/actions';
 import type { SelectionPage } from '../SelectionDialog';
 import type { StatusSelectionResult } from './statusSelection';
 import type { PrioritySelectionResult } from './prioritySelection';
+import type { TierSelectionResult } from './tierSelection';
 import type { SubIssueSelectionResult } from './subIssueSelection';
 import type { RelationshipSelectionResult } from './relationshipSelection';
 
@@ -26,6 +28,7 @@ import type { RelationshipSelectionResult } from './relationshipSelection';
 export type SelectionMode =
   | { type: 'status'; issueIds: string[]; isCreateMode?: boolean }
   | { type: 'priority'; issueIds: string[]; isCreateMode?: boolean }
+  | { type: 'tier'; issueIds: string[]; isCreateMode?: boolean }
   | {
       type: 'subIssue';
       parentIssueId: string;
@@ -49,6 +52,8 @@ function getInitialPageId(selectionType: SelectionMode['type']): string {
       return 'selectStatus';
     case 'priority':
       return 'selectPriority';
+    case 'tier':
+      return 'selectTier';
     case 'subIssue':
       return 'selectSubIssue';
     case 'relationship':
@@ -179,6 +184,8 @@ function ProjectSelectionContent({ selection }: { selection: SelectionMode }) {
         >;
       case 'priority':
         return buildPrioritySelectionPages() as Record<string, SelectionPage>;
+      case 'tier':
+        return buildTierSelectionPages() as Record<string, SelectionPage>;
       case 'subIssue':
         return buildSubIssueSelectionPages(
           filteredIssuesForSubIssue,
@@ -212,6 +219,16 @@ function ProjectSelectionContent({ selection }: { selection: SelectionMode }) {
         if (selection.isCreateMode) return;
         for (const issueId of selection.issueIds) {
           updateIssue(issueId, { priority: result.priority });
+        }
+      } else if (selection.type === 'tier') {
+        const result = data as TierSelectionResult;
+        if (selection.isCreateMode) return;
+        for (const issueId of selection.issueIds) {
+          // A user pick is a manual tier override (M1 #105).
+          updateIssue(issueId, {
+            complexity_tier: result.complexityTier,
+            tier_source: 'manual',
+          });
         }
       } else if (selection.type === 'subIssue') {
         const result = data as SubIssueSelectionResult;
