@@ -28,3 +28,10 @@ pub struct Sprint {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+/// Response for the sprints Electric-shape REST fallback (PRD §4.3). Mirrors the
+/// shape table name so the frontend `PROJECT_SPRINTS_SHAPE` fallback deserializes.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ListSprintsResponse {
+    pub sprints: Vec<Sprint>,
+}

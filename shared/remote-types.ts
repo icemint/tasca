@@ -246,6 +246,13 @@ export const PROJECT_TAGS_SHAPE = defineShape<Tag>(
   '/v1/fallback/tags'
 );
 
+export const PROJECT_SPRINTS_SHAPE = defineShape<Sprint>(
+  'sprints',
+  ['project_id'] as const,
+  '/v1/shape/project/{project_id}/sprints',
+  '/v1/fallback/sprints'
+);
+
 export const PROJECT_PROJECT_STATUSES_SHAPE = defineShape<ProjectStatus>(
   'project_statuses',
   ['project_id'] as const,

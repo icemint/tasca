@@ -27,6 +27,7 @@ pub mod projects;
 pub mod pull_request_issues;
 pub mod pull_requests;
 pub mod reviews;
+pub mod sprints;
 pub mod tags;
 pub mod types;
 pub mod users;

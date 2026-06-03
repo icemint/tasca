@@ -14,6 +14,7 @@ import type { Issue } from 'shared/remote-types';
 import { buildStatusSelectionPages } from './statusSelection';
 import { buildPrioritySelectionPages } from './prioritySelection';
 import { buildTierSelectionPages } from './tierSelection';
+import { buildSprintSelectionPages } from './sprintSelection';
 import { buildSubIssueSelectionPages } from './subIssueSelection';
 import { buildRelationshipSelectionPages } from './relationshipSelection';
 import { resolveLabel, type ActionDefinition } from '@/shared/types/actions';
@@ -21,6 +22,7 @@ import type { SelectionPage } from '../SelectionDialog';
 import type { StatusSelectionResult } from './statusSelection';
 import type { PrioritySelectionResult } from './prioritySelection';
 import type { TierSelectionResult } from './tierSelection';
+import type { SprintSelectionResult } from './sprintSelection';
 import type { SubIssueSelectionResult } from './subIssueSelection';
 import type { RelationshipSelectionResult } from './relationshipSelection';
 
@@ -29,6 +31,7 @@ export type SelectionMode =
   | { type: 'status'; issueIds: string[]; isCreateMode?: boolean }
   | { type: 'priority'; issueIds: string[]; isCreateMode?: boolean }
   | { type: 'tier'; issueIds: string[]; isCreateMode?: boolean }
+  | { type: 'sprint'; issueIds: string[]; isCreateMode?: boolean }
   | {
       type: 'subIssue';
       parentIssueId: string;
@@ -54,6 +57,8 @@ function getInitialPageId(selectionType: SelectionMode['type']): string {
       return 'selectPriority';
     case 'tier':
       return 'selectTier';
+    case 'sprint':
+      return 'selectSprint';
     case 'subIssue':
       return 'selectSubIssue';
     case 'relationship':
@@ -67,6 +72,7 @@ function ProjectSelectionContent({ selection }: { selection: SelectionMode }) {
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const {
     statuses,
+    sprints,
     issues,
     issueRelationships,
     updateIssue,
@@ -186,6 +192,11 @@ function ProjectSelectionContent({ selection }: { selection: SelectionMode }) {
         return buildPrioritySelectionPages() as Record<string, SelectionPage>;
       case 'tier':
         return buildTierSelectionPages() as Record<string, SelectionPage>;
+      case 'sprint':
+        return buildSprintSelectionPages(sprints) as Record<
+          string,
+          SelectionPage
+        >;
       case 'subIssue':
         return buildSubIssueSelectionPages(
           filteredIssuesForSubIssue,
@@ -199,6 +210,7 @@ function ProjectSelectionContent({ selection }: { selection: SelectionMode }) {
   }, [
     selection,
     sortedStatuses,
+    sprints,
     filteredIssuesForSubIssue,
     filteredIssuesForRelationship,
   ]);
@@ -229,6 +241,12 @@ function ProjectSelectionContent({ selection }: { selection: SelectionMode }) {
             complexity_tier: result.complexityTier,
             tier_source: 'manual',
           });
+        }
+      } else if (selection.type === 'sprint') {
+        const result = data as SprintSelectionResult;
+        if (selection.isCreateMode) return;
+        for (const issueId of selection.issueIds) {
+          updateIssue(issueId, { sprint_id: result.sprintId });
         }
       } else if (selection.type === 'subIssue') {
         const result = data as SubIssueSelectionResult;

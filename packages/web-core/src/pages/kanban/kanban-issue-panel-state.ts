@@ -24,6 +24,7 @@ interface SelectedIssueSnapshot {
   status_id: string;
   priority: IssuePriority | null;
   complexity_tier: ComplexityTier;
+  sprint_id: string | null;
 }
 
 type KanbanIssuePanelFormAction =
@@ -65,6 +66,7 @@ export function createBlankCreateFormData(
     statusId: defaultStatusId,
     priority: null,
     complexityTier: null,
+    sprintId: null,
     assigneeIds: [],
     tagIds: [],
     createDraftWorkspace: createDraftWorkspaceByDefault,
@@ -189,6 +191,7 @@ export function selectDisplayData({
     statusId: selectedIssue?.status_id ?? '',
     priority: selectedIssue?.priority ?? null,
     complexityTier: selectedIssue?.complexity_tier ?? null,
+    sprintId: selectedIssue?.sprint_id ?? null,
     assigneeIds: currentAssigneeIds,
     tagIds: currentTagIds,
     createDraftWorkspace: false,

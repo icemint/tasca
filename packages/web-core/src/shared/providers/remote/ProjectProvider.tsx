@@ -3,6 +3,7 @@ import { useShape } from '@/shared/integrations/electric/hooks';
 import {
   PROJECT_ISSUES_SHAPE,
   PROJECT_PROJECT_STATUSES_SHAPE,
+  PROJECT_SPRINTS_SHAPE,
   PROJECT_TAGS_SHAPE,
   PROJECT_ISSUE_ASSIGNEES_SHAPE,
   PROJECT_ISSUE_FOLLOWERS_SHAPE,
@@ -50,6 +51,9 @@ export function ProjectProvider({ projectId, children }: ProjectProviderProps) {
     enabled,
     mutation: TAG_MUTATION,
   });
+  const sprintsResult = useShape(PROJECT_SPRINTS_SHAPE, params, {
+    enabled,
+  });
   const issueAssigneesResult = useShape(PROJECT_ISSUE_ASSIGNEES_SHAPE, params, {
     enabled,
     mutation: ISSUE_ASSIGNEE_MUTATION,
@@ -88,6 +92,7 @@ export function ProjectProvider({ projectId, children }: ProjectProviderProps) {
     issuesResult.error ||
     statusesResult.error ||
     tagsResult.error ||
+    sprintsResult.error ||
     issueAssigneesResult.error ||
     issueFollowersResult.error ||
     issueTagsResult.error ||
@@ -102,6 +107,7 @@ export function ProjectProvider({ projectId, children }: ProjectProviderProps) {
     issuesResult.retry();
     statusesResult.retry();
     tagsResult.retry();
+    sprintsResult.retry();
     issueAssigneesResult.retry();
     issueFollowersResult.retry();
     issueTagsResult.retry();
@@ -113,6 +119,7 @@ export function ProjectProvider({ projectId, children }: ProjectProviderProps) {
     issuesResult,
     statusesResult,
     tagsResult,
+    sprintsResult,
     issueAssigneesResult,
     issueFollowersResult,
     issueTagsResult,
@@ -231,6 +238,7 @@ export function ProjectProvider({ projectId, children }: ProjectProviderProps) {
       // Data
       issues: issuesResult.data,
       statuses: statusesResult.data,
+      sprints: sprintsResult.data,
       tags: tagsResult.data,
       issueAssignees: issueAssigneesResult.data,
       issueFollowers: issueFollowersResult.data,
@@ -303,6 +311,7 @@ export function ProjectProvider({ projectId, children }: ProjectProviderProps) {
       issuesResult,
       statusesResult,
       tagsResult,
+      sprintsResult,
       issueAssigneesResult,
       issueFollowersResult,
       issueTagsResult,

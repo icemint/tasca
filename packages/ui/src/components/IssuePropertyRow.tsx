@@ -35,6 +35,8 @@ export interface IssuePropertyRowProps {
   statusId: string;
   priority: PriorityLevel | null;
   complexityTier?: string | null;
+  /** Resolved sprint name (null when unset); the container resolves it (M1 #107). */
+  sprintName?: string | null;
   assigneeIds: string[];
   assigneeUsers?: KanbanAssigneeUser[];
   statuses: IssuePropertyStatus[];
@@ -46,6 +48,8 @@ export interface IssuePropertyRowProps {
   onPriorityClick: () => void;
   /** When provided (flag-gated upstream), renders the tier picker button (M1 #105). */
   onTierClick?: () => void;
+  /** When provided (flag-gated upstream), renders the sprint picker button (M1 #107). */
+  onSprintClick?: () => void;
   onAssigneeClick: () => void;
   onAddClick?: () => void;
   disabled?: boolean;
@@ -56,6 +60,7 @@ export function IssuePropertyRow({
   statusId,
   priority,
   complexityTier,
+  sprintName,
   assigneeUsers,
   statuses,
   creatorUser,
@@ -65,6 +70,7 @@ export function IssuePropertyRow({
   onStatusClick,
   onPriorityClick,
   onTierClick,
+  onSprintClick,
   onAssigneeClick,
   onAddClick,
   disabled,
@@ -103,6 +109,16 @@ export function IssuePropertyRow({
           {complexityTier && tierLabels[complexityTier]
             ? tierLabels[complexityTier]
             : 'Tier'}
+        </PrimaryButton>
+      )}
+
+      {onSprintClick && (
+        <PrimaryButton
+          variant="tertiary"
+          onClick={onSprintClick}
+          disabled={disabled}
+        >
+          {sprintName || 'Sprint'}
         </PrimaryButton>
       )}
 

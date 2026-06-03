@@ -6,6 +6,7 @@ import type {
   StatusItem,
   PriorityItem,
   TierItem,
+  SprintItem,
   BranchItem,
 } from '@/shared/types/selectionItems';
 
@@ -42,6 +43,7 @@ export type ResolvedGroupItem =
   | { type: 'status'; status: StatusItem }
   | { type: 'priority'; priority: PriorityItem }
   | { type: 'tier'; tier: TierItem }
+  | { type: 'sprint'; sprint: SprintItem }
   | { type: 'issue'; issue: Issue }
   | { type: 'createSubIssue' }
   | { type: 'branch'; branch: BranchItem };
