@@ -34,6 +34,7 @@ export interface ActionsContextValue {
     projectId: string,
     issueIds: string[]
   ) => Promise<void>;
+  openTierSelection: (projectId: string, issueIds: string[]) => Promise<void>;
 
   // Open assignee selection dialog
   openAssigneeSelection: (

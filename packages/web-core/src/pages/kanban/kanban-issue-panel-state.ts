@@ -1,4 +1,4 @@
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 import type {
   IssueFormData,
   IssuePanelMode,
@@ -23,6 +23,7 @@ interface SelectedIssueSnapshot {
   description: string | null;
   status_id: string;
   priority: IssuePriority | null;
+  complexity_tier: ComplexityTier;
 }
 
 type KanbanIssuePanelFormAction =
@@ -63,6 +64,7 @@ export function createBlankCreateFormData(
     description: null,
     statusId: defaultStatusId,
     priority: null,
+    complexityTier: null,
     assigneeIds: [],
     tagIds: [],
     createDraftWorkspace: createDraftWorkspaceByDefault,
@@ -186,6 +188,7 @@ export function selectDisplayData({
       : (selectedIssue?.description ?? null),
     statusId: selectedIssue?.status_id ?? '',
     priority: selectedIssue?.priority ?? null,
+    complexityTier: selectedIssue?.complexity_tier ?? null,
     assigneeIds: currentAssigneeIds,
     tagIds: currentTagIds,
     createDraftWorkspace: false,

@@ -92,6 +92,14 @@ interface PriorityItem {
   };
 }
 
+interface TierItem {
+  type: 'tier';
+  tier: {
+    id: string;
+    name: string;
+  };
+}
+
 interface CreateSubIssueItem {
   type: 'createSubIssue';
 }
@@ -121,6 +129,7 @@ export type CommandBarGroupItem<
   | BranchItem
   | StatusItem
   | PriorityItem
+  | TierItem
   | CreateSubIssueItem
   | IssueItem
   | ActionItem<TAction>;
@@ -345,6 +354,18 @@ export function CommandBar<
                 );
               }
 
+              if (item.type === 'tier') {
+                return (
+                  <CommandItem
+                    key={item.tier.id}
+                    value={`${item.tier.id} ${item.tier.name}`}
+                    onSelect={() => onSelect(item)}
+                  >
+                    <span>{item.tier.name}</span>
+                  </CommandItem>
+                );
+              }
+
               if (item.type === 'createSubIssue') {
                 return (
                   <CommandItem
@@ -442,6 +463,9 @@ function getItemSearchLabel<
   }
   if (item.type === 'priority') {
     return `${item.priority.id ?? 'none'} ${item.priority.name}`;
+  }
+  if (item.type === 'tier') {
+    return `${item.tier.id} ${item.tier.name}`;
   }
   if (item.type === 'issue') {
     return `${item.issue.id} ${item.issue.simple_id} ${item.issue.title}`;

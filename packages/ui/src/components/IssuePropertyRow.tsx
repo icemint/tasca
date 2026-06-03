@@ -21,9 +21,20 @@ const priorityLabels: Record<PriorityLevel, string> = {
   low: 'Low',
 };
 
+// M1 #105: keyed by the complexity-tier value string (ui stays decoupled from
+// shared types, like #104's KanbanCardContent).
+const tierLabels: Record<string, string> = {
+  basic: 'Basic',
+  low: 'Low',
+  medium: 'Medium',
+  hard: 'Hard',
+  ultra: 'Ultra',
+};
+
 export interface IssuePropertyRowProps {
   statusId: string;
   priority: PriorityLevel | null;
+  complexityTier?: string | null;
   assigneeIds: string[];
   assigneeUsers?: KanbanAssigneeUser[];
   statuses: IssuePropertyStatus[];
@@ -33,6 +44,8 @@ export interface IssuePropertyRowProps {
   onRemoveParentIssue?: () => void;
   onStatusClick: () => void;
   onPriorityClick: () => void;
+  /** When provided (flag-gated upstream), renders the tier picker button (M1 #105). */
+  onTierClick?: () => void;
   onAssigneeClick: () => void;
   onAddClick?: () => void;
   disabled?: boolean;
@@ -42,6 +55,7 @@ export interface IssuePropertyRowProps {
 export function IssuePropertyRow({
   statusId,
   priority,
+  complexityTier,
   assigneeUsers,
   statuses,
   creatorUser,
@@ -50,6 +64,7 @@ export function IssuePropertyRow({
   onRemoveParentIssue,
   onStatusClick,
   onPriorityClick,
+  onTierClick,
   onAssigneeClick,
   onAddClick,
   disabled,
@@ -78,6 +93,18 @@ export function IssuePropertyRow({
         <PriorityIcon priority={priority} />
         {priority ? priorityLabels[priority] : 'No priority'}
       </PrimaryButton>
+
+      {onTierClick && (
+        <PrimaryButton
+          variant="tertiary"
+          onClick={onTierClick}
+          disabled={disabled}
+        >
+          {complexityTier && tierLabels[complexityTier]
+            ? tierLabels[complexityTier]
+            : 'Tier'}
+        </PrimaryButton>
+      )}
 
       <PrimaryButton
         variant="tertiary"

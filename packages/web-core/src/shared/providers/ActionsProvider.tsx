@@ -134,6 +134,20 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
     []
   );
 
+  // Open tier selection dialog (M1 #105; dynamic import to avoid circular deps)
+  const openTierSelection = useCallback(
+    async (projectId: string, issueIds: string[]) => {
+      const { ProjectSelectionDialog } = await import(
+        '@/shared/dialogs/command-bar/selections/ProjectSelectionDialog'
+      );
+      await ProjectSelectionDialog.show({
+        projectId,
+        selection: { type: 'tier', issueIds },
+      });
+    },
+    []
+  );
+
   // Open assignee selection dialog (uses dynamic import to avoid circular deps)
   const openAssigneeSelection = useCallback(
     async (projectId: string, issueIds: string[], isCreateMode = false) => {
@@ -216,6 +230,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
       logsPanelContent,
       openStatusSelection,
       openPrioritySelection,
+      openTierSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -249,6 +264,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
     logsPanelContent,
     openStatusSelection,
     openPrioritySelection,
+    openTierSelection,
     openAssigneeSelection,
     openSubIssueSelection,
     openWorkspaceSelection,
@@ -342,6 +358,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
       getLabel,
       openStatusSelection,
       openPrioritySelection,
+      openTierSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
@@ -355,6 +372,7 @@ export function ActionsProvider({ children }: ActionsProviderProps) {
       getLabel,
       openStatusSelection,
       openPrioritySelection,
+      openTierSelection,
       openAssigneeSelection,
       openSubIssueSelection,
       openWorkspaceSelection,
