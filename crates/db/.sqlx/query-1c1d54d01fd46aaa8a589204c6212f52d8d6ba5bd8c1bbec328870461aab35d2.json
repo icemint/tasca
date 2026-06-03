@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: Uuid\",\n                      complexity_tier AS \"complexity_tier: ComplexityTier\",\n                      dispatch_prompt,\n                      dispatch_executor_config\n               FROM workspaces\n               WHERE dispatch_state = 'queued'\n               ORDER BY created_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "complexity_tier: ComplexityTier",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "dispatch_prompt",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "dispatch_executor_config",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1c1d54d01fd46aaa8a589204c6212f52d8d6ba5bd8c1bbec328870461aab35d2"
+}
