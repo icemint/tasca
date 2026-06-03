@@ -2,9 +2,11 @@
  * Tasca app feature flags.
  *
  * Every flag defaults **off**. Resolution order (first wins):
- *   1. env override  — VITE_FLAG_<NAME> ("1"/"true" → on, "0"/"false" → off).
+ *   1. org settings  — explicit per-org flags returned by the organization
+ *      (real backend). An explicit true OR false wins over env/default.
+ *   2. env override  — VITE_FLAG_<NAME> ("1"/"true" → on, "0"/"false" → off).
  *      Build-time only (Vite inlines import.meta.env at build); developer/CI use.
- *   2. org settings  — flags returned by the organization (real backend)
+ *      Applies only when the org left the key unset.
  *   3. default off
  *
  * GUARDRAIL: a flag may only be turned on in an environment where its named
@@ -46,13 +48,16 @@ function envOverride(name: FlagName): boolean | undefined {
   return undefined;
 }
 
-/** Merge env overrides over org-provided flags over the all-off default. */
+/** Merge explicit org flags over env overrides over the all-off default. */
 export function resolveFlags(orgFlags?: Partial<Record<FlagName, boolean>>): Flags {
   const out = { ...DEFAULT_FLAGS };
   for (const name of FLAG_NAMES) {
-    const env = envOverride(name);
-    if (env !== undefined) out[name] = env;
-    else if (orgFlags?.[name] !== undefined) out[name] = Boolean(orgFlags[name]);
+    if (orgFlags?.[name] !== undefined) {
+      out[name] = Boolean(orgFlags[name]); // org EXPLICIT value wins (true OR false)
+    } else {
+      const env = envOverride(name); // org didn't set this key → fall through to env
+      if (env !== undefined) out[name] = env;
+    }
   }
   return out;
 }

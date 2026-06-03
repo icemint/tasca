@@ -83,6 +83,7 @@ fn generate_types_content() -> String {
         api_types::CreateOrganizationRequest::decl(),
         api_types::CreateOrganizationResponse::decl(),
         api_types::UpdateOrganizationRequest::decl(),
+        api_types::UpdateOrganizationFlagsRequest::decl(),
         api_types::Invitation::decl(),
         api_types::CreateInvitationRequest::decl(),
         api_types::CreateInvitationResponse::decl(),

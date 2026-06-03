@@ -238,9 +238,19 @@ export enum MemberRole { ADMIN = "ADMIN", MEMBER = "MEMBER" }
 
 export enum InvitationStatus { PENDING = "PENDING", ACCEPTED = "ACCEPTED", DECLINED = "DECLINED", EXPIRED = "EXPIRED" }
 
-export type Organization = { id: string, name: string, slug: string, is_personal: boolean, issue_prefix: string, created_at: string, updated_at: string, };
+export type Organization = { id: string, name: string, slug: string, is_personal: boolean, issue_prefix: string, created_at: string, updated_at: string, 
+/**
+ * Per-org feature flags (#156): a `{ flag_name: bool }` JSONB map. `{}` means
+ * "unset" — the client falls through to env/default-off. Stored loosely;
+ * the client narrows to known flags.
+ */
+feature_flags: JsonValue, };
 
-export type OrganizationWithRole = { id: string, name: string, slug: string, is_personal: boolean, issue_prefix: string, created_at: string, updated_at: string, user_role: MemberRole, };
+export type OrganizationWithRole = { id: string, name: string, slug: string, is_personal: boolean, issue_prefix: string, created_at: string, updated_at: string, user_role: MemberRole, 
+/**
+ * Per-org feature flags (#156); see `Organization::feature_flags`.
+ */
+feature_flags: JsonValue, };
 
 export type ListOrganizationsResponse = { organizations: Array<OrganizationWithRole>, };
 
@@ -251,6 +261,8 @@ export type CreateOrganizationRequest = { name: string, slug: string, };
 export type CreateOrganizationResponse = { organization: OrganizationWithRole, };
 
 export type UpdateOrganizationRequest = { name: string, };
+
+export type UpdateOrganizationFlagsRequest = { feature_flags: { [key in string]?: boolean }, };
 
 export type Invitation = { id: string, organization_id: string, invited_by_user_id: string | null, email: string, role: MemberRole, status: InvitationStatus, token: string, created_at: string, expires_at: string, };
 

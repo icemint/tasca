@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id           AS \"id!: Uuid\",\n                name         AS \"name!\",\n                slug         AS \"slug!\",\n                is_personal  AS \"is_personal!\",\n                issue_prefix AS \"issue_prefix!\",\n                created_at   AS \"created_at!\",\n                updated_at   AS \"updated_at!\"\n            FROM organizations\n            WHERE id = $1\n            ",
+  "query": "\n            SELECT\n                id           AS \"id!: Uuid\",\n                name         AS \"name!\",\n                slug         AS \"slug!\",\n                is_personal  AS \"is_personal!\",\n                issue_prefix AS \"issue_prefix!\",\n                created_at   AS \"created_at!\",\n                updated_at   AS \"updated_at!\",\n                feature_flags AS \"feature_flags!: Value\"\n            FROM organizations\n            WHERE id = $1\n            ",
   "describe": {
     "columns": [
       {
@@ -37,6 +37,11 @@
         "ordinal": 6,
         "name": "updated_at!",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "feature_flags!: Value",
+        "type_info": "Jsonb"
       }
     ],
     "parameters": {
@@ -51,8 +56,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "f20260cbe7dff433f5aefa4fe14fa9bc89a6ad97d550420c768e326de6ae5ae6"
+  "hash": "c01cb631fc680e6bc475bb0871370b3665f436f2f43ede549821cc45eb8b8157"
 }

@@ -1,10 +1,30 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::Type;
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::MemberRole;
+
+/// Canonical feature-flag names accepted by the per-org flags API (#156). Mirrors
+/// `FLAG_NAMES` in `packages/web-core/src/shared/flags/flags.ts` — keep in sync;
+/// the PATCH endpoint rejects any key not in this list so typos fail loudly
+/// instead of accumulating junk in the `organizations.feature_flags` JSONB.
+pub const FEATURE_FLAG_NAMES: &[&str] = &[
+    "tiers",
+    "agents",
+    "sprints",
+    "run_view",
+    "audit_timeline",
+    "github_pr",
+    "sandbox",
+    "pm_assistant",
+    "roles",
+    "guest",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -27,6 +47,10 @@ pub struct Organization {
     pub issue_prefix: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Per-org feature flags (#156): a `{ flag_name: bool }` JSONB map. `{}` means
+    /// "unset" — the client falls through to env/default-off. Stored loosely;
+    /// the client narrows to known flags.
+    pub feature_flags: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, TS)]
@@ -39,6 +63,8 @@ pub struct OrganizationWithRole {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub user_role: MemberRole,
+    /// Per-org feature flags (#156); see `Organization::feature_flags`.
+    pub feature_flags: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -66,6 +92,13 @@ pub struct CreateOrganizationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct UpdateOrganizationRequest {
     pub name: String,
+}
+
+/// Replace an org's feature flags (#156). Admin-only. Keys are validated against
+/// [`FEATURE_FLAG_NAMES`]; unknown keys are rejected.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct UpdateOrganizationFlagsRequest {
+    pub feature_flags: HashMap<String, bool>,
 }
 
 // Invitation types

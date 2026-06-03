@@ -6,7 +6,7 @@ import { localAppNavigation } from '@web/app/navigation/AppNavigation';
 import { LocalAuthProvider } from '@/shared/providers/auth/LocalAuthProvider';
 import { AppRuntimeProvider } from '@/shared/hooks/useAppRuntime';
 import { AppNavigationProvider } from '@/shared/hooks/useAppNavigation';
-import { FlagsProvider } from '@/shared/flags';
+import { OrgFlagsProvider } from '@/shared/flags';
 import { useTauriNotificationNavigation } from '@web/app/hooks/useTauriNotificationNavigation';
 import { useTauriUpdateReady } from '@web/app/hooks/useTauriUpdateReady';
 import { AppSystemNotifications } from '@web/app/notifications/AppSystemNotifications';
@@ -21,9 +21,10 @@ function TauriListeners() {
 function App() {
   return (
     <AppRuntimeProvider runtime="local">
-      {/* Flags resolve env → org → off; the desktop app has no org flags, so
-          this keeps env overrides working and matches the remote app's tree. */}
-      <FlagsProvider>
+      {/* Flags resolve org → env → off. A signed-in desktop user now honors
+          their selected org's feature_flags; offline/signed-out falls through
+          to env (.env.development) and the all-off default. */}
+      <OrgFlagsProvider>
         <AppNavigationProvider value={localAppNavigation}>
           <TauriListeners />
           <UserSystemProvider>
@@ -44,7 +45,7 @@ function App() {
             </LocalAuthProvider>
           </UserSystemProvider>
         </AppNavigationProvider>
-      </FlagsProvider>
+      </OrgFlagsProvider>
     </AppRuntimeProvider>
   );
 }

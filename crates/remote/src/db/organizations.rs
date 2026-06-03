@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 pub use api_types::{MemberRole, Organization, OrganizationWithRole};
+use serde_json::Value;
 use sqlx::{Executor, PgPool, Postgres, query_as};
 use uuid::Uuid;
 
@@ -42,7 +45,8 @@ impl<'a> OrganizationRepository<'a> {
                 is_personal  AS "is_personal!",
                 issue_prefix AS "issue_prefix!",
                 created_at   AS "created_at!",
-                updated_at   AS "updated_at!"
+                updated_at   AS "updated_at!",
+                feature_flags AS "feature_flags!: Value"
             FROM organizations
             WHERE id = $1
             "#,
@@ -131,7 +135,8 @@ impl<'a> OrganizationRepository<'a> {
                 is_personal  AS "is_personal!",
                 issue_prefix AS "issue_prefix!",
                 created_at   AS "created_at!",
-                updated_at   AS "updated_at!"
+                updated_at   AS "updated_at!",
+                feature_flags AS "feature_flags!: Value"
             "#,
             name,
             slug,
@@ -172,6 +177,7 @@ impl<'a> OrganizationRepository<'a> {
             created_at: org.created_at,
             updated_at: org.updated_at,
             user_role: MemberRole::Admin,
+            feature_flags: org.feature_flags,
         })
     }
 
@@ -190,6 +196,7 @@ impl<'a> OrganizationRepository<'a> {
                 o.issue_prefix AS "issue_prefix!",
                 o.created_at   AS "created_at!",
                 o.updated_at   AS "updated_at!",
+                o.feature_flags AS "feature_flags!: Value",
                 m.role         AS "user_role!: MemberRole"
             FROM organizations o
             JOIN organization_member_metadata m ON m.organization_id = o.id
@@ -225,10 +232,56 @@ impl<'a> OrganizationRepository<'a> {
                 is_personal  AS "is_personal!",
                 issue_prefix AS "issue_prefix!",
                 created_at   AS "created_at!",
-                updated_at   AS "updated_at!"
+                updated_at   AS "updated_at!",
+                feature_flags AS "feature_flags!: Value"
             "#,
             org_id,
             new_name
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or(IdentityError::NotFound)?;
+
+        Ok(org)
+    }
+
+    /// Replace an org's feature flags (#156). Admin-only. The caller is expected to
+    /// have validated keys against `FEATURE_FLAG_NAMES`; the map is stored verbatim
+    /// as JSONB.
+    pub async fn update_organization_flags(
+        &self,
+        org_id: Uuid,
+        user_id: Uuid,
+        flags: &HashMap<String, bool>,
+    ) -> Result<Organization, IdentityError> {
+        self.assert_admin(org_id, user_id).await?;
+
+        // `HashMap<String, bool>` always serializes, but fail loudly rather than
+        // silently persisting `{}` if that ever stops holding.
+        let flags_json = serde_json::to_value(flags).map_err(|e| {
+            IdentityError::Database(sqlx::Error::Protocol(format!(
+                "failed to serialize feature flags: {e}"
+            )))
+        })?;
+
+        let org = sqlx::query_as!(
+            Organization,
+            r#"
+            UPDATE organizations
+            SET feature_flags = $2
+            WHERE id = $1
+            RETURNING
+                id           AS "id!: Uuid",
+                name         AS "name!",
+                slug         AS "slug!",
+                is_personal  AS "is_personal!",
+                issue_prefix AS "issue_prefix!",
+                created_at   AS "created_at!",
+                updated_at   AS "updated_at!",
+                feature_flags AS "feature_flags!: Value"
+            "#,
+            org_id,
+            flags_json
         )
         .fetch_optional(self.pool)
         .await?
@@ -311,7 +364,8 @@ async fn find_organization_by_slug(
             is_personal  AS "is_personal!",
             issue_prefix AS "issue_prefix!",
             created_at   AS "created_at!",
-            updated_at   AS "updated_at!"
+            updated_at   AS "updated_at!",
+            feature_flags AS "feature_flags!: Value"
         FROM organizations
         WHERE slug = $1
         "#,
@@ -342,7 +396,8 @@ where
             is_personal  AS "is_personal!",
             issue_prefix AS "issue_prefix!",
             created_at   AS "created_at!",
-            updated_at   AS "updated_at!"
+            updated_at   AS "updated_at!",
+            feature_flags AS "feature_flags!: Value"
         "#,
         name,
         slug,

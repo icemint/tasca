@@ -1,6 +1,7 @@
 use api_types::{
-    CreateOrganizationRequest, CreateOrganizationResponse, GetOrganizationResponse,
-    ListOrganizationsResponse, MemberRole, UpdateOrganizationRequest,
+    CreateOrganizationRequest, CreateOrganizationResponse, FEATURE_FLAG_NAMES,
+    GetOrganizationResponse, ListOrganizationsResponse, MemberRole, UpdateOrganizationFlagsRequest,
+    UpdateOrganizationRequest,
 };
 use axum::{
     Json, Router,
@@ -26,6 +27,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/organizations", get(list_organizations))
         .route("/organizations/{org_id}", get(get_organization))
         .route("/organizations/{org_id}", patch(update_organization))
+        .route(
+            "/organizations/{org_id}/flags",
+            patch(update_organization_flags),
+        )
         .route("/organizations/{org_id}", delete(delete_organization))
 }
 
@@ -152,6 +157,44 @@ async fn update_organization(
 
     let organization = org_repo
         .update_organization_name(org_id, ctx.user.id, name)
+        .await
+        .map_err(|e| match e {
+            IdentityError::PermissionDenied => {
+                ErrorResponse::new(StatusCode::FORBIDDEN, "Admin access required")
+            }
+            IdentityError::NotFound => {
+                ErrorResponse::new(StatusCode::NOT_FOUND, "Organization not found")
+            }
+            _ => ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+        })?;
+
+    Ok(Json(organization))
+}
+
+/// PATCH /organizations/{id}/flags — replace an org's feature flags (#156). Admin-only.
+/// Keys are validated against `FEATURE_FLAG_NAMES`; an unknown key fails the whole
+/// request so typos surface loudly rather than silently persisting junk.
+async fn update_organization_flags(
+    State(state): State<AppState>,
+    axum::extract::Extension(ctx): axum::extract::Extension<RequestContext>,
+    Path(org_id): Path<Uuid>,
+    Json(payload): Json<UpdateOrganizationFlagsRequest>,
+) -> Result<impl IntoResponse, ErrorResponse> {
+    if let Some(unknown) = payload
+        .feature_flags
+        .keys()
+        .find(|k| !FEATURE_FLAG_NAMES.contains(&k.as_str()))
+    {
+        return Err(ErrorResponse::new(
+            StatusCode::BAD_REQUEST,
+            format!("Unknown feature flag: {unknown}"),
+        ));
+    }
+
+    let org_repo = OrganizationRepository::new(&state.pool);
+
+    let organization = org_repo
+        .update_organization_flags(org_id, ctx.user.id, &payload.feature_flags)
         .await
         .map_err(|e| match e {
             IdentityError::PermissionDenied => {
