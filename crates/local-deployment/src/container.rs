@@ -1104,6 +1104,7 @@ impl LocalContainerService {
                 executor_config: queued_data.executor_config.clone(),
                 working_dir,
                 env_overrides: None,
+                extra_params: None,
             })
         };
 

@@ -84,6 +84,16 @@ impl StandardCodingAgentExecutor for QwenCode {
             .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
 
+    fn merge_params(&mut self, params: &[String]) {
+        if params.is_empty() {
+            return;
+        }
+        self.cmd
+            .additional_params
+            .get_or_insert_with(Vec::new)
+            .extend(params.iter().cloned());
+    }
+
     fn use_approvals(&mut self, approvals: Arc<dyn ExecutorApprovalService>) {
         self.approvals = Some(approvals);
     }

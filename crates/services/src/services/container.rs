@@ -1080,7 +1080,7 @@ pub trait ContainerService {
         &self,
         workspace: &Workspace,
         executor_config: ExecutorConfig,
-        prompt: String,
+        mut prompt: String,
     ) -> Result<StartOutcome, ContainerError> {
         // Create container (idempotent — a re-dispatched queued workspace already
         // has its worktree; create just ensures it exists).
@@ -1099,7 +1099,7 @@ pub trait ContainerService {
         //                the prompt; an agent-release event starts it later (FIFO).
         //  - Upstream  ⇒ no engine routing ⇒ start with the caller's explicit
         //                config — byte-for-byte upstream behavior (PRD §5.1).
-        let (executor_config, env_overrides, claimed_agent_id) =
+        let (executor_config, env_overrides, claimed_agent_id, extra_params) =
             match super::assignment::context_for_workspace(&self.db().pool, &workspace).await? {
                 Some(ctx) => {
                     match super::assignment::claim_assignment(&self.db().pool, &ctx).await? {
@@ -1109,11 +1109,23 @@ pub trait ContainerService {
                             {
                                 tracing::warn!(?e, "failed to mark workspace running");
                             }
-                            (a.executor_config, a.env.env, Some(a.agent.id))
+                            // M1 #20: wrap the prompt with the tier template (constrains
+                            // the agent + forbids open-ended planning for basic/low) and
+                            // surface its turn cap into the executor command. The per-org
+                            // override store is a later phase ⇒ `None` = built-in default.
+                            let template = super::prompt_templates::resolve(ctx.tier, None);
+                            prompt = template.wrap(&prompt);
+                            (
+                                a.executor_config,
+                                a.env.env,
+                                Some(a.agent.id),
+                                template.max_turns_params(),
+                            )
                         }
                         super::assignment::ClaimOutcome::Queue => {
                             // Defer: nothing is started; the run waits in the queue.
-                            // Capture the prompt + caller config to replay on release.
+                            // Capture the *unwrapped* prompt + caller config to replay on
+                            // release (re-dispatch re-enters here and re-wraps).
                             let cfg_json =
                                 serde_json::to_string(&executor_config).unwrap_or_default();
                             Workspace::mark_queued(
@@ -1125,10 +1137,12 @@ pub trait ContainerService {
                             .await?;
                             return Ok(StartOutcome::Queued);
                         }
-                        super::assignment::ClaimOutcome::Upstream => (executor_config, None, None),
+                        super::assignment::ClaimOutcome::Upstream => {
+                            (executor_config, None, None, None)
+                        }
                     }
                 }
-                None => (executor_config, None, None),
+                None => (executor_config, None, None, None),
             };
 
         // Create a session for this workspace. From the successful claim onward, any
@@ -1182,6 +1196,7 @@ pub trait ContainerService {
                 executor_config: executor_config.clone(),
                 working_dir,
                 env_overrides,
+                extra_params,
             }),
             cleanup_action.map(Box::new),
         );

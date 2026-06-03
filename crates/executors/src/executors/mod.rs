@@ -232,6 +232,20 @@ pub trait StandardCodingAgentExecutor {
         }
     }
 
+    /// Append per-run extra CLI params (M1 #20, e.g. the tier template's
+    /// `--max-turns`) to this executor's command. Default no-op — only executors
+    /// that carry a command (ClaudeCode, QwenCode) override this; the default logs
+    /// loudly if params would otherwise be silently dropped.
+    fn merge_params(&mut self, params: &[String]) {
+        if !params.is_empty() {
+            tracing::warn!(
+                count = params.len(),
+                "executor does not support extra CLI params; {} param(s) dropped",
+                params.len()
+            );
+        }
+    }
+
     fn use_approvals(&mut self, _approvals: Arc<dyn ExecutorApprovalService>) {}
 
     async fn spawn(
