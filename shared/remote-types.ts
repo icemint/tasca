@@ -22,6 +22,10 @@ export type Tag = { id: string, project_id: string, name: string, color: string,
 
 export type Issue = { id: string, project_id: string, issue_number: number, simple_id: string, status_id: string, title: string, description: string | null, priority: IssuePriority | null, complexity_tier: ComplexityTier, tier_source: TierSource, tier_confidence: number | null, start_date: string | null, target_date: string | null, completed_at: string | null, sort_order: number, parent_issue_id: string | null, parent_issue_sort_order: number | null, extension_metadata: JsonValue, creator_user_id: string | null, created_at: string, updated_at: string, };
 
+export type ComplexityTier = "basic" | "low" | "medium" | "hard" | "ultra";
+
+export type TierSource = "manual" | "assistant" | "classifier";
+
 export type IssueAssignee = { id: string, issue_id: string, user_id: string, assigned_at: string, };
 
 export type Blob = { id: string, project_id: string, blob_path: string, thumbnail_blob_path: string | null, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, width: number | null, height: number | null, created_at: string, updated_at: string, };
