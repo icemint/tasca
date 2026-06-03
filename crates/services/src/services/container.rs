@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use db::{
     DBService,
     models::{
+        agent::Agent,
         coding_agent_turn::{CodingAgentTurn, CreateCodingAgentTurn},
         execution_process::{
             CreateExecutionProcess, ExecutionContext, ExecutionProcess, ExecutionProcessError,
@@ -224,6 +225,23 @@ pub trait ContainerService {
 
     /// Finalize workspace execution by sending notifications
     async fn finalize_task(&self, ctx: &ExecutionContext) {
+        // M1 #16: release the agent concurrency slot claimed for this session, if
+        // any. `take_claimed_agent` atomically clears the marker, so this releases
+        // exactly once even though a session can finalize repeatedly (initial run +
+        // each follow-up) and even if a start failure already released it. Done
+        // before the killed early-return so killed runs free their slot too. A DB
+        // error here is logged loudly (not swallowed): the slot would otherwise
+        // leak until the next startup recovery (cleanup_orphan_executions).
+        match Session::take_claimed_agent(&self.db().pool, ctx.session.id).await {
+            Ok(Some(agent_id)) => self.release_agent_quietly(agent_id).await,
+            Ok(None) => {}
+            Err(e) => tracing::error!(
+                ?e,
+                session_id = %ctx.session.id,
+                "failed to take claimed agent on finalize; slot will be reconciled at next startup"
+            ),
+        }
+
         // Skip notification if process was intentionally killed by user
         if matches!(ctx.execution_process.status, ExecutionProcessStatus::Killed) {
             return;
@@ -259,6 +277,19 @@ pub trait ContainerService {
 
     /// Cleanup executions marked as running in the db, call at startup
     async fn cleanup_orphan_executions(&self) -> Result<(), ContainerError> {
+        // M1 #16 recovery: at startup no agent run is in flight, so any agent
+        // concurrency slot still marked claimed is a stale claim from a previous
+        // run that crashed before it could release. Clear the session markers and
+        // reset the agent counters together so a restart heals any leaked slot.
+        match Session::clear_all_claimed_agents(&self.db().pool).await {
+            Ok(n) if n > 0 => tracing::info!("Cleared {n} stale agent claim(s) at startup"),
+            Ok(_) => {}
+            Err(e) => tracing::error!(?e, "Failed to clear stale agent claims at startup"),
+        }
+        if let Err(e) = Agent::reset_active_sessions(&self.db().pool).await {
+            tracing::error!(?e, "Failed to reset agent active_sessions at startup");
+        }
+
         let running_processes = ExecutionProcess::find_running(&self.db().pool).await?;
         for process in running_processes {
             tracing::info!(
@@ -1015,8 +1046,26 @@ pub trait ContainerService {
             .await?
             .ok_or(SqlxError::RowNotFound)?;
 
-        // Create a session for this workspace
-        let session = Session::create(
+        // M1 #16: capability-aware assignment hooks in BEFORE the session is
+        // created, so the session runs with the assigned agent's executor config +
+        // endpoint env. If no task is linked, no agents are configured, the task is
+        // already assigned / outside the active sprint, or no capable agent is free,
+        // `claim_assignment` returns `None` and we fall through to the caller's
+        // explicit `executor_config` — byte-for-byte upstream behavior (PRD §5.1).
+        let (executor_config, env_overrides, claimed_agent_id) =
+            match super::assignment::context_for_workspace(&self.db().pool, &workspace).await? {
+                Some(ctx) => {
+                    match super::assignment::claim_assignment(&self.db().pool, &ctx).await? {
+                        Some(a) => (a.executor_config, a.env.env, Some(a.agent.id)),
+                        None => (executor_config, None, None),
+                    }
+                }
+                None => (executor_config, None, None),
+            };
+
+        // Create a session for this workspace. From the successful claim onward, any
+        // failure must release the claimed slot so it is never leaked.
+        let session = match Session::create(
             &self.db().pool,
             &CreateSession {
                 executor: Some(executor_config.executor.to_string()),
@@ -1025,7 +1074,27 @@ pub trait ContainerService {
             Uuid::new_v4(),
             workspace.id,
         )
-        .await?;
+        .await
+        {
+            Ok(session) => session,
+            Err(e) => {
+                // The marker was never persisted on a session, so release directly.
+                if let Some(agent_id) = claimed_agent_id {
+                    self.release_agent_quietly(agent_id).await;
+                }
+                return Err(e.into());
+            }
+        };
+
+        // Record the claimed agent on the session so the slot is released exactly
+        // once when the run finalizes (`finalize_task`) or on a start failure below.
+        if let Some(agent_id) = claimed_agent_id
+            && let Err(e) = Session::set_claimed_agent(&self.db().pool, session.id, agent_id).await
+        {
+            // Marker not persisted ⇒ release directly to avoid a leak.
+            self.release_agent_quietly(agent_id).await;
+            return Err(e.into());
+        }
 
         let repos_with_setup: Vec<_> = repos.iter().filter(|r| r.setup_script.is_some()).collect();
 
@@ -1044,11 +1113,12 @@ pub trait ContainerService {
                 prompt,
                 executor_config: executor_config.clone(),
                 working_dir,
+                env_overrides,
             }),
             cleanup_action.map(Box::new),
         );
 
-        let execution_process = if all_parallel {
+        let start_result = if all_parallel {
             // All parallel: start each setup independently, then start coding agent
             for repo in &repos_with_setup {
                 if let Some(action) = Self::setup_action_for_repo(repo)
@@ -1070,7 +1140,7 @@ pub trait ContainerService {
                 &coding_action,
                 &ExecutionProcessRunReason::CodingAgent,
             )
-            .await?
+            .await
         } else {
             // Any sequential: chain ALL setups → coding agent via next_action
             let main_action = Self::build_sequential_setup_chain(&repos_with_setup, coding_action);
@@ -1080,10 +1150,39 @@ pub trait ContainerService {
                 &main_action,
                 &ExecutionProcessRunReason::SetupScript,
             )
-            .await?
+            .await
         };
 
-        Ok(execution_process)
+        match start_result {
+            Ok(execution_process) => Ok(execution_process),
+            Err(e) => {
+                // The marker is on the session, so take-once governs release —
+                // shared with the finalize monitor, which may also fire for the
+                // failed process. Whichever takes the marker first releases; a DB
+                // error is logged (not swallowed) so a leak is diagnosable and the
+                // startup recovery will reconcile it.
+                if claimed_agent_id.is_some() {
+                    match Session::take_claimed_agent(&self.db().pool, session.id).await {
+                        Ok(Some(agent_id)) => self.release_agent_quietly(agent_id).await,
+                        Ok(None) => {}
+                        Err(take_err) => tracing::error!(
+                            ?take_err,
+                            session_id = %session.id,
+                            "failed to take claimed agent on start failure; slot will be reconciled at next startup"
+                        ),
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Release an agent's concurrency slot, logging (never propagating) failures —
+    /// a failed release must not mask the original error (M1 #16).
+    async fn release_agent_quietly(&self, agent_id: Uuid) {
+        if let Err(e) = Agent::release(&self.db().pool, agent_id).await {
+            tracing::error!(?e, %agent_id, "failed to release agent concurrency slot");
+        }
     }
 
     async fn start_execution(

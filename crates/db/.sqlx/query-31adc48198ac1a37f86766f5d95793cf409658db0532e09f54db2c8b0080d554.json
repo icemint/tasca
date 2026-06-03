@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE agents\n               SET active_sessions = 0, updated_at = datetime('now', 'subsec')\n               WHERE active_sessions != 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "31adc48198ac1a37f86766f5d95793cf409658db0532e09f54db2c8b0080d554"
+}

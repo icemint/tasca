@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,12 @@ pub struct CodingAgentInitialRequest {
     /// If None, uses the container_ref directory directly.
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Per-run environment overrides injected by the assignment engine (M1 #16):
+    /// `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_API_KEY`) pointing the
+    /// agent at its assigned endpoint. `None` ⇒ no engine routing, i.e. upstream
+    /// behavior. Merged into the resolved executor's command env at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_overrides: Option<HashMap<String, String>>,
 }
 
 impl CodingAgentInitialRequest {
@@ -54,6 +60,12 @@ impl Executable for CodingAgentInitialRequest {
 
         if self.executor_config.has_overrides() {
             agent.apply_overrides(&self.executor_config);
+        }
+        // M1 #16: inject the assigned agent's endpoint env (e.g. ANTHROPIC_BASE_URL)
+        // into the resolved executor's command. No-op for executors that don't
+        // carry a command env (only ClaudeCode/QwenCode are engine-routable).
+        if let Some(env_overrides) = &self.env_overrides {
+            agent.merge_env(env_overrides);
         }
         agent.use_approvals(approvals.clone());
 

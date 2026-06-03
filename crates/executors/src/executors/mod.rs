@@ -214,6 +214,24 @@ impl AvailabilityInfo {
 pub trait StandardCodingAgentExecutor {
     fn apply_overrides(&mut self, _executor_config: &ExecutorConfig) {}
 
+    /// Merge per-run environment overrides into this executor's command env
+    /// (M1 #16). Only executors that carry a command env and honor the routing
+    /// vars (ClaudeCode, QwenCode) override this; explicit per-key entries win over
+    /// the executor's configured env. The default logs loudly rather than silently
+    /// dropping: `resolve_agent_executor` already rejects an endpoint override for
+    /// a non-honoring executor, so reaching this default with a non-empty env means
+    /// that invariant was bypassed — surface it instead of mis-routing silently.
+    fn merge_env(&mut self, env: &std::collections::HashMap<String, String>) {
+        if !env.is_empty() {
+            tracing::error!(
+                vars = env.len(),
+                "executor does not support env overrides; {} routing var(s) dropped — \
+                 assignment misconfiguration (endpoint override on a non-honoring executor)",
+                env.len()
+            );
+        }
+    }
+
     fn use_approvals(&mut self, _approvals: Arc<dyn ExecutorApprovalService>) {}
 
     async fn spawn(

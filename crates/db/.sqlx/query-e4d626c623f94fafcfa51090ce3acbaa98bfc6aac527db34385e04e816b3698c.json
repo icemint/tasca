@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: Uuid\", org_id as \"org_id: Uuid\", name, executor_profile, base_url, credential_ref as \"credential_ref: Uuid\", max_complexity_tier as \"max_complexity_tier!: ComplexityTier\", min_complexity_tier as \"min_complexity_tier!: ComplexityTier\", availability as \"availability!: Availability\", concurrency_limit as \"concurrency_limit!: i64\", active_sessions as \"active_sessions!: i64\", sandbox_profile, created_at as \"created_at!: DateTime<Utc>\", updated_at as \"updated_at!: DateTime<Utc>\"\n               FROM agents\n               ORDER BY active_sessions ASC, created_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "org_id: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "executor_profile",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "base_url",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "credential_ref: Uuid",
+        "ordinal": 5,
+        "type_info": "Blob"
+      },
+      {
+        "name": "max_complexity_tier!: ComplexityTier",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "min_complexity_tier!: ComplexityTier",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "availability!: Availability",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "concurrency_limit!: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "active_sessions!: i64",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "sandbox_profile",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e4d626c623f94fafcfa51090ce3acbaa98bfc6aac527db34385e04e816b3698c"
+}

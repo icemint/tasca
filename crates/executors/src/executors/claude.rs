@@ -341,6 +341,16 @@ impl StandardCodingAgentExecutor for ClaudeCode {
         }
     }
 
+    fn merge_env(&mut self, env: &std::collections::HashMap<String, String>) {
+        if env.is_empty() {
+            return;
+        }
+        self.cmd
+            .env
+            .get_or_insert_with(std::collections::HashMap::new)
+            .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
     fn use_approvals(&mut self, approvals: Arc<dyn ExecutorApprovalService>) {
         self.approvals_service = Some(approvals);
     }
@@ -2776,6 +2786,73 @@ mod tests {
     fn normalize(json: &ClaudeJson, worktree: &str) -> Vec<NormalizedEntry> {
         let mut processor = ClaudeLogProcessor::new();
         normalize_helper(&mut processor, json, worktree)
+    }
+
+    fn claude_with_env(env: Option<std::collections::HashMap<String, String>>) -> ClaudeCode {
+        ClaudeCode {
+            claude_code_router: None,
+            plan: None,
+            approvals: None,
+            model: None,
+            effort: None,
+            agent: None,
+            append_prompt: AppendPrompt::default(),
+            dangerously_skip_permissions: None,
+            cmd: crate::command::CmdOverrides {
+                base_command_override: None,
+                additional_params: None,
+                env,
+            },
+            approvals_service: None,
+            disable_api_key: None,
+        }
+    }
+
+    /// M1 #16: the routing env actually lands on the executor's command, new keys
+    /// are injected, an overlapping key is overridden, and unrelated configured
+    /// vars are retained.
+    #[test]
+    fn merge_env_injects_overrides_and_retains() {
+        use std::collections::HashMap;
+        let mut agent = claude_with_env(Some(HashMap::from([
+            ("ANTHROPIC_BASE_URL".to_string(), "http://old".to_string()),
+            ("KEEP".to_string(), "v".to_string()),
+        ])));
+        agent.merge_env(&HashMap::from([
+            ("ANTHROPIC_BASE_URL".to_string(), "http://new".to_string()),
+            ("ANTHROPIC_API_KEY".to_string(), "sk".to_string()),
+        ]));
+        let env = agent.cmd.env.expect("env present");
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("http://new"),
+            "the override wins over the configured value"
+        );
+        assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("sk"));
+        assert_eq!(
+            env.get("KEEP").map(String::as_str),
+            Some("v"),
+            "unrelated configured vars are retained"
+        );
+    }
+
+    /// M1 #16: merge into an executor with no configured env starts a fresh map.
+    #[test]
+    fn merge_env_from_none_creates_map() {
+        use std::collections::HashMap;
+        let mut agent = claude_with_env(None);
+        agent.merge_env(&HashMap::from([(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "http://x".to_string(),
+        )]));
+        assert_eq!(
+            agent
+                .cmd
+                .env
+                .and_then(|e| e.get("ANTHROPIC_BASE_URL").cloned())
+                .as_deref(),
+            Some("http://x")
+        );
     }
 
     #[test]

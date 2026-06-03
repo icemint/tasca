@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings — Tasca</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="assets/theme.js"></script>
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/mockups.css">
+<link rel="stylesheet" href="assets/app.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/states.css">
+<link rel="stylesheet" href="assets/a11y.css">
+<link rel="stylesheet" href="assets/components.css">
+<style>
+.set-wrap { display: grid; grid-template-columns: 232px minmax(0,1fr); flex: 1; min-height: 0; }
+.set-nav { border-right: 1px solid var(--line); padding: 20px 12px; overflow-y: auto; }
+.set-nav .grp { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-faint); padding: 0 10px; margin: 18px 0 8px; }
+.set-nav .grp:first-child { margin-top: 0; }
+.set-nav button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font-size: 14px; color: var(--fg-3); padding: 8px 10px; border-radius: var(--radius-sm); transition: color var(--dur), background var(--dur); }
+.set-nav button svg { width: 16px; height: 16px; flex: none; }
+.set-nav button:hover { color: var(--fg); background: var(--surface-2); }
+.set-nav button.on { color: var(--signal-2); background: color-mix(in srgb, var(--signal) 9%, transparent); }
+.set-body { overflow-y: auto; padding: 36px 40px 80px; }
+.set-section { display: none; max-width: 720px; }
+.set-section.on { display: block; }
+.set-h { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--fg); }
+.set-sub { color: var(--fg-3); font-size: 14.5px; margin-top: 8px; }
+.set-card { border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); margin-top: 24px; overflow: hidden; }
+.set-card-pad { padding: 22px; }
+.set-row { display: flex; align-items: flex-start; gap: 18px; padding: 18px 22px; border-top: 1px solid var(--line); }
+.set-row:first-child { border-top: none; }
+.set-row .rl { flex: 1; min-width: 0; }
+.set-row .rt { font-size: 14.5px; color: var(--fg); font-weight: 500; }
+.set-row .rd { font-size: 13px; color: var(--fg-4); margin-top: 4px; line-height: 1.5; }
+.set-row .rc { flex: none; display: flex; align-items: center; gap: 10px; }
+.set-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-4); margin-bottom: 9px; display: block; }
+.keyfield { display: flex; gap: 10px; align-items: center; }
+.keyfield .input { font-family: var(--font-mono); font-size: 13px; }
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th { text-align: left; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-4); font-weight: 500; padding: 12px 22px; border-bottom: 1px solid var(--line); }
+.tbl td { padding: 14px 22px; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--fg-2); vertical-align: middle; }
+.tbl tr:last-child td { border-bottom: none; }
+.mrow { display: flex; align-items: center; gap: 11px; }
+.mrow .nm { color: var(--fg); font-weight: 500; font-size: 14px; }
+.mrow .em { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); }
+.agent-card { border-top: 1px solid var(--line); padding: 18px 22px; display: flex; align-items: center; gap: 14px; }
+.agent-card:first-child { border-top: none; }
+.agent-card .ainfo { flex: 1; min-width: 0; }
+.agent-card .an { font-size: 14.5px; color: var(--fg); font-weight: 600; display: flex; align-items: center; gap: 9px; }
+.agent-card .am { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-4); margin-top: 5px; }
+.agent-card .acap { display: flex; align-items: center; gap: 6px; }
+.set-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px; border-top: 1px solid var(--line); background: var(--bg-sub); }
+.dep-hint { display: none; margin-top: 12px; }
+.dep-hint.show { display: flex; }
+.addform { display: none; border-top: 1px solid var(--line); padding: 22px; background: var(--bg-sub); }
+.addform.show { display: block; }
+.ff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 560px){ .ff-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to content</a>
+<div class="shell">
+  <!-- RAIL -->
+  <nav class="rail">
+    <a class="rail-brand" href="index.html" title="Tasca home">
+      <svg viewBox="0 0 26 26" fill="none" aria-hidden="true"><rect x="0.6" y="0.6" width="24.8" height="24.8" rx="7" fill="#0F1622" stroke="rgba(255,255,255,0.14)"/><rect x="5" y="6" width="3.6" height="14" rx="1.4" fill="#5C6779"/><rect x="11.2" y="6" width="3.6" height="10.5" rx="1.4" fill="#4D9CF6"/><rect x="17.4" y="6" width="3.6" height="7" rx="1.4" fill="#FFC53D"/></svg>
+    </a>
+    <a class="rail-btn" href="app.html" title="Board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/></svg></a>
+    <button class="rail-btn" title="My issues"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+    <button class="rail-btn" title="Agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M9 7V4h6v3M9 13h.01M15 13h.01"/></svg></button>
+    <button class="rail-btn" title="Sprints"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg></button>
+    <button class="rail-btn active" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1A1.6 1.6 0 005 19.4a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 003.4 14a2 2 0 010-4h.1A1.6 1.6 0 005 7.3a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 0010 3.4V3a2 2 0 014 0v.1a1.6 1.6 0 002.7 1.1l.1-.1A2 2 0 1119.6 7l-.1.1a1.6 1.6 0 00.3 2.7"/></svg></button>
+    <div class="rail-sep"></div>
+    <div class="rail-av" title="Dennis M.">DM</div>
+  </nav>
+
+  <!-- MAIN -->
+  <div class="main" id="main">
+    <div class="topbar">
+      <div class="tb-crumb"><span class="pj">T</span><span class="nm">tasca</span><span class="sep">/</span><span style="color:var(--fg-3)">Settings</span></div>
+      <div class="tb-right"><span class="chip" style="font-size:11px">owner</span><div class="rail-av" style="width:30px;height:30px">DM</div></div>
+    </div>
+
+    <div class="set-wrap">
+      <!-- SECTION NAV -->
+      <aside class="set-nav">
+        <div class="grp">Organization</div>
+        <button class="on" data-sec="org"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg>General &amp; API key</button>
+        <button data-sec="flags"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 21V4M4 4h13l-2 4 2 4H4"/></svg>Feature flags</button>
+        <button data-sec="members"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0M16 6a3 3 0 010 6M21 20a6 6 0 00-4-5.6"/></svg>Members &amp; roles</button>
+        <div class="grp">Delivery</div>
+        <button data-sec="agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M9 7V4h6v3M9 13h.01M15 13h.01"/></svg>Agents</button>
+        <button data-sec="sprints"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>Sprints</button>
+        <button data-sec="tier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18h4M4 12h9M4 6h14"/></svg>Tier policy</button>
+      </aside>
+
+      <!-- CONTENT -->
+      <div class="set-body">
+        <!-- ORG + API KEY -->
+        <section class="set-section on" data-sec="org">
+          <h1 class="set-h">Organization</h1>
+          <p class="set-sub">General settings and the org-level Anthropic key that powers the PM-assistant.</p>
+
+          <div class="set-card">
+            <div class="set-card-pad">
+              <label class="set-label" for="org-name">Organization name</label>
+              <input class="input" id="org-name" type="text" value="icemint" style="max-width:340px">
+            </div>
+            <div class="set-card-pad" style="border-top:1px solid var(--line)">
+              <label class="set-label" for="ant-key">Anthropic API key <span style="color:var(--fg-faint)">· PM-assistant only</span></label>
+              <div class="keyfield">
+                <input class="input" id="ant-key" type="text" value="sk-ant-api03-••••••••••••••••••••••••3f9a" readonly style="max-width:420px">
+                <button class="btn btn-outline btn-sm" id="rotate-key">Rotate</button>
+                <button class="btn btn-signal btn-sm" id="validate-key">Validate</button>
+              </div>
+              <div id="key-status" style="margin-top:12px;display:flex;align-items:center;gap:9px;font-size:13px;color:var(--fg-3)">
+                <span class="status-badge sb-approved">Valid</span>
+                <span class="mono" style="font-size:12px;color:var(--fg-4)">key_last_validated 2h ago</span>
+              </div>
+              <p class="rd" style="margin-top:12px;max-width:560px">Console keys only (<span class="mono" style="color:var(--fg-2)">sk-ant-api03-…</span>), pay-as-you-go, billed to the org. Subscription/OAuth tokens are rejected. Encrypted at rest under a dedicated server key — never returned in plaintext.</p>
+            </div>
+          </div>
+          <div class="set-card" style="border-color:color-mix(in srgb,var(--red) 30%,transparent)">
+            <div class="set-row"><div class="rl"><div class="rt" style="color:var(--red)">Delete organization</div><div class="rd">Permanently removes the org, its projects, agents, and audit history. This cannot be undone.</div></div><div class="rc"><button class="btn btn-danger btn-sm">Delete org</button></div></div>
+          </div>
+        </section>
+
+        <!-- FEATURE FLAGS -->
+        <section class="set-section" data-sec="flags">
+          <h1 class="set-h">Feature flags</h1>
+          <p class="set-sub">Roll capabilities out per phase. Some depend on others.</p>
+          <div class="set-card">
+            <div class="set-row"><div class="rl"><div class="rt">Complexity tiers</div><div class="rd">Tier every ticket and route by capability.</div></div><div class="rc"><span class="toggle on" data-flag="tiers"></span></div></div>
+            <div class="set-row"><div class="rl"><div class="rt">PM-assistant</div><div class="rd">Decompose, tier-suggest, and orchestrate with org-key Claude.</div>
+              <div class="alert alert-warn dep-hint" id="dep-key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01M10.3 4.3L2.6 18a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 4.3a2 2 0 00-3.4 0z"/></svg>Requires a valid Anthropic API key.</div>
+            </div><div class="rc"><span class="toggle on" data-flag="assistant"></span></div></div>
+            <div class="set-row"><div class="rl"><div class="rt">GitHub integration</div><div class="rd">PR↔ticket linkage and review-driven status automation.</div></div><div class="rc"><span class="toggle on" data-flag="github"></span></div></div>
+            <div class="set-row"><div class="rl"><div class="rt">Guest propose-only</div><div class="rd">Let external clients file proposals without execution rights.</div></div><div class="rc"><span class="toggle" data-flag="guest"></span></div></div>
+          </div>
+        </section>
+
+        <!-- MEMBERS -->
+        <section class="set-section" data-sec="members">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+            <div><h1 class="set-h">Members &amp; roles</h1><p class="set-sub">Owner ⊇ admin ⊇ member ⊇ guest. Guests can propose only.</p></div>
+            <button class="btn btn-primary btn-sm" style="flex:none">Invite</button>
+          </div>
+          <div class="set-card" style="margin-top:24px">
+            <table class="tbl">
+              <thead><tr><th>Member</th><th>Role</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td><div class="mrow"><span class="rail-av" style="width:30px;height:30px;background:var(--violet)">DM</span><div><div class="nm">Dennis M.</div><div class="em">dennis@icemint.dev</div></div></div></td>
+                  <td><div class="c-select" style="width:130px"><select><option>owner</option><option>admin</option><option>member</option><option>guest</option></select></div></td><td><span class="status-badge sb-approved">Active</span></td></tr>
+                <tr><td><div class="mrow"><span class="rail-av" style="width:30px;height:30px;background:#0EA5A0">AK</span><div><div class="nm">Ana K.</div><div class="em">ana@icemint.dev</div></div></div></td>
+                  <td><div class="c-select" style="width:130px"><select><option>admin</option><option>owner</option><option>member</option><option>guest</option></select></div></td><td><span class="status-badge sb-approved">Active</span></td></tr>
+                <tr><td><div class="mrow"><span class="rail-av" style="width:30px;height:30px;background:#C2410C">PS</span><div><div class="nm">Priya S.</div><div class="em">priya@icemint.dev</div></div></div></td>
+                  <td><div class="c-select" style="width:130px"><select><option>member</option><option>admin</option><option>guest</option></select></div></td><td><span class="status-badge sb-review">Invited</span></td></tr>
+                <tr><td><div class="mrow"><span class="rail-av" style="width:30px;height:30px;background:var(--surface-3);color:var(--fg-3)">AC</span><div><div class="nm">Acme Corp</div><div class="em">external client</div></div></div></td>
+                  <td><div class="c-select" style="width:130px"><select><option>guest</option><option>member</option></select></div></td><td><span class="chip" style="font-size:11px">propose-only</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- AGENTS -->
+        <section class="set-section" data-sec="agents">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+            <div><h1 class="set-h">Agents</h1><p class="set-sub">Each agent declares the tiers it can take, where it runs, and its concurrency.</p></div>
+            <button class="btn btn-primary btn-sm" id="add-agent-btn" style="flex:none">+ Add agent</button>
+          </div>
+          <div class="set-card" style="margin-top:24px">
+            <div class="agent-card">
+              <span class="av-agent local" style="width:34px;height:34px">Q</span>
+              <div class="ainfo"><div class="an">qwen3-coder <span class="avail avail-free"></span></div><div class="am">local · http://m1max.tailnet:11434 · concurrency 1</div></div>
+              <div class="acap"><span class="tier tier-basic"><span class="dot"></span>Basic</span><span style="color:var(--fg-faint)">→</span><span class="tier tier-medium"><span class="dot"></span>Medium</span></div>
+              <span class="toggle on" style="margin-left:8px"></span>
+            </div>
+            <div class="agent-card">
+              <span class="av-agent" style="width:34px;height:34px">C</span>
+              <div class="ainfo"><div class="an">claude-sonnet <span class="avail avail-free"></span></div><div class="am">cloud · anthropic:worker · concurrency 3</div></div>
+              <div class="acap"><span class="tier tier-medium"><span class="dot"></span>Medium</span><span style="color:var(--fg-faint)">→</span><span class="tier tier-ultra"><span class="dot"></span>Ultra</span></div>
+              <span class="toggle on" style="margin-left:8px"></span>
+            </div>
+            <div class="agent-card" style="opacity:0.7">
+              <span class="av-agent" style="width:34px;height:34px">Cx</span>
+              <div class="ainfo"><div class="an">codex-mini <span class="avail avail-off"></span></div><div class="am">cloud · openai:worker · paused</div></div>
+              <div class="acap"><span class="tier tier-low"><span class="dot"></span>Low</span><span style="color:var(--fg-faint)">→</span><span class="tier tier-hard"><span class="dot"></span>Hard</span></div>
+              <span class="toggle" style="margin-left:8px"></span>
+            </div>
+            <div class="addform" id="add-agent-form">
+              <div class="ff-grid">
+                <div><label class="set-label">Name</label><input class="input" placeholder="agent name"></div>
+                <div><label class="set-label">Executor</label><div class="c-select"><select><option>qwen</option><option>claude-code</option><option>codex</option><option>gemini</option><option>cursor</option></select></div></div>
+                <div><label class="set-label">Base URL / credential</label><input class="input mono" placeholder="http://host:11434"></div>
+                <div><label class="set-label">Concurrency</label><input class="input" type="number" value="1"></div>
+                <div><label class="set-label">Min tier</label><div class="c-select"><select><option>basic</option><option>low</option><option>medium</option></select></div></div>
+                <div><label class="set-label">Max tier</label><div class="c-select"><select><option>medium</option><option>low</option><option>hard</option><option>ultra</option></select></div></div>
+              </div>
+              <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px"><button class="btn btn-ghost2 btn-sm" id="cancel-agent">Cancel</button><button class="btn btn-primary btn-sm">Add agent</button></div>
+            </div>
+          </div>
+          <p class="rd" style="margin-top:14px">Local agents default to <span class="mono" style="color:var(--fg-2)">concurrency 1</span> — a single GPU serializes inference. Agents appear in the assignee picker as a distinct member type.</p>
+        </section>
+
+        <!-- SPRINTS -->
+        <section class="set-section" data-sec="sprints">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+            <div><h1 class="set-h">Sprints</h1><p class="set-sub">Assignment pickup is scoped to the active sprint.</p></div>
+            <button class="btn btn-primary btn-sm" style="flex:none">+ New sprint</button>
+          </div>
+          <div class="set-card" style="margin-top:24px">
+            <table class="tbl">
+              <thead><tr><th>Sprint</th><th>State</th><th>Dates</th><th>Capacity</th></tr></thead>
+              <tbody>
+                <tr><td style="color:var(--fg);font-weight:500">Sprint 14</td><td><span class="status-badge sb-approved">Active</span></td><td class="mono" style="font-size:12px;color:var(--fg-4)">May 26 – Jun 6</td><td class="mono" style="font-size:12px">18 / 24 pts</td></tr>
+                <tr><td style="color:var(--fg);font-weight:500">Sprint 15</td><td><span class="status-badge sb-open">Planned</span></td><td class="mono" style="font-size:12px;color:var(--fg-4)">Jun 9 – Jun 20</td><td class="mono" style="font-size:12px">— / 24 pts</td></tr>
+                <tr><td style="color:var(--fg-3)">Sprint 13</td><td><span class="chip" style="font-size:11px">Archived</span></td><td class="mono" style="font-size:12px;color:var(--fg-4)">May 12 – May 23</td><td class="mono" style="font-size:12px">22 / 22 pts</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TIER POLICY -->
+        <section class="set-section" data-sec="tier">
+          <h1 class="set-h">Tier policy</h1>
+          <p class="set-sub">Defaults and guards for how tickets get tiered in this project.</p>
+          <div class="set-card">
+            <div class="set-row"><div class="rl"><div class="rt">Require a tier on creation</div><div class="rd">Block ticket creation until a complexity tier is set.</div></div><div class="rc"><span class="toggle" data-flag="require-tier"></span></div></div>
+            <div class="set-row"><div class="rl"><div class="rt">Default tier for new issues</div><div class="rd">Applied when a tier isn't chosen manually.</div></div><div class="rc"><div class="c-select" style="width:150px"><select><option>medium</option><option>basic</option><option>low</option></select></div></div></div>
+            <div class="set-row"><div class="rl"><div class="rt">Block start on missing required fields</div><div class="rd">Enforce the per-tier field checklist before an agent may pick up.</div></div><div class="rc"><span class="toggle on" data-flag="gate-fields"></span></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // section switching
+  var navBtns = document.querySelectorAll('.set-nav button');
+  var secs = document.querySelectorAll('.set-section');
+  navBtns.forEach(function(b){
+    b.addEventListener('click', function(){
+      navBtns.forEach(function(x){ x.classList.remove('on'); });
+      b.classList.add('on');
+      secs.forEach(function(s){ s.classList.toggle('on', s.dataset.sec === b.dataset.sec); });
+      document.querySelector('.set-body').scrollTop = 0;
+    });
+  });
+  // toggles
+  document.querySelectorAll('.toggle').forEach(function(t){
+    t.addEventListener('click', function(){
+      t.classList.toggle('on');
+      if (t.dataset.flag === 'assistant') {
+        document.getElementById('dep-key').classList.toggle('show', t.classList.contains('on') && !keyValid);
+      }
+    });
+  });
+  // validate key
+  var keyValid = true;
+  document.getElementById('validate-key').addEventListener('click', function(){
+    var btn = this; btn.classList.add('is-loading');
+    setTimeout(function(){
+      btn.classList.remove('is-loading');
+      keyValid = true;
+      document.getElementById('key-status').innerHTML = '<span class="status-badge sb-approved">Valid</span><span class="mono" style="font-size:12px;color:var(--fg-4)">key_last_validated just now</span>';
+    }, 900);
+  });
+  // add agent form
+  var addBtn = document.getElementById('add-agent-btn'), form = document.getElementById('add-agent-form');
+  addBtn.addEventListener('click', function(){ form.classList.add('show'); form.scrollIntoView({block:'nearest'}); });
+  document.getElementById('cancel-agent').addEventListener('click', function(){ form.classList.remove('show'); });
+})();
+</script>
+<script src="assets/a11y.js" defer></script>
+</body>
+</html>

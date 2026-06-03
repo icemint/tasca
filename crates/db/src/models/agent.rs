@@ -67,6 +67,23 @@ impl Agent {
         .await
     }
 
+    /// The full agent pool. The assignment engine ([`decide`]) needs every agent
+    /// — not a pre-filtered subset — to distinguish "no agents configured" (→
+    /// manual override) from "agents exist but none covers the tier" (→ no capable
+    /// agent). Ordered least-loaded-first so the engine's selection is stable.
+    ///
+    /// [`decide`]: assignment_engine::decide
+    pub async fn list(pool: &SqlitePool) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as!(
+            Agent,
+            r#"SELECT id as "id!: Uuid", org_id as "org_id: Uuid", name, executor_profile, base_url, credential_ref as "credential_ref: Uuid", max_complexity_tier as "max_complexity_tier!: ComplexityTier", min_complexity_tier as "min_complexity_tier!: ComplexityTier", availability as "availability!: Availability", concurrency_limit as "concurrency_limit!: i64", active_sessions as "active_sessions!: i64", sandbox_profile, created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>"
+               FROM agents
+               ORDER BY active_sessions ASC, created_at ASC"#
+        )
+        .fetch_all(pool)
+        .await
+    }
+
     /// Agents that could take a task of `tier`: `free`, with spare capacity, and
     /// whose `[min, max]` band contains `tier`. SQL prefilters availability +
     /// capacity; the ordinal tier band is checked in Rust (TEXT tiers don't sort
@@ -106,6 +123,24 @@ impl Agent {
         )
         .fetch_optional(pool)
         .await
+    }
+
+    /// Reset every agent's `active_sessions` to 0 (M1 #16 startup recovery). At
+    /// process startup no agent run is in flight (orphaned executions are killed),
+    /// so the true concurrent-session count is 0. Paired with
+    /// [`Session::clear_all_claimed_agents`], this heals any concurrency slot that
+    /// leaked because a previous run crashed between `claim` and release.
+    ///
+    /// [`Session::clear_all_claimed_agents`]: crate::models::session::Session::clear_all_claimed_agents
+    pub async fn reset_active_sessions(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+        let res = sqlx::query!(
+            r#"UPDATE agents
+               SET active_sessions = 0, updated_at = datetime('now', 'subsec')
+               WHERE active_sessions != 0"#
+        )
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Release a previously-claimed slot. Floored at 0 so a double-release can't
@@ -184,6 +219,35 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
+            0
+        );
+    }
+
+    /// M1 #16 startup recovery: reset_active_sessions zeroes every agent's counter
+    /// so a slot leaked by a crashed run heals on restart.
+    #[sqlx::test]
+    async fn reset_active_sessions_zeroes_all(pool: SqlitePool) {
+        let id = Uuid::new_v4();
+        insert_agent(&pool, id, 5, "ultra").await;
+        Agent::claim(&pool, id).await.unwrap();
+        Agent::claim(&pool, id).await.unwrap();
+        assert_eq!(
+            Agent::find_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .active_sessions,
+            2
+        );
+
+        let reset = Agent::reset_active_sessions(&pool).await.unwrap();
+        assert_eq!(reset, 1, "the one non-idle agent row was reset");
+        assert_eq!(
+            Agent::find_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .active_sessions,
             0
         );
     }

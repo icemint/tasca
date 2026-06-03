@@ -74,6 +74,16 @@ impl StandardCodingAgentExecutor for QwenCode {
         }
     }
 
+    fn merge_env(&mut self, env: &std::collections::HashMap<String, String>) {
+        if env.is_empty() {
+            return;
+        }
+        self.cmd
+            .env
+            .get_or_insert_with(std::collections::HashMap::new)
+            .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
     fn use_approvals(&mut self, approvals: Arc<dyn ExecutorApprovalService>) {
         self.approvals = Some(approvals);
     }
@@ -206,5 +216,47 @@ impl StandardCodingAgentExecutor for QwenCode {
         Ok(Box::pin(futures::stream::once(async move {
             patch::executor_discovered_options(options)
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn qwen_with_env(env: Option<HashMap<String, String>>) -> QwenCode {
+        QwenCode {
+            append_prompt: AppendPrompt::default(),
+            model: None,
+            agent: None,
+            yolo: None,
+            cmd: CmdOverrides {
+                base_command_override: None,
+                additional_params: None,
+                env,
+            },
+            approvals: None,
+        }
+    }
+
+    /// M1 #16: QwenCode honors the injected routing env — override wins, unrelated
+    /// configured vars are retained (mirrors the ClaudeCode path).
+    #[test]
+    fn merge_env_injects_and_overrides() {
+        let mut agent = qwen_with_env(Some(HashMap::from([
+            ("ANTHROPIC_BASE_URL".to_string(), "http://old".to_string()),
+            ("KEEP".to_string(), "v".to_string()),
+        ])));
+        agent.merge_env(&HashMap::from([(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "http://new".to_string(),
+        )]));
+        let env = agent.cmd.env.expect("env present");
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("http://new")
+        );
+        assert_eq!(env.get("KEEP").map(String::as_str), Some("v"));
     }
 }

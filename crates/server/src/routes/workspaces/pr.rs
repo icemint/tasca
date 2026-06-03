@@ -167,6 +167,7 @@ async fn trigger_pr_description_follow_up(
             prompt,
             executor_config: executors::profile::ExecutorConfig::from(executor_profile_id.clone()),
             working_dir,
+            env_overrides: None,
         })
     };
 

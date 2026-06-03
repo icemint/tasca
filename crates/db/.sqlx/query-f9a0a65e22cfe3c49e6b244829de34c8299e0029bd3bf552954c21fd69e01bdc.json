@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sessions\n               SET claimed_agent_id = NULL, updated_at = datetime('now', 'subsec')\n               WHERE claimed_agent_id IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "f9a0a65e22cfe3c49e6b244829de34c8299e0029bd3bf552954c21fd69e01bdc"
+}
