@@ -211,7 +211,7 @@ export function KanbanIssuePanel({
   const { t } = useTranslation('common');
   const isCreateMode = mode === 'create';
   const breadcrumbTextClass =
-    'min-w-0 text-sm text-normal truncate rounded-sm px-1 py-0.5 hover:bg-panel hover:text-high transition-colors';
+    'min-w-0 text-sm text-fg-2 truncate rounded-sm px-1 py-0.5 hover:bg-surface-2 hover:text-fg transition-colors';
   const creatorName =
     creatorUser?.first_name?.trim() || creatorUser?.username?.trim() || null;
   const showCreator = !isCreateMode && Boolean(creatorName);
@@ -272,14 +272,14 @@ export function KanbanIssuePanel({
       tabIndex={-1}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-base py-half border-b shrink-0">
+      <div className="flex items-center justify-between px-base py-half border-b border-line shrink-0">
         <div className="flex items-center gap-half min-w-0 font-ibm-plex-mono">
           <span className={`${breadcrumbTextClass} shrink-0`}>{displayId}</span>
           {!isCreateMode && onCopyLink && (
             <button
               type="button"
               onClick={onCopyLink}
-              className="p-half rounded-sm text-low hover:text-normal hover:bg-panel transition-colors"
+              className="p-half rounded-sm text-fg-3 hover:text-fg-2 hover:bg-surface-2 transition-colors"
               aria-label={t('kanban.copyLink')}
             >
               <LinkIcon className="size-icon-sm" weight="bold" />
@@ -291,7 +291,7 @@ export function KanbanIssuePanel({
             <button
               type="button"
               onClick={onMoreActions}
-              className="p-half rounded-sm text-low hover:text-normal hover:bg-panel transition-colors"
+              className="p-half rounded-sm text-fg-3 hover:text-fg-2 hover:bg-surface-2 transition-colors"
               aria-label={t('kanban.moreActions')}
             >
               <DotsThreeIcon className="size-icon-sm" weight="bold" />
@@ -300,7 +300,7 @@ export function KanbanIssuePanel({
           <button
             type="button"
             onClick={onClose}
-            className="p-half rounded-sm text-low hover:text-normal hover:bg-panel transition-colors"
+            className="p-half rounded-sm text-fg-3 hover:text-fg-2 hover:bg-surface-2 transition-colors"
             aria-label={t('kanban.closePanel')}
           >
             <XIcon className="size-icon-sm" weight="bold" />
@@ -311,7 +311,7 @@ export function KanbanIssuePanel({
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
         {/* Property Row */}
-        <div className="px-base py-base border-b">
+        <div className="px-base py-base border-b border-line">
           <IssuePropertyRow
             statusId={formData.statusId}
             priority={formData.priority}
@@ -344,7 +344,7 @@ export function KanbanIssuePanel({
         </div>
 
         {/* Tags Row */}
-        <div className="px-base py-base border-b">
+        <div className="px-base py-base border-b border-line">
           <IssueTagsRow
             selectedTagIds={formData.tagIds}
             availableTags={tags}
@@ -371,8 +371,8 @@ export function KanbanIssuePanel({
               aria-label="Issue title"
               disabled={isSubmitting}
               className={cn(
-                'px-base text-lg font-medium text-high',
-                'placeholder:text-high/50',
+                'px-base text-lg font-medium text-fg',
+                'placeholder:text-fg/50',
                 isSubmitting && 'opacity-50 pointer-events-none'
               )}
             />
@@ -380,7 +380,7 @@ export function KanbanIssuePanel({
             <div
               className={cn(
                 'pointer-events-none absolute inset-0 px-base',
-                'text-high/50 font-medium text-lg',
+                'text-fg/50 font-medium text-lg',
                 'hidden',
                 "[[data-empty='true']_+_&]:block" // show placeholder when previous sibling data-empty=true
               )}
@@ -438,7 +438,7 @@ export function KanbanIssuePanel({
               className: cn(
                 'px-base',
                 isDescriptionEditing ? 'min-h-[100px]' : 'min-h-[2rem]',
-                !isDescriptionEditing && !formData.description && 'text-low'
+                !isDescriptionEditing && !formData.description && 'text-fg-3'
               ),
               localAttachments,
               showStaticToolbar: !isCreateMode || isDescriptionEditing,
@@ -464,7 +464,7 @@ export function KanbanIssuePanel({
                             disabled={isSubmitting || isUploading}
                             className={cn(
                               'p-half rounded-sm transition-colors',
-                              'text-low hover:text-normal hover:bg-panel/50',
+                              'text-fg-3 hover:text-fg-2 hover:bg-surface-2/50',
                               'disabled:opacity-50 disabled:cursor-not-allowed'
                             )}
                             title={t('kanban.attachFile')}
@@ -493,15 +493,15 @@ export function KanbanIssuePanel({
               </div>
             )}
             {dropzoneProps?.isDragActive && (
-              <div className="absolute inset-0 z-50 bg-primary/80 backdrop-blur-sm border-2 border-dashed border-brand rounded flex items-center justify-center pointer-events-none animate-in fade-in-0 duration-150">
+              <div className="absolute inset-0 z-50 bg-surface/80 backdrop-blur-sm border-2 border-dashed border-signal rounded flex items-center justify-center pointer-events-none animate-in fade-in-0 duration-150">
                 <div className="text-center">
-                  <div className="mx-auto mb-2 w-10 h-10 rounded-full bg-brand/10 flex items-center justify-center">
-                    <ImageIcon className="h-5 w-5 text-brand" />
+                  <div className="mx-auto mb-2 w-10 h-10 rounded-full bg-signal/10 flex items-center justify-center">
+                    <ImageIcon className="h-5 w-5 text-signal" />
                   </div>
-                  <p className="text-sm font-medium text-high">
+                  <p className="text-sm font-medium text-fg">
                     {t('kanban.dropFilesHere')}
                   </p>
-                  <p className="text-xs text-low mt-0.5">
+                  <p className="text-xs text-fg-3 mt-0.5">
                     {t('kanban.fileDropHint')}
                   </p>
                 </div>
@@ -512,7 +512,7 @@ export function KanbanIssuePanel({
 
         {/* Create Draft Workspace Toggle (Create mode only) */}
         {isCreateMode && (
-          <div className="p-base border-t">
+          <div className="p-base border-t border-line">
             <Toggle
               checked={formData.createDraftWorkspace}
               onCheckedChange={(checked) =>
@@ -542,7 +542,7 @@ export function KanbanIssuePanel({
                 disabled={isSubmitting}
                 aria-label="Delete draft"
                 title="Delete draft"
-                className="hover:text-error hover:bg-error/10"
+                className="hover:text-red hover:bg-red/10"
               />
             )}
           </div>
@@ -550,22 +550,30 @@ export function KanbanIssuePanel({
 
         {/* Workspaces Section (Edit mode only) */}
         {!isCreateMode && issueId && renderWorkspacesSection && (
-          <div className="border-t">{renderWorkspacesSection(issueId)}</div>
+          <div className="border-t border-line">
+            {renderWorkspacesSection(issueId)}
+          </div>
         )}
 
         {/* Relationships Section (Edit mode only) */}
         {!isCreateMode && issueId && renderRelationshipsSection && (
-          <div className="border-t">{renderRelationshipsSection(issueId)}</div>
+          <div className="border-t border-line">
+            {renderRelationshipsSection(issueId)}
+          </div>
         )}
 
         {/* Sub-Issues Section (Edit mode only) */}
         {!isCreateMode && issueId && renderSubIssuesSection && (
-          <div className="border-t">{renderSubIssuesSection(issueId)}</div>
+          <div className="border-t border-line">
+            {renderSubIssuesSection(issueId)}
+          </div>
         )}
 
         {/* Comments Section (Edit mode only) */}
         {!isCreateMode && issueId && renderCommentsSection && (
-          <div className="border-t">{renderCommentsSection(issueId)}</div>
+          <div className="border-t border-line">
+            {renderCommentsSection(issueId)}
+          </div>
         )}
       </div>
     </div>

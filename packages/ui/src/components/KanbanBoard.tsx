@@ -109,11 +109,11 @@ export const KanbanCard = ({
         return (
           <Card
             className={cn(
-              'p-base outline-none flex-col border -mt-[1px] -mx-[1px] bg-primary',
+              'p-base outline-none flex-col border border-line -mt-[1px] -mx-[1px] bg-surface',
               snapshot.isDragging && 'cursor-grabbing shadow-lg',
               isSelected
-                ? 'ring-2 ring-accent ring-inset bg-accent/5'
-                : isOpen && 'ring-2 ring-secondary-foreground ring-inset',
+                ? 'ring-2 ring-signal ring-inset bg-signal/5'
+                : isOpen && 'ring-2 ring-signal ring-inset',
               className
             )}
             ref={setRefs}
@@ -146,7 +146,7 @@ export const KanbanCard = ({
                   onClick={(e) => e.stopPropagation()}
                 >
                   <DotsSixVerticalIcon
-                    className="size-icon-xs text-low"
+                    className="size-icon-xs text-fg-3"
                     weight="bold"
                   />
                 </div>
@@ -217,7 +217,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
     <Card
       className={cn(
         'sticky top-0 z-20 flex shrink-0 items-center gap-base p-base flex gap-base',
-        'bg-background',
+        'bg-surface',
         props.className
       )}
       style={{
@@ -237,7 +237,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
-              className="m-0 p-0 h-0 text-foreground/50 hover:text-foreground"
+              className="m-0 p-0 h-0 text-fg-3 hover:text-fg"
               onClick={props.onAddTask}
               aria-label={t('actions.addTask')}
             >
@@ -270,7 +270,7 @@ export const KanbanProvider = ({
     <DragDropContext onDragEnd={onDragEnd}>
       <div
         className={cn(
-          'inline-grid grid-flow-col auto-cols-[minmax(200px,400px)] divide-x border-x items-stretch min-h-full',
+          'inline-grid grid-flow-col auto-cols-[minmax(200px,400px)] divide-x divide-line border-x border-line items-stretch min-h-full',
           className
         )}
       >

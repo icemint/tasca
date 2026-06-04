@@ -96,21 +96,21 @@ function getHostStatusLabel(status: AppBarHostStatus): string {
 }
 
 function getHostStatusIndicatorClass(status: AppBarHostStatus): string {
-  if (status === 'online') return 'bg-success';
-  if (status === 'offline') return 'bg-low';
-  return 'bg-white border-warning';
+  if (status === 'online') return 'bg-green';
+  if (status === 'offline') return 'bg-fg-faint';
+  return 'bg-surface border-amber';
 }
 
 function AppBarSectionLabel({ children }: { children: ReactNode }) {
   return (
-    <p className="w-10 text-center text-[9px] font-medium leading-none tracking-wide text-low">
+    <p className="w-10 text-center text-[9px] font-medium leading-none tracking-wide text-fg-3">
       {children}
     </p>
   );
 }
 
 const appBarItemBaseClassName =
-  'flex items-center justify-center w-10 h-10 rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand';
+  'flex items-center justify-center w-10 h-10 rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal';
 
 type AppBarSection = {
   key: 'local' | 'remote' | 'projects' | 'export';
@@ -168,8 +168,8 @@ function getStandardAppBarButtonClassName({
     appBarItemBaseClassName,
     'cursor-pointer',
     isActive
-      ? 'bg-brand/20 text-brand hover:bg-brand/20'
-      : 'bg-primary text-normal hover:bg-brand/10',
+      ? 'bg-signal/20 text-signal hover:bg-signal/20'
+      : 'bg-surface text-fg-2 hover:bg-signal/10',
     className
   );
 }
@@ -186,12 +186,12 @@ function getHostButtonClassName({
   return cn(
     appBarItemBaseClassName,
     isOffline
-      ? 'bg-primary text-low opacity-50 cursor-not-allowed'
+      ? 'bg-surface text-fg-3 opacity-50 cursor-not-allowed'
       : isActive
-        ? 'bg-brand/20 text-brand cursor-pointer hover:bg-brand/20'
+        ? 'bg-signal/20 text-signal cursor-pointer hover:bg-signal/20'
         : host.status === 'unpaired'
-          ? 'bg-primary text-warning cursor-pointer hover:bg-warning/10'
-          : 'bg-primary text-normal cursor-pointer hover:bg-brand/10'
+          ? 'bg-surface text-amber cursor-pointer hover:bg-amber/10'
+          : 'bg-surface text-fg-2 cursor-pointer hover:bg-signal/10'
   );
 }
 
@@ -273,7 +273,7 @@ export function AppBar({
                 icon: LinkIcon,
                 onClick: onPairHostClick,
                 className:
-                  'bg-primary text-muted hover:text-normal hover:bg-tertiary',
+                  'bg-surface text-fg-3 hover:text-fg-2 hover:bg-surface-3',
               },
             ]
           : []),
@@ -315,7 +315,7 @@ export function AppBar({
       label: 'Create project',
       icon: PlusIcon,
       onClick: onCreateProject,
-      className: 'bg-primary text-muted hover:text-normal hover:bg-tertiary',
+      className: 'bg-surface text-fg-3 hover:text-fg-2 hover:bg-surface-3',
       wrapperClassName: 'pt-base',
     });
   }
@@ -375,7 +375,7 @@ export function AppBar({
               <span
                 className={cn(
                   'absolute -top-1 -right-1 z-10',
-                  'w-3.5 h-3.5 rounded-full border border-secondary',
+                  'w-3.5 h-3.5 rounded-full border border-line',
                   getHostStatusIndicatorClass(item.host.status)
                 )}
                 aria-hidden="true"
@@ -411,10 +411,10 @@ export function AppBar({
               </PopoverTrigger>
             </Tooltip>
             <PopoverContent side="right" sideOffset={8}>
-              <p className="text-sm font-medium text-high">
+              <p className="text-sm font-medium text-fg">
                 {t('appBar.kanban.title')}
               </p>
-              <p className="text-xs text-low mt-1">
+              <p className="text-xs text-fg-3 mt-1">
                 {t('appBar.kanban.description')}
               </p>
               <div className="mt-base">
@@ -424,7 +424,7 @@ export function AppBar({
                     onClick={item.onSignIn}
                     className={cn(
                       'px-base py-1 rounded-sm text-xs',
-                      'bg-brand text-on-brand hover:bg-brand-hover cursor-pointer'
+                      'bg-signal text-on-signal hover:bg-signal-2 cursor-pointer'
                     )}
                   >
                     {t('signIn')}
@@ -437,7 +437,7 @@ export function AppBar({
       case 'loading':
         return (
           <div className="flex items-center justify-center w-10 h-10">
-            <SpinnerIcon className="size-5 animate-spin text-muted" />
+            <SpinnerIcon className="size-5 animate-spin text-fg-3" />
           </div>
         );
       case 'project-list':
@@ -480,7 +480,7 @@ export function AppBar({
                                 snapshot.isDragging && 'shadow-lg',
                                 item.activeProjectId === project.id
                                   ? ''
-                                  : 'bg-primary text-normal hover:opacity-80'
+                                  : 'bg-surface text-fg-2 hover:opacity-80'
                               )}
                               style={
                                 item.activeProjectId === project.id
@@ -514,7 +514,7 @@ export function AppBar({
       onMouseLeave={onHoverEnd}
       className={cn(
         'flex flex-col items-center h-full min-h-0 overflow-y-auto p-base gap-base',
-        'bg-secondary border-r border-border'
+        'bg-surface-2 border-r border-line'
       )}
     >
       {sections.map((section) => (
@@ -566,7 +566,7 @@ export function AppBar({
               className={cn(
                 'flex items-center justify-center py-1 rounded-md w-10',
                 'text-[9px] font-ibm-plex-mono font-medium leading-none',
-                'bg-brand text-on-brand hover:bg-brand-hover',
+                'bg-signal text-on-signal hover:bg-signal-2',
                 'transition-colors cursor-pointer'
               )}
             >
@@ -576,7 +576,7 @@ export function AppBar({
         ) : (
           appVersion && (
             <p
-              className="text-[9px] font-ibm-plex-mono text-low leading-none truncate max-w-10 text-center"
+              className="text-[9px] font-ibm-plex-mono text-fg-3 leading-none truncate max-w-10 text-center"
               title={`v${appVersion}`}
             >
               v{appVersion}
