@@ -391,11 +391,20 @@ M
 ### M1 app-UI tail (milestone `M-AppUI`)
 
 - ✅ **#104** — Board tier badge + filter (flag-gated `tiers`; live in `packages/web-core/src/features/kanban/ui/KanbanContainer.tsx`).
-- ⏳ **#105** — Issue Drawer TierPicker + RequiredFieldsChecklist (`flag.tiers`) — PENDING.
-- ⏳ **#107** — Issue Drawer Sprint selector (`flag.sprints`) — PENDING (needs the sprints Electric shape, deferred from #12).
-- ⏳ **#117** — Flip M1 app-UI flags when routing-core schema lands — PENDING.
+- ✅ **#105** — Issue Drawer TierPicker (PR #153) — command-bar selection dialog → `updateIssue({complexity_tier, tier_source:'manual'})`. Edit-only.
+- ✅ **#107** — Issue Drawer Sprint selector + the sprints Electric shape (PR #154) — `PROJECT_SPRINTS_SHAPE` + admin-listed fallback; selector writes `issues.sprint_id`. (Sprint *creation* API still TODO → #158.)
+- ✅ **#117** — Enabled `tiers`+`sprints` in the local-web dev build only (`packages/local-web/.env.development`); prod default-off (PR #155). The flag-flip *tracking* issue #117 stays open for `agents`/`run_view`/`audit`.
+- ✅ **#156/#157** — Per-org feature flags (production rollout lever): `organizations.feature_flags` JSONB + admin `PATCH /v1/organizations/{id}/flags` + `OrgFlagsProvider` (precedence **org > env > default-off**).
 - ⏭ **#106** — Issue Drawer AssigneePicker (agent vs human) — DEFERRED to M3 (needs synthetic agent-as-member #14).
 - ⏭ **#109** — Activity timeline (agent/assistant actors) — DEFERRED to M3.
+
+> **M-AppUI port — ground rules (2026-06-04, approved).** The visual design system is specified (`design-system/`) and its **token bridge is already wired** (#98: `design-system/assets/tokens.css` → `packages/web-core/src/app/styles/new/tokens-bridge.css` → Tailwind utilities via `tailwind.new.config.js`). So M-AppUI = **re-skin the live screens + build the missing surfaces**, not "build a design system." Decisions:
+> - **Fidelity: token-consistent + structural** parity with the mockups — NOT pixel-perfect.
+> - **Both shells validated:** remote-web (`app.tasca.dev`) AND the local-web/Tauri shell (shared `web-core` propagates; check Tauri safe-area/overscroll).
+> - **Flag-off now, flip later:** backend-gated surfaces (settings AI-key/roles, run-view, guest) are built behind their flag and merged flag-off; flips deferred to #117–#121 as the M2/M3/M5 backends land. Per-org enablement uses #156's org-flags (no redeploy).
+> - **Deploy guardrail:** every M-AppUI deploy redeploys `tasca-app`; the Electric `electric` network-alias / shared-network **must persist or `/v1/shape/*` 502s** (sync outage). Structural fix tracked in **#163**; until then, verify `getent hosts electric` + a shape 200 after each deploy as a backstop.
+>
+> **Port order** (critical path → parallel lanes): **#125** (token `--fg-4` AA fix) → **#162** (re-skin board/drawer/AppBar old→bridge tokens, clear §1.5 inline-`hsl`/hex debt) → **#104** (tier badge/filter polish) → **#112** (settings shell + Org/AI-key) → then **#113** (flags+members/roles) ‖ **#114** (agents/sprints/tier-policy) ‖ **#111** (run-view badges) ‖ **#116** (guest board) ‖ **#109** (timeline). Each ships through the full panel + build→deploy→verify (cloud-half check where a deploy touches synced data).
 
 
 > **As shipped:** `services::services::prompt_templates`, wrapped at the seam; `--max-turns` applied only for ClaudeCode.
