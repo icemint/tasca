@@ -180,6 +180,7 @@
     --fg: hsl(217.5 50% 96.9%);
     --fg-2: hsl(215.5 22.9% 81.2%);
     --fg-3: hsl(215.2 14.3% 60.2%);
+    --fg-4: hsl(216.4 12.4% 55.7%);
     --fg-faint: hsl(217 16% 31%);
     --signal: hsl(212 90.4% 63.3%);
     --signal-2: hsl(211.7 100% 71.8%);
@@ -210,6 +211,7 @@
     --focus-ring-color: hsl(212 90.4% 63.3%);
     --diff-add-fg: hsl(125 69% 70%);
     --diff-del-fg: hsl(1.1 100% 78.6%);
+    --diff-gutter: hsl(216.4 12.4% 55.7%);
     --diff-context: hsl(217.9 38.8% 9.6%);
     --ansi-black: hsl(213.8 10% 31.4%);
     --ansi-red: hsl(3.8 100% 72.4%);

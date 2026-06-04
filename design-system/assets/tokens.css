@@ -162,7 +162,7 @@
   --fg:        var(--p-slate-50);
   --fg-2:      var(--p-slate-200);
   --fg-3:      var(--p-slate-400);
-  --fg-4:      var(--p-slate-500);
+  --fg-4:      #808B9C;   /* #125 WCAG AA: 4.9:1 on --surface-2 / >=4.5:1 on all dark surfaces; slate-500 was 2.96:1. Stays more muted than --fg-3 (5.71:1). */
   --fg-faint:  #424C5C;
 
   --signal:     var(--p-blue-400);
