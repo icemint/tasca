@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type { ApprovalInfo } from 'shared/types';
 import { useJsonPatchWsStream } from './useJsonPatchWsStream';
+import { useHostId } from '@/shared/providers/HostIdProvider';
 
 interface UseApprovalsResult {
   pendingApprovals: ApprovalInfo[];
@@ -14,9 +15,12 @@ type ApprovalState = {
 };
 
 export function useApprovals(): UseApprovalsResult {
+  // #181: host-scoped WS — gate on a connected host so the no-host state doesn't
+  // storm the relay with "Host context is required" reconnects.
+  const hostId = useHostId();
   const { data, isConnected } = useJsonPatchWsStream<ApprovalState>(
     '/api/approvals/stream/ws',
-    true,
+    !!hostId,
     () => ({ pending: {} })
   );
 

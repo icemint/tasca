@@ -130,6 +130,11 @@ async function fetchWorkspaceSummariesByArchived(
 export function useWorkspaces(): UseWorkspacesResult {
   const hostId = useHostId();
 
+  // #181: the workspace streams are host-scoped; with no connected host the relay
+  // transport rejects the WS ("Host context is required") and retries forever (a
+  // reconnect storm in the no-host default state). Gate the subscription on a host.
+  const hasHost = !!hostId;
+
   // Two separate WebSocket connections: one for active, one for archived
   // No limit param - we fetch all and slice on frontend so backfill works when archiving
   const apiBasePath = hostId ? `/api/host/${hostId}` : '/api';
@@ -146,7 +151,7 @@ export function useWorkspaces(): UseWorkspacesResult {
     isConnected: activeIsConnected,
     isInitialized: activeIsInitialized,
     error: activeError,
-  } = useJsonPatchWsStream<WorkspacesState>(activeEndpoint, true, initialData);
+  } = useJsonPatchWsStream<WorkspacesState>(activeEndpoint, hasHost, initialData);
 
   const {
     data: archivedData,
@@ -155,7 +160,7 @@ export function useWorkspaces(): UseWorkspacesResult {
     error: archivedError,
   } = useJsonPatchWsStream<WorkspacesState>(
     archivedEndpoint,
-    true,
+    hasHost,
     initialData
   );
 
