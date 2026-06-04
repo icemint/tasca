@@ -1,11 +1,4 @@
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenIcon,
   BirdIcon,
@@ -21,8 +14,6 @@ import {
   WaveformIcon,
   type Icon,
 } from '@phosphor-icons/react';
-import type { IconProps } from '@phosphor-icons/react';
-import { siDiscord } from 'simple-icons';
 import {
   BaseCodingAgent,
   EditorType,
@@ -91,27 +82,7 @@ const AGENT_PRIORITY: BaseCodingAgent[] = [
   BaseCodingAgent.GEMINI,
 ];
 
-const DiscordIcon: Icon = forwardRef<SVGSVGElement, IconProps>(
-  ({ className, color = 'currentColor' }, ref) => (
-    <svg
-      ref={ref}
-      className={className}
-      viewBox="0 0 24 24"
-      fill={color}
-      aria-hidden="true"
-    >
-      <path d={siDiscord.path} />
-    </svg>
-  )
-);
-DiscordIcon.displayName = 'DiscordIcon';
-
 const SOCIAL_LINKS = [
-  {
-    label: 'Discord',
-    href: 'https://discord.gg/AC4nwVtJM3',
-    icon: DiscordIcon,
-  },
   {
     label: 'GitHub',
     href: 'https://github.com/icemint/tasca',
