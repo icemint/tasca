@@ -153,6 +153,7 @@ const pairs = [
   ['fg on bg', '--fg', '--bg', 4.5],
   ['fg-2 on bg', '--fg-2', '--bg', 4.5],
   ['fg-3 on surface', '--fg-3', '--surface', 4.5],
+  ['fg-4 on surface-2', '--fg-4', '--surface-2', 4.5],
   ['signal on bg', '--signal', '--bg', 3.0],
   ['on-amber on amber', '--on-amber', '--amber', 4.5],
   ['on-signal on signal', '--on-signal', '--signal', 4.5],
