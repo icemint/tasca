@@ -1,13 +1,13 @@
 # Tasca — Roadmap & Statement of Work
 
-> Derived from [`docs/PRD.md`](PRD.md) by a 3×Architect + 3×SWE + DevOps review of the PRD against the current codebase. **Phase 0 severance + rebrand is ✅ complete**; **M1 · Routing core backend is ✅ complete and merged** (#8–#20, #143), with the M1 app-UI tail in progress (see M-AppUI). Remaining SoW below covers M2–M5 plus the M1 UI tail. Issues are tracked in GitHub milestones M0–M5 and M-AppUI.
+> Derived from [`docs/PRD.md`](PRD.md) by a 3×Architect + 3×SWE + DevOps review of the PRD against the current codebase. **Phase 0 severance + rebrand is ✅ complete**; **M1 · Routing core is ✅ complete, merged & deployed** (#8–#20, #143; UI tail #104/#105/#107/#117 + per-org flags #156/#157) — engine test-verified, cloud-half live-verified on `app.tasca.dev`, a live host-routing test deferred (see the M1 close-out). Remaining SoW below covers M2–M5 plus the M1 UI tail. Issues are tracked in GitHub milestones M0–M5 and M-AppUI.
 
 ## Milestones
 
 | Milestone | PRD phase | Issues | Est. |
 |---|---|---|---|
 | **M0 · CI/CD & release foundation** | Phase 0 (CI/CD) | 6 | ~8 pts |
-| **M1 · Routing core** ✅ *backend done* | Phase 1 | 14 | ~31 pts |
+| **M1 · Routing core** ✅ *done — deployed; engine test-verified, host-routing deferred* | Phase 1 | 14 | ~31 pts |
 | **M2 · Team + multi-user auth** | Phase 2 | 12 | ~22 pts |
 | **M3 · PM-assistant** | Phase 3 | 9 | ~26 pts |
 | **M4 · GitHub PR↔ticket automation** | Phase 4 | 14 | ~30 pts |
@@ -135,7 +135,9 @@ S
 
 > **Status: backend ✅ COMPLETE & MERGED (panel-approved).** All backend tickets below (#8–#20) are closed, plus #143 (persist workspace→issue link; resolve tier from the linked Issue at the seam — the change that makes the engine fire). **Implementation note vs. the original spike framing:** tier is resolved from the linked **remote Issue** and denormalized onto the Workspace (`Workspace::assignment_context` / `set_assignment_context`) — the local `tasks` table is legacy/dead (no writes; Electric syncs Issues to the frontend PGlite) and `workspace.task_id` is never populated. The verified seam on `main` is `ContainerService::start_workspace` (`crates/services/src/services/container.rs:1079`) with `Session::create` at `:1156`; the engine call fires before it. `SERVER_ENCRYPTION_KEY` / envelope encryption is **not** built (M3); provider tokens are currently encrypted under the JWT secret.
 >
-> **M1 app-UI tail (milestone `M-AppUI`):** #104 board tier badge + filter ✅ DONE (flag-gated `tiers`); #105 TierPicker / #107 Sprint selector / #117 flag-flip ⏳ PENDING; #106 agent-assignee picker / #109 activity timeline ⏭ DEFERRED to M3 (synthetic agent-as-member is M3, #14/#114).
+> **M1 app-UI tail (milestone `M-AppUI`): ✅ COMPLETE.** #104 board tier badge + filter (PR #149); #105 TierPicker (#153); #107 Sprint selector + its Electric shape (#154) — all flag-gated; #117 enables `tiers`+`sprints` in the **local-web dev build only** via `packages/local-web/.env.development` (prod stays default-off — verified via Vite `loadEnv`) (#155). Per-org feature flags shipped as the **production rollout lever** (#156/#157): `organizations.feature_flags` JSONB + admin-guarded `PATCH /v1/organizations/{id}/flags` + `OrgFlagsProvider` (precedence **org > env > default-off**). #106 agent-assignee picker / #109 activity timeline ⏭ DEFERRED to M3 (synthetic agent-as-member is M3, #14/#114).
+>
+> **Deploy review close-out (2026-06-04):** M1 is deployed to `app.tasca.dev` (Coolify, SHA-pinned image; CD now self-verifies the rollout after the `read`-scoped token fix, #122; fail-closed flip tracked in #160). **The assignment engine is verified by tests, not exercised on a live host:** it runs host-side (`crates/server::create_and_start_workspace` + `crates/services::ContainerService::start_workspace`); the cloud server (`crates/remote` = `tasca-app`) has **no** assignment engine and **no** agents table, and agents live in the host's local SQLite (`crates/db/models/agent.rs`). A live host-routing test (Assigned-not-`ManualOverride`, `needs_attention` on failure, `no_capable_agent` over-tier — PRD §5.5) is **deferred** to when there's a host workflow (#159). **The cloud half IS live-verified:** a tiered issue created via `POST /v1/issues` persists with `complexity_tier`+`tier_source` (txid-committed) and is served back + Electric-syncs. **Known gap:** sprint *creation* has no cloud API (only the #107 shape + selector shipped), so `issues.sprint_id` can't be populated on prod until a sprint-create path exists (#158).
 
 ### `S` · `db` — ✅ #8 — Add complexity_tier columns to local tasks table (additive migration)
 
@@ -389,11 +391,20 @@ M
 ### M1 app-UI tail (milestone `M-AppUI`)
 
 - ✅ **#104** — Board tier badge + filter (flag-gated `tiers`; live in `packages/web-core/src/features/kanban/ui/KanbanContainer.tsx`).
-- ⏳ **#105** — Issue Drawer TierPicker + RequiredFieldsChecklist (`flag.tiers`) — PENDING.
-- ⏳ **#107** — Issue Drawer Sprint selector (`flag.sprints`) — PENDING (needs the sprints Electric shape, deferred from #12).
-- ⏳ **#117** — Flip M1 app-UI flags when routing-core schema lands — PENDING.
+- ✅ **#105** — Issue Drawer TierPicker (PR #153) — command-bar selection dialog → `updateIssue({complexity_tier, tier_source:'manual'})`. Edit-only.
+- ✅ **#107** — Issue Drawer Sprint selector + the sprints Electric shape (PR #154) — `PROJECT_SPRINTS_SHAPE` + admin-listed fallback; selector writes `issues.sprint_id`. (Sprint *creation* API still TODO → #158.)
+- ✅ **#117** — Enabled `tiers`+`sprints` in the local-web dev build only (`packages/local-web/.env.development`); prod default-off (PR #155). The flag-flip *tracking* issue #117 stays open for `agents`/`run_view`/`audit`.
+- ✅ **#156/#157** — Per-org feature flags (production rollout lever): `organizations.feature_flags` JSONB + admin `PATCH /v1/organizations/{id}/flags` + `OrgFlagsProvider` (precedence **org > env > default-off**).
 - ⏭ **#106** — Issue Drawer AssigneePicker (agent vs human) — DEFERRED to M3 (needs synthetic agent-as-member #14).
 - ⏭ **#109** — Activity timeline (agent/assistant actors) — DEFERRED to M3.
+
+> **M-AppUI port — ground rules (2026-06-04, approved).** The visual design system is specified (`design-system/`) and its **token bridge is already wired** (#98: `design-system/assets/tokens.css` → `packages/web-core/src/app/styles/new/tokens-bridge.css` → Tailwind utilities via `tailwind.new.config.js`). So M-AppUI = **re-skin the live screens + build the missing surfaces**, not "build a design system." Decisions:
+> - **Fidelity: token-consistent + structural** parity with the mockups — NOT pixel-perfect.
+> - **Both shells validated:** remote-web (`app.tasca.dev`) AND the local-web/Tauri shell (shared `web-core` propagates; check Tauri safe-area/overscroll).
+> - **Flag-off now, flip later:** backend-gated surfaces (settings AI-key/roles, run-view, guest) are built behind their flag and merged flag-off; flips deferred to #117–#121 as the M2/M3/M5 backends land. Per-org enablement uses #156's org-flags (no redeploy).
+> - **Deploy guardrail:** every M-AppUI deploy redeploys `tasca-app`; the Electric `electric` network-alias / shared-network **must persist or `/v1/shape/*` 502s** (sync outage). Structural fix tracked in **#163**; until then, verify `getent hosts electric` + a shape 200 after each deploy as a backstop.
+>
+> **Port order** (critical path → parallel lanes): **#125** (token `--fg-4` AA fix) → **#162** (re-skin board/drawer/AppBar old→bridge tokens, clear §1.5 inline-`hsl`/hex debt) → **#104** (tier badge/filter polish) → **#112** (settings shell + Org/AI-key) → then **#113** (flags+members/roles) ‖ **#114** (agents/sprints/tier-policy) ‖ **#111** (run-view badges) ‖ **#116** (guest board) ‖ **#109** (timeline). Each ships through the full panel + build→deploy→verify (cloud-half check where a deploy touches synced data).
 
 
 > **As shipped:** `services::services::prompt_templates`, wrapped at the seam; `--max-turns` applied only for ClaudeCode.
