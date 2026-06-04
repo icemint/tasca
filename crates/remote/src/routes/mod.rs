@@ -1,10 +1,16 @@
-use axum::{Json, Router, http::header::HeaderName, middleware, routing::get};
+use axum::{
+    Json, Router,
+    http::{HeaderValue, header, header::HeaderName},
+    middleware,
+    routing::get,
+};
 use serde::Serialize;
 use tower_http::{
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
     services::{ServeDir, ServeFile},
+    set_header::SetResponseHeader,
     trace::{DefaultOnFailure, TraceLayer},
 };
 use tracing::{Level, Span, field};
@@ -140,8 +146,20 @@ pub fn router(state: AppState) -> Router {
         ));
 
     let static_dir = "/srv/static";
-    let spa =
-        ServeDir::new(static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    // #165: index.html must always revalidate so a fresh deploy's hashed assets are
+    // picked up immediately. Without this, a browser-cached stale index.html points at
+    // an old /assets/index-<hash>.js that no longer exists → the SPA fallback serves
+    // index.html (text/html) for it → "module MIME type text/html" load failure on
+    // every deploy. Hash-named /assets/* stay cacheable; only the HTML is no-cache.
+    // append_index_html_on_directories(false) routes "/" through the no-cache fallback too.
+    let index_html = SetResponseHeader::overriding(
+        ServeFile::new(format!("{static_dir}/index.html")),
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache"),
+    );
+    let spa = ServeDir::new(static_dir)
+        .append_index_html_on_directories(false)
+        .fallback(index_html);
 
     Router::<AppState>::new()
         .nest("/v1", v1_public)
