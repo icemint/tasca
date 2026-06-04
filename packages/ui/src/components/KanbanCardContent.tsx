@@ -121,13 +121,13 @@ function formatKanbanDescriptionPreview(
     .trim();
 }
 
-/** Tier badge label + HSL color, keyed by the complexity-tier value (M1 #104). */
-const TIER_BADGE: Record<string, { label: string; color: string }> = {
-  basic: { label: 'Basic', color: '210 9% 55%' },
-  low: { label: 'Low', color: '190 55% 45%' },
-  medium: { label: 'Medium', color: '45 90% 48%' },
-  hard: { label: 'Hard', color: '20 85% 52%' },
-  ultra: { label: 'Ultra', color: '0 72% 52%' },
+/** Tier badge label + dot color class, keyed by the complexity-tier value (M1 #104). */
+const TIER_BADGE: Record<string, { label: string; colorClassName: string }> = {
+  basic: { label: 'Basic', colorClassName: 'bg-tier-basic' },
+  low: { label: 'Low', colorClassName: 'bg-tier-low' },
+  medium: { label: 'Medium', colorClassName: 'bg-tier-medium' },
+  hard: { label: 'Hard', colorClassName: 'bg-tier-hard' },
+  ultra: { label: 'Ultra', colorClassName: 'bg-tier-ultra' },
 };
 
 export type KanbanCardContentProps<TTag extends KanbanTag = KanbanTag> = {
@@ -313,7 +313,7 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
           {complexityTier && TIER_BADGE[complexityTier] && (
             <KanbanBadge
               name={TIER_BADGE[complexityTier].label}
-              color={TIER_BADGE[complexityTier].color}
+              colorClassName={TIER_BADGE[complexityTier].colorClassName}
             />
           )}
           {tagEditProps ? (
