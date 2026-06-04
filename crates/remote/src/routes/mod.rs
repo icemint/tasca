@@ -157,6 +157,12 @@ pub fn router(state: AppState) -> Router {
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache"),
     );
+    // Hash-named bundles: serve the real file or 404 — NEVER fall back to index.html.
+    // A missing /assets/*.js that SPA-falls-back to index.html returns a cacheable
+    // 200 text/html, which poisons browser/CDN caches (served as a module → MIME error)
+    // until a manual purge. 404 is uncacheable-as-the-resource, closing that vector
+    // (the second half of #165). This ServeDir has no fallback, so a miss is a 404.
+    let assets = ServeDir::new(format!("{static_dir}/assets"));
     let spa = ServeDir::new(static_dir)
         .append_index_html_on_directories(false)
         .fallback(index_html);
@@ -164,6 +170,7 @@ pub fn router(state: AppState) -> Router {
     Router::<AppState>::new()
         .nest("/v1", v1_public)
         .nest("/v1", v1_protected)
+        .nest_service("/assets", assets)
         .fallback_service(spa)
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(
