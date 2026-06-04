@@ -109,7 +109,7 @@ pub async fn create_portal_session(
 pub async fn create_checkout_session() -> Result<StatusCode, ErrorResponse> {
     Err(ErrorResponse::new(
         StatusCode::GONE,
-        "New subscriptions are disabled because Tasca Cloud is shutting down",
+        "Billing is not enabled.",
     ))
 }
 

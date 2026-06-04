@@ -133,7 +133,7 @@ export function ExportPageContainer() {
       <div className="flex h-full w-full items-center justify-center bg-primary p-base">
         <LoginRequiredPrompt
           className="max-w-md"
-          title="Sign in to export your cloud data"
+          title="Sign in to export your data"
           description="Sign in to choose the organizations and projects available to your account."
           actionLabel="Sign in"
         />

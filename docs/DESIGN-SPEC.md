@@ -359,7 +359,7 @@
 - Active state: `isActive ? 'bg-brand/20 text-brand hover:bg-brand/20' : 'bg-primary text-normal hover:bg-brand/10'`
 - Project colors: inline style `color: hsl(${project.color}), backgroundColor: hsl(${project.color} / 0.2)`
 - Section headers: `text-center text-[9px] font-medium leading-none tracking-wide text-low`
-- Bottom: notification bell, user popover (avatar + org selector), GitHub/Discord badge links
+- Bottom: notification bell, user popover (avatar + org selector), GitHub badge link
 - Mobile: accessible via MobileDrawer in SharedAppLayout
 
 #### Top Navbar (NavbarContainer)
