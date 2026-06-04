@@ -217,6 +217,9 @@ export function selectIsCreateDraftDirty({
       createModeDefaults.description ||
     state.createFormData.statusId !== createModeDefaults.statusId ||
     state.createFormData.priority !== createModeDefaults.priority ||
+    state.createFormData.complexityTier !==
+      createModeDefaults.complexityTier ||
+    state.createFormData.sprintId !== createModeDefaults.sprintId ||
     !areStringSetsEqual(
       state.createFormData.assigneeIds,
       createModeDefaults.assigneeIds

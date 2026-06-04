@@ -9,7 +9,7 @@ import {
 import { useDropzone } from 'react-dropzone';
 import { useTranslation } from 'react-i18next';
 import type { OrganizationMemberWithProfile } from 'shared/types';
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 import { useDebouncedCallback } from '@/shared/hooks/useDebouncedCallback';
 import { useFlag } from '@/shared/flags';
 import { useProjectContext } from '@/shared/hooks/useProjectContext';
@@ -156,6 +156,8 @@ export function KanbanIssuePanelContainer({
     (patch: {
       statusId?: string;
       priority?: IssuePriority | null;
+      complexityTier?: ComplexityTier | null;
+      sprintId?: string | null;
       assigneeIds?: string[];
       parentIssueId?: string;
       title?: string;
@@ -610,10 +612,14 @@ export function KanbanIssuePanelContainer({
             composerDraft.priority === undefined
               ? createModeDefaults.priority
               : composerDraft.priority,
-          // Tier is not persisted in the create draft (#105 is edit-only).
-          complexityTier: createModeDefaults.complexityTier,
-          // Sprint is not persisted in the create draft (#107 is edit-only).
-          sprintId: createModeDefaults.sprintId,
+          complexityTier:
+            composerDraft.complexityTier === undefined
+              ? createModeDefaults.complexityTier
+              : composerDraft.complexityTier,
+          sprintId:
+            composerDraft.sprintId === undefined
+              ? createModeDefaults.sprintId
+              : composerDraft.sprintId,
           assigneeIds:
             composerDraft.assigneeIds ?? createModeDefaults.assigneeIds,
           tagIds: composerDraft.tagIds ?? createModeDefaults.tagIds,
@@ -723,6 +729,53 @@ export function KanbanIssuePanelContainer({
           return;
         }
 
+        // For complexityTier, open the tier selection dialog with callback (M1 #105)
+        if (field === 'complexityTier') {
+          const { ProjectSelectionDialog } = await import(
+            '@/shared/dialogs/command-bar/selections/ProjectSelectionDialog'
+          );
+          const result = await ProjectSelectionDialog.show({
+            projectId,
+            selection: { type: 'tier', issueIds: [], isCreateMode: true },
+          });
+          if (
+            result &&
+            typeof result === 'object' &&
+            'complexityTier' in result
+          ) {
+            const complexityTier = (result as { complexityTier: ComplexityTier })
+              .complexityTier;
+            updateIssueComposerDraft({ complexityTier });
+            dispatchFormState({
+              type: 'patchCreateFormData',
+              patch: { complexityTier },
+              fallback: createFormFallback,
+            });
+          }
+          return;
+        }
+
+        // For sprintId, open the sprint selection dialog with callback (M1 #107)
+        if (field === 'sprintId') {
+          const { ProjectSelectionDialog } = await import(
+            '@/shared/dialogs/command-bar/selections/ProjectSelectionDialog'
+          );
+          const result = await ProjectSelectionDialog.show({
+            projectId,
+            selection: { type: 'sprint', issueIds: [], isCreateMode: true },
+          });
+          if (result && typeof result === 'object' && 'sprintId' in result) {
+            const sprintId = (result as { sprintId: string | null }).sprintId;
+            updateIssueComposerDraft({ sprintId });
+            dispatchFormState({
+              type: 'patchCreateFormData',
+              patch: { sprintId },
+              fallback: createFormFallback,
+            });
+          }
+          return;
+        }
+
         // For assigneeIds, open the assignee selection dialog with callback
         if (field === 'assigneeIds') {
           const { AssigneeSelectionDialog } = await import(
@@ -750,7 +803,9 @@ export function KanbanIssuePanelContainer({
           patch: { [field]: value } as Partial<IssueFormData>,
           fallback: createFormFallback,
         });
-        updateIssueComposerDraft({ [field]: value } as Partial<IssueFormData>);
+        updateIssueComposerDraft({
+          [field]: value,
+        } as Parameters<typeof updateIssueComposerDraft>[0]);
         if (field === 'createDraftWorkspace') {
           setCreateDraftWorkspaceByDefault(value as boolean);
         }
@@ -866,6 +921,15 @@ export function KanbanIssuePanelContainer({
           title: displayData.title,
           description: displayData.description,
           priority: displayData.priority,
+          // A user pick is a manual tier override (M1 #105). Omit when not
+          // picked so the backend default applies.
+          ...(displayData.complexityTier
+            ? {
+                complexity_tier: displayData.complexityTier as ComplexityTier,
+                tier_source: 'manual' as const,
+              }
+            : {}),
+          ...(displayData.sprintId ? { sprint_id: displayData.sprintId } : {}),
           sort_order: minSortOrder - 1,
           start_date: null,
           target_date: null,

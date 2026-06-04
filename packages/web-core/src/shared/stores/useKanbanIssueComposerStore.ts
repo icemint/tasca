@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { create } from 'zustand';
-import type { IssuePriority } from 'shared/remote-types';
+import type { ComplexityTier, IssuePriority } from 'shared/remote-types';
 
 export interface ProjectIssueCreateOptions {
   statusId?: string;
@@ -14,6 +14,8 @@ export interface KanbanIssueComposerDraft {
   description: string | null;
   statusId?: string;
   priority?: IssuePriority | null;
+  complexityTier?: ComplexityTier | null;
+  sprintId?: string | null;
   assigneeIds?: string[];
   tagIds?: string[];
   createDraftWorkspace?: boolean;
@@ -49,6 +51,10 @@ function normalizeComposerDraft(
     description: draft.description ?? null,
     ...(draft.statusId ? { statusId: draft.statusId } : {}),
     ...(draft.priority !== undefined ? { priority: draft.priority } : {}),
+    ...(draft.complexityTier !== undefined
+      ? { complexityTier: draft.complexityTier }
+      : {}),
+    ...(draft.sprintId !== undefined ? { sprintId: draft.sprintId } : {}),
     ...(draft.assigneeIds !== undefined
       ? { assigneeIds: [...draft.assigneeIds] }
       : {}),
