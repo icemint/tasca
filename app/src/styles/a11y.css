@@ -1,0 +1,63 @@
+/* ============================================================================
+   TASCA · Accessibility layer  (load LAST, after all other CSS)
+   Focus-visible rings · screen-reader utilities · reduced-motion sweep
+   ============================================================================ */
+
+/* ── Visible keyboard focus everywhere (mouse clicks stay clean) ───────────── */
+:focus-visible {
+  outline: 2px solid var(--signal, #4D9CF6);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+/* elements with their own rounded shape get a matching ring via box-shadow */
+.btn:focus-visible, .btn-asst:focus-visible, .chip:focus-visible,
+.rail-btn:focus-visible, .icon-btn:focus-visible, .close-btn:focus-visible,
+.tier:focus-visible, .kc:focus-visible, .pick-item:focus-visible,
+.toggle:focus-visible, .tab:focus-visible, .logs-tab:focus-visible,
+.set-nav button:focus-visible, .oauth-btn:focus-visible, .input:focus-visible,
+.assignee:focus-visible, .pr-result:focus-visible, .sprint-sel:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg, #090D14), 0 0 0 4px var(--signal, #4D9CF6);
+}
+/* never show the ring for pointer interactions */
+:focus:not(:focus-visible) { outline: none; }
+
+/* ── Screen-reader-only text ───────────────────────────────────────────────── */
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  white-space: nowrap; border: 0;
+}
+.sr-only-focusable:focus, .sr-only-focusable:focus-within {
+  position: static !important;
+  width: auto; height: auto;
+  margin: 0; overflow: visible; clip: auto; white-space: normal;
+}
+
+/* ── Skip link ─────────────────────────────────────────────────────────────── */
+.skip-link {
+  position: fixed; top: 10px; left: 10px; z-index: 9999;
+  transform: translateY(-150%);
+  background: var(--signal, #4D9CF6); color: #04101F;
+  font-family: var(--font-body, sans-serif); font-weight: 600; font-size: 14px;
+  padding: 10px 16px; border-radius: var(--radius-sm, 8px);
+  transition: transform 150ms var(--ease, ease);
+}
+.skip-link:focus { transform: none; outline: 2px solid #fff; outline-offset: 2px; }
+
+/* ── Keyboard-activatable cards: show they're interactive ──────────────────── */
+[data-activate] { cursor: pointer; }
+
+/* ── Reduced motion: kill all non-essential animation/transition globally ──── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* panels still appear/disappear, just without the slide */
+  .drawer, .assistant, .modal, .modal-scrim, .scrim { transition: none !important; }
+}

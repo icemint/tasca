@@ -1,0 +1,78 @@
+---
+import '../styles/tasca.css';
+import '../styles/tokens.css';
+import '../styles/onboarding.css';
+import '../styles/a11y.css';
+import { MARK, GITHUB, GOOGLE } from '../lib/icons';
+---
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign in · Tasca</title>
+  <meta name="description" content="Sign in to Tasca — your AI dev team, named, capable, and working in the tools you already use." />
+  <meta name="robots" content="noindex" />
+  <script is:inline>
+    (function () { try { document.documentElement.setAttribute('data-theme', localStorage.getItem('tasca-theme') || 'dark'); } catch (e) {} })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="theme-color" content="#090D14" />
+</head>
+<body>
+  <div class="onb-stage">
+    <div class="onb-topbar">
+      <a class="onb-brand" href="https://tasca.dev" aria-label="Tasca home">
+        <span class="onb-mark" set:html={MARK} /><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+      <span class="theme-seg onb-theme">
+        <button data-t="dark" type="button" aria-label="Dark theme">Dark</button>
+        <button data-t="light" type="button" aria-label="Light theme">Light</button>
+      </span>
+    </div>
+    <div class="onb-content">
+      <div class="onb-auth-col">
+        <div class="onb-card auth">
+          <div class="auth-mark" set:html={MARK} />
+          <h1>Sign in to Tasca</h1>
+          <p class="auth-sub">Your AI dev team — named, capable, working in the tools you already use.</p>
+          <div class="oauth-col">
+            <a class="oauth-btn" href="/api/auth/github"><span set:html={GITHUB} /><span>Continue with GitHub</span></a>
+            <a class="oauth-btn" href="/api/auth/google"><span set:html={GOOGLE} /><span>Continue with Google</span></a>
+          </div>
+          <div class="auth-or"><span>or</span></div>
+          <form class="auth-form" method="post" action="/api/auth/login">
+            <input class="tinput" type="email" name="email" placeholder="you@company.com" aria-label="Email" autocomplete="email" />
+            <input class="tinput" type="password" name="password" placeholder="Password" aria-label="Password" autocomplete="current-password" />
+            <button class="btn-add wide" type="submit">Sign in</button>
+          </form>
+          <div class="auth-foot"><a href="/api/auth/github">Create an account</a><span class="sep">·</span><a href="/account/reset">Forgot password?</a></div>
+        </div>
+        <div class="auth-legal mono">Tasca uses OAuth (GitHub / Google). We never see your password for those providers.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function syncTheme(t: string) {
+      document.documentElement.setAttribute('data-theme', t);
+      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+    }
+    let t = 'dark';
+    try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}
+    syncTheme(t);
+    document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) =>
+      b.addEventListener('click', () => {
+        const v = b.dataset.t!;
+        try { localStorage.setItem('tasca-theme', v); } catch (e) {}
+        syncTheme(v);
+      })
+    );
+  </script>
+</body>
+</html>

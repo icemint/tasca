@@ -1,0 +1,105 @@
+name: CD (app)
+
+# Build the Tasca app shell (Astro static → nginx image), push it to GHCR under
+# an immutable sha-<short> tag, ensure the Coolify app resource exposes port 80,
+# then point it at that tag and redeploy. Serves app.tasca.dev (the sign-in
+# surface today; the full application lands here as Stage 1 ships).
+#
+# Runs only when the app shell changes on main (or manually) — never on PRs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'scripts/coolify-deploy.sh'
+      - '.github/workflows/cd-app.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cd-app-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/icemint/tasca-app
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9.15.4"
+
+jobs:
+  build-and-deploy:
+    name: Build app shell → GHCR → Coolify (SHA-pinned)
+    runs-on: ubuntu-24.04
+    env:
+      COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
+      COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image tag
+        id: vars
+        run: echo "sha_tag=sha-$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install app deps
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static app shell
+        working-directory: app
+        run: pnpm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image (nginx + dist)
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          file: app/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_tag }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      # The app resource previously ran the Rust server on its own port; this
+      # static nginx image listens on :80, so align the resource's exposed port
+      # before switching the image. Best-effort (warn, don't fail) so a field/API
+      # difference doesn't block the deploy.
+      - name: Align app resource to port 80
+        if: ${{ env.COOLIFY_API_URL != '' }}
+        run: |
+          base="${COOLIFY_API_URL%/}"
+          if curl -fsS -X PATCH "${base}/api/v1/applications/${COOLIFY_RESOURCE_UUID}" \
+              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" -H "Content-Type: application/json" \
+              -d '{"ports_exposes":"80"}' >/dev/null; then
+            echo "ports_exposes set to 80"
+          else
+            echo "::warning::could not set ports_exposes=80 (continuing; verify app.tasca.dev after deploy)"
+          fi
+
+      - name: Deploy to Coolify (PATCH image tag → deploy → verify rollout)
+        if: ${{ env.COOLIFY_API_URL != '' }}
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
+        run: bash scripts/coolify-deploy.sh
