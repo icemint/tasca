@@ -1,93 +1,60 @@
 ---
 import Base from '../layouts/Base.astro';
-import { I } from '../lib/icons';
+import { Content as TermsContent } from '../legal/terms.md';
+import { Content as PrivacyContent } from '../legal/privacy.md';
 
-const note = `<div class="tmpl-note"><span class="ic">${I.info}</span><span><b>Template — counsel to complete.</b> This page is a structured placeholder with the standard sections for review. Substantive legal language must be supplied by Tasca’s legal counsel before launch. Headings reflect intended scope, not final terms.</span></div>`;
-const ph = (t: string) => `<p class="placeholder">${t}</p>`;
-const sec = (h: string, body: string) => `<h2>${h}</h2>${body}`;
-
-interface Doc { key: string; title: string; intro: string; body: string; }
-const docs: Doc[] = [
-  {
-    key: 'terms', title: 'Terms of Service', intro: 'The agreement between you and Tasca for use of the platform.',
-    body: note + `<div class="meta">Last updated: [DATE] · Effective: [DATE]</div>` +
-      sec('1. Agreement to terms', ph('[Binding-agreement language, acceptance on account creation, capacity to contract.]')) +
-      sec('2. The service', ph('[Description of Tasca: agentic delivery platform, self-hosted and managed offerings, what is and isn’t included.]')) +
-      sec('3. Accounts & organizations', ph('[Account creation via OAuth/email, org ownership, roles (owner/admin/member/guest), responsibility for credentials.]')) +
-      sec('4. Acceptable use', ph('[Prohibited uses, no unlawful/infringing activity, agent-execution boundaries, rate limits, anti-abuse.]')) +
-      sec('5. Third-party platforms & models', ph('[Shortcut/GitHub/Linear connections, customer-supplied model vendor keys, Anthropic Console-key compliance, no liability for third-party outages.]')) +
-      sec('6. Customer content & IP', ph('[Customer retains rights to code/data; license granted to operate the service; agent-generated output ownership.]')) +
-      sec('7. Fees & billing', ph('[Per-seat fees, model spend billed to customer keys, taxes, renewal, non-payment. See Pricing.]')) +
-      sec('8. Warranties & disclaimers', ph('[“As-is”, no warranty that agents produce correct code, human review required.]')) +
-      sec('9. Limitation of liability', ph('[Liability cap, exclusion of indirect damages — to be set by counsel.]')) +
-      sec('10. Termination', ph('[Termination for cause/convenience, data export window, effect of termination.]')) +
-      sec('11. Changes & governing law', ph('[Amendment process, notice, governing jurisdiction, dispute resolution.]')) +
-      sec('12. Contact', ph('[legal@tasca.dev — registered entity & address.]')),
-  },
-  {
-    key: 'privacy', title: 'Privacy Policy', intro: 'How Tasca collects, uses, and protects your data.',
-    body: note + `<div class="meta">Last updated: [DATE]</div>` +
-      sec('1. Who we are', ph('[Data controller identity, registered address, DPO/privacy contact.]')) +
-      sec('2. Data we collect', `<p>We collect the minimum needed to operate the platform. Categories include:</p><ul>
-        <li>Account data — name, email, OAuth identifiers</li>
-        <li>Organization & membership data — roles, team structure</li>
-        <li>Operational data — agents, tickets, routing decisions, audit events</li>
-        <li>Credentials — provider tokens & vendor keys, <b>encrypted at rest</b></li></ul>` + ph('[Confirm exhaustive categories with counsel; add analytics/telemetry posture — note Tasca ships telemetry-free.]')) +
-      sec('3. How we use it', ph('[Service operation, routing, billing, support, security. No sale of personal data.]')) +
-      sec('4. Legal bases', ph('[GDPR Art.6 bases — contract, legitimate interest, consent — per processing purpose.]')) +
-      sec('5. Sharing & sub-processors', ph('[Hosting, model vendors (customer-keyed), payment processor; sub-processor list & DPA.]')) +
-      sec('6. Data retention', ph('[Retention periods per data category; deletion on account closure; audit-log immutability caveat.]')) +
-      sec('7. Security', `<p>Provider tokens and vendor keys are stored as AES-256-GCM ciphertext under a dedicated server key. Credentials are never displayed in full after entry.</p>` + ph('[Add breach-notification commitment, encryption-in-transit, access controls per counsel.]')) +
-      sec('8. Your rights', ph('[Access, rectification, erasure, portability, objection; how to exercise; supervisory-authority complaint.]')) +
-      sec('9. International transfers', ph('[Transfer mechanism — SCCs/adequacy — and data-residency options for self-hosting.]')) +
-      sec('10. Contact', ph('[privacy@tasca.dev]')),
-  },
-  {
-    key: 'cookies', title: 'Cookie Policy', intro: 'How Tasca uses cookies and similar technologies.',
-    body: note + `<div class="meta">Last updated: [DATE]</div>` +
-      sec('1. What we use', `<p>Tasca uses a minimal set of cookies. We do not use advertising or cross-site tracking cookies, and the platform ships telemetry-free.</p>`) +
-      sec('2. Categories', `<ul>
-        <li><b>Strictly necessary</b> — session & authentication (JWT/refresh), CSRF protection. Always on.</li>
-        <li><b>Preferences</b> — theme (dark/light) and UI settings, stored locally.</li>
-        <li><b>Analytics</b> — [none by default; if added, list provider & purpose].</li></ul>` + ph('[Counsel to confirm final cookie inventory and durations.]')) +
-      sec('3. Managing cookies', ph('[Browser controls, consent mechanism where required, effect of disabling necessary cookies.]')) +
-      sec('4. Changes & contact', ph('[Update process; privacy@tasca.dev.]')),
-  },
+const docs = [
+  { key: 'terms', label: 'Terms' },
+  { key: 'privacy', label: 'Privacy' },
 ];
 ---
 <Base
   title="Tasca — Legal"
-  description="Tasca's Terms of Service, Privacy Policy, and Cookie Policy."
+  description="Tasca's Terms of Service and Privacy Policy — the agreements and policies that govern your use of the platform."
 >
   <section class="phero"><div class="wrap-narrow">
     <span class="kicker">Legal</span>
-    <h1 id="legalTitle">{docs[0].title}</h1>
-    <p id="legalIntro">{docs[0].intro}</p>
+    <h1>Terms &amp; policies</h1>
+    <p>The agreements and policies that govern your use of Tasca. Operated by ICEMINT, LLC.</p>
   </div></section>
 
   <section class="sec-sm"><div class="wrap-narrow">
     <div class="legal-tabs">
-      {docs.map((d, i) => <button class={`legal-tab ${i === 0 ? 'on' : ''}`} data-k={d.key}>{d.title.split(' ')[0]}</button>)}
+      {docs.map((d, i) => <button class={`legal-tab ${i === 0 ? 'on' : ''}`} data-k={d.key}>{d.label}</button>)}
     </div>
-    {docs.map((d, i) => <div class="prose legal-doc" data-k={d.key} style={i === 0 ? '' : 'display:none'} set:html={d.body} />)}
+    <div class="prose legal-doc" data-k="terms"><TermsContent /></div>
+    <div class="prose legal-doc" data-k="privacy" style="display:none"><PrivacyContent /></div>
   </div></section>
 </Base>
 
+<style>
+  /* Markdown-rendered legal docs: extend the design's .prose for full GFM output. */
+  .prose h1 { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 600; color: var(--fg); letter-spacing: -0.025em; margin: 0 0 4px; }
+  .prose h2 { margin-top: 40px; }
+  .prose h2:first-of-type { margin-top: 28px; }
+  .prose a { color: var(--signal-2); }
+  .prose a:hover { text-decoration: underline; }
+  .prose em { color: var(--fg-3); }
+  .prose hr { border: none; border-top: 1px solid var(--line); margin: 36px 0; }
+  .prose blockquote { margin: 16px 0 0; padding: 12px 16px; border-left: 2px solid var(--line-3); background: var(--bg-sub); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--fg-3); }
+  .prose blockquote p { margin-top: 0; }
+  .prose code { font-family: var(--font-mono); font-size: 0.9em; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 5px; color: var(--fg-2); }
+  .prose ol { margin: 12px 0 0; padding-left: 20px; }
+  .prose ol li { font-size: var(--fs-sm); color: var(--fg-3); line-height: 1.7; }
+  .prose table { width: 100%; border-collapse: collapse; margin: 18px 0 0; font-size: var(--fs-sm); display: block; overflow-x: auto; }
+  .prose thead { background: var(--bg-sub); }
+  .prose th, .prose td { border: 1px solid var(--line-2); padding: 9px 12px; text-align: left; color: var(--fg-3); line-height: 1.55; vertical-align: top; }
+  .prose th { color: var(--fg-2); font-weight: 600; white-space: nowrap; }
+  .prose td strong, .prose th strong { color: var(--fg-2); }
+</style>
+
 <script>
-  const titles: Record<string, [string, string]> = {
-    terms: ['Terms of Service', 'The agreement between you and Tasca for use of the platform.'],
-    privacy: ['Privacy Policy', 'How Tasca collects, uses, and protects your data.'],
-    cookies: ['Cookie Policy', 'How Tasca uses cookies and similar technologies.'],
-  };
   function show(k: string) {
-    if (!titles[k]) k = 'terms';
+    if (k !== 'terms' && k !== 'privacy') k = 'terms';
     document.querySelectorAll<HTMLElement>('.legal-doc').forEach((el) => {
       el.style.display = el.dataset.k === k ? '' : 'none';
     });
     document.querySelectorAll<HTMLButtonElement>('.legal-tab').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
-    const t = titles[k];
-    document.getElementById('legalTitle')!.textContent = t[0];
-    document.getElementById('legalIntro')!.textContent = t[1];
     if (history.replaceState) history.replaceState(null, '', '#' + k);
   }
   document.querySelectorAll<HTMLButtonElement>('.legal-tab').forEach((b) =>
