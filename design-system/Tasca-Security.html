@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Security</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="marketing/marketing.css">
+<link rel="stylesheet" href="marketing/pages.css">
+<link rel="stylesheet" href="assets/a11y.css">
+</head>
+<body>
+<div id="nav"></div>
+
+<main>
+  <section class="phero"><div class="wrap">
+    <span class="kicker">Security</span>
+    <h1>Agents act as themselves. Never as your people.</h1>
+    <p>Tasca is built for teams that need real control over what AI agents can do. Here is our actual posture — what’s enforced today, and what’s still on the roadmap. We don’t describe unbuilt features as if they’re live.</p>
+  </div></section>
+
+  <section class="sec-sm"><div class="wrap">
+    <div class="sec-posture" id="posture"></div>
+  </div></section>
+
+  <!-- ROADMAP HONESTY -->
+  <section class="sec-sm"><div class="wrap">
+    <div class="sec-head"><span class="kicker">Honest scope</span>
+      <h2 class="sec-h">Built today vs. on the roadmap</h2>
+      <p class="sec-sub">Security claims we can stand behind now — and the ones we’re still building, marked clearly.</p></div>
+    <div class="roadmap-list" id="roadmap"></div>
+  </div></section>
+
+  <!-- STATUS -->
+  <section class="sec-sm" id="status"><div class="wrap">
+    <div class="sec-head"><span class="kicker">Status</span><h2 class="sec-h">System status</h2></div>
+    <div id="statusList"></div>
+  </div></section>
+
+  <section class="sec"><div class="wrap"><div class="cta-band">
+    <h2>Read the details, then decide</h2>
+    <p>The full security model and self-hosting guide live in our docs.</p>
+    <div class="cta-actions"><a class="btn btn-primary btn-lg" href="Tasca-Docs.html">Security docs <span id="a1"></span></a><a class="btn btn-ghost btn-lg" href="Onboarding.html">Start free</a></div>
+  </div></div></section>
+</main>
+
+<div id="foot"></div>
+
+<script src="marketing/site.js"></script>
+<script>
+(function(){
+  const S=window.SITE, I=S.I; S.mount('security');
+  document.getElementById('a1').innerHTML=I.arrow;
+  const ck=`<span class="ck">${I.check}</span>`;
+
+  const posture=[
+    { ic:I.id, h:'Native identities, never fake humans', p:'Every agent acts through its own platform-native identity — a Shortcut agent user, a GitHub App install, a Linear app actor. Activity is attributed to the agent, never impersonating a teammate.', li:['Distinct from any human seat','Attributed in every platform’s activity feed'] },
+    { ic:I.lock, h:'Least-privilege scopes', p:'Each identity is granted only the scopes it needs, verified against the platform on every connect. Agents never hold admin, secrets, or member-management access.', li:['Per-platform scope ceilings','Re-validated on reconnect'] },
+    { ic:I.audit, h:'Immutable audit log', p:'Every action — human, agent, or assistant — lands in an append-only timeline, attributed to its actor identity, scoped to your org.', li:['Human / agent / assistant actors, uniform','Org-scoped, exportable'] },
+    { ic:I.shield, h:'Human-gated escalation', p:'A failed or mis-tiered run trips a breaker and flips the ticket to needs-attention with a one-click re-tier or human handoff. No silent auto-escalation in v1.', li:['No auto tier-bump by default','You approve every escalation'] },
+    { ic:I.layers, h:'Encryption at rest', p:'Provider tokens and vendor API keys are stored as AES-256-GCM ciphertext under a dedicated server key — decoupled from session-token rotation. Keys are never shown in full after saving.', li:['Dedicated encryption key','Masked-only key display'] },
+    { ic:I.git, h:'Worktree isolation', p:'Each agent run executes in an isolated git worktree on a per-attempt branch — runs don’t share state, and a failed run preserves its worktree for inspection.', li:['Per-attempt branch isolation','Preserved on failure, not silently retried'] },
+  ];
+  document.getElementById('posture').innerHTML = posture.map(p=>`
+    <div class="posture"><div class="posture-ic">${p.ic}</div><h3>${p.h}</h3><p>${p.p}</p>
+      <ul>${p.li.map(x=>`<li>${ck}${x}</li>`).join('')}</ul></div>`).join('');
+
+  const rm=[
+    ['live','<b>Native identities & least-privilege scopes</b> — enforced now'],
+    ['live','<b>Encryption at rest</b> for provider tokens & vendor keys'],
+    ['live','<b>Immutable audit log</b> across human / agent / assistant actors'],
+    ['live','<b>Argon2id credentials, rate-limiting, account lockout</b>'],
+    ['coming','<b>Sandboxed execution</b> — container-per-run isolation for external-touch tickets'],
+    ['coming','<b>Propose-only external clients</b> — guests file & comment, can’t trigger execution'],
+    ['coming','<b>SAML SSO & SCIM</b> — enterprise identity provisioning'],
+  ];
+  document.getElementById('roadmap').innerHTML = rm.map(([k,n])=>`
+    <div class="rm-item"><span class="rm-stage">${k==='live'?'Now':'Next'}</span>
+      <span class="rm-name">${n}</span><span class="tag ${k}">${k==='live'?'Live':'Coming'}</span></div>`).join('');
+
+  const status=[['Routing engine','Operational'],['Shortcut · GitHub · Linear connectors','Operational'],['Web app & API','Operational'],['Webhook delivery','Operational']];
+  document.getElementById('statusList').innerHTML = status.map(([n])=>`
+    <div class="status-row"><span class="status-name">${n}</span><span class="status-ok"><span class="d"></span>Operational</span></div>`).join('');
+})();
+</script>
+</body>
+</html>

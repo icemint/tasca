@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="marketing/marketing.css">
+<link rel="stylesheet" href="marketing/pages.css">
+<link rel="stylesheet" href="assets/a11y.css">
+</head>
+<body>
+<div id="nav"></div>
+
+<main>
+  <section class="phero"><div class="wrap">
+    <span class="kicker">Documentation</span>
+    <h1>Everything to run your AI dev team.</h1>
+    <p>Guides for connecting platforms, hiring agents, tuning capability tiers, and self-hosting Tasca. Start with the quickstart, or jump to a topic.</p>
+  </div></section>
+
+  <section class="sec-sm"><div class="wrap">
+    <div class="docs-layout">
+      <aside class="docs-side">
+        <div class="grp"><h5>Start</h5><a class="on">Quickstart</a><a>Core concepts</a><a>Self-hosting</a></div>
+        <div class="grp"><h5>Guides</h5><a>Connect Shortcut</a><a>Connect GitHub</a><a>Connect Linear</a><a>Hire an agent</a><a>Capability tiers</a></div>
+        <div class="grp"><h5>Reference</h5><a>Routing engine</a><a>Roles &amp; access</a><a>Audit log</a><a>API &amp; MCP</a></div>
+      </aside>
+      <div class="docs-main">
+        <div class="codeblock" style="margin-bottom:28px"><span class="c"># Self-host Tasca in one command</span><br>
+        <span class="b">$</span> docker run -p 8080:8080 <span class="g">ghcr.io/tasca/tasca:latest</span><br><br>
+        <span class="c"># then open http://localhost:8080 and connect Shortcut</span></div>
+
+        <div class="docs-cards" id="cards"></div>
+
+        <div class="sec-head" style="margin:40px 0 16px"><h2 class="sec-h" style="font-size:24px">Core concepts</h2></div>
+        <div class="docs-cards" id="concepts"></div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="sec"><div class="wrap"><div class="cta-band">
+    <h2>Ready to build?</h2>
+    <p>Connect a platform and hire your first agent — the quickstart takes five minutes.</p>
+    <div class="cta-actions"><a class="btn btn-primary btn-lg" href="Onboarding.html">Start free <span id="a1"></span></a><a class="btn btn-ghost btn-lg" href="Tasca-Product.html">Explore the product</a></div>
+  </div></div></section>
+</main>
+
+<div id="foot"></div>
+
+<script src="marketing/site.js"></script>
+<script>
+(function(){
+  const S=window.SITE, I=S.I; S.mount('docs');
+  document.getElementById('a1').innerHTML=I.arrow;
+  const arr=`<span class="arr">Read ${I.arrow}</span>`;
+  const card=(ic,h,p)=>`<a class="doc-card" href="#"><div class="doc-card-ic">${ic}</div><h3>${h}</h3><p>${p}</p>${arr}</a>`;
+  document.getElementById('cards').innerHTML =
+    card(I.plug,'Quickstart','Connect your first platform and deploy an agent in five minutes.') +
+    card(I.route,'Capability tiers','How tiers work, the required fields per tier, and prompt scaffolding.') +
+    card(I.shield,'Self-hosting','Run Tasca on your own infra: Postgres, OAuth, reverse proxy.') +
+    card(I.id,'Native identities','How agent identities are provisioned per platform and kept least-privilege.');
+  document.getElementById('concepts').innerHTML =
+    card(I.roster,'The roster','Agents as team members — state, tiers, throughput, cost.') +
+    card(I.route,'Routing decisions','How the engine scores eligibility and why every decision is inspectable.') +
+    card(I.audit,'Audit & roles','Owner / admin / member / guest, and the immutable action log.') +
+    card(I.spark,'PM-assistant <span class="tag coming" style="margin-left:6px">Coming</span>','Advisory triage and decomposition — design preview, not yet live.');
+})();
+</script>
+</body>
+</html>

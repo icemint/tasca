@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — control plane for your AI dev team</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/roster.css">
+<link rel="stylesheet" href="app/app-views.css">
+<link rel="stylesheet" href="app/hire.css">
+<link rel="stylesheet" href="app/connections.css">
+<link rel="stylesheet" href="app/monitoring.css">
+<link rel="stylesheet" href="app/add-connection.css">
+<link rel="stylesheet" href="app/settings.css">
+<link rel="stylesheet" href="app/pm-assistant.css">
+<link rel="stylesheet" href="assets/a11y.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); }
+  #app { height: 100vh; }
+  /* theme switch in topbar */
+  .theme-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--radius-sm); overflow: hidden; }
+  .theme-seg button { padding: 5px 11px; font-size: var(--fs-2xs); font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-4); background: var(--surface); transition: all var(--dur) var(--ease); }
+  .theme-seg button.on { color: var(--fg); background: var(--surface-3); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="app/data.js"></script>
+<script src="app/ui.js"></script>
+<script src="app/roster.js"></script>
+<script src="app/agent.js"></script>
+<script src="app/routing.js"></script>
+<script src="app/hire.js"></script>
+<script src="app/connections.js"></script>
+<script src="app/monitoring.js"></script>
+<script src="app/add-connection.js"></script>
+<script src="app/settings.js"></script>
+<script src="app/pm-assistant.js"></script>
+<script>
+(function () {
+  const U = window.UI;
+  const APP = {
+    view: 'roster', params: {},
+    ui: { density: 'cards', sort: 'auto', stateF: 'all', platF: 'all', q: '', eng: false },
+    hire: null,
+    theme: localStorage.getItem('tasca-theme') || 'dark',
+  };
+  document.documentElement.setAttribute('data-theme', APP.theme);
+
+  const root = document.getElementById('app');
+
+  function topbar() {
+    return `<header class="app-topbar">
+      <div style="display:flex;align-items:center;gap:18px">
+        <span class="brand" style="display:inline-flex;align-items:center;gap:10px">
+          <span style="width:24px;height:24px;display:inline-grid;color:var(--fg)">${U.MARK}</span>
+          <span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span></span>
+        <span class="topbar-ctx">Acme Robotics <span class="sep">/</span> Platform</span>
+      </div>
+      <div class="topbar-right">
+        <button class="icon-btn" title="Search">${U.I.search}</button>
+        <button class="icon-btn" title="Notifications">${U.I.bell}</button>
+        <span class="theme-seg"><button data-act="theme" data-v="dark" class="${APP.theme==='dark'?'on':''}">Dark</button><button data-act="theme" data-v="light" class="${APP.theme==='light'?'on':''}">Light</button></span>
+        <span class="av-md" style="background:color-mix(in srgb,var(--fg) 12%,transparent);border-color:var(--line-2);color:var(--fg-2);border-radius:50%">DM</span>
+      </div></header>`;
+  }
+  function rail() {
+    const items = [['roster', U.I.roster, 'Roster'], ['monitor', U.I.monitor, 'Monitoring'], ['connections', U.I.plug, 'Connections'], ['pm', U.I.spark, 'PM assistant']];
+    const onRoster = (APP.view==='roster'||APP.view==='agent'||APP.view==='routing'||APP.view==='hire');
+    const active = APP.view==='connections'||APP.view==='addconn' ? 'connections' : APP.view==='monitor' ? 'monitor' : APP.view==='pm' ? 'pm' : (onRoster ? 'roster' : '');
+    return `<nav class="app-rail" aria-label="Primary">
+      ${items.map(([k, ico, t]) => `<button class="rail-item ${active===k?'is-on':''}" title="${t}" data-act="nav" data-v="${k}">${ico}</button>`).join('')}
+      <div style="flex:1"></div>
+      <button class="rail-item ${APP.view==='settings'?'is-on':''}" title="Settings" data-act="nav" data-v="settings">${U.I.gear}</button></nav>`;
+  }
+
+  function render() {
+    let main;
+    if (APP.view === 'agent') main = window.AGENT.render(APP, APP.params.id);
+    else if (APP.view === 'routing') main = window.ROUTING.render(APP, APP.params.id);
+    else if (APP.view === 'hire') main = window.HIRE.render(APP);
+    else if (APP.view === 'connections') main = window.CONN.render(APP);
+    else if (APP.view === 'monitor') main = window.MON.render(APP);
+    else if (APP.view === 'addconn') main = window.ADDCONN.render(APP);
+    else if (APP.view === 'settings') main = window.SETTINGS.render(APP);
+    else if (APP.view === 'pm') main = window.PM.render(APP);
+    else main = window.ROSTER.render({ ui: APP.ui });
+    root.innerHTML = `<div class="surface-app">${topbar()}<div class="app-body">${rail()}
+      <main class="app-main"><div class="main-scroll" id="scroll">${main}</div></main></div></div>`;
+  }
+
+  function defaultHire() { return { step: 'identity', name: '', avatar: 'signal', vendor: '', runtime: 'ollama', model: '', minTier: 1, maxTier: 3, specialties: [], concurrency: 2, ceiling: 20, platforms: {} }; }
+  const HSTEPS = window.HIRE.STEPS.map(s => s.k);
+
+  function go(view, params) { APP.view = view; APP.params = params || {}; render(); document.getElementById('scroll').scrollTop = 0; }
+
+  // delegated events
+  root.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]'); if (!el) return;
+    const act = el.dataset.act, v = el.dataset.v, id = el.dataset.id;
+    switch (act) {
+      case 'open-agent': go('agent', { id }); break;
+      case 'open-task': go('routing', { id }); break;
+      case 'go-roster': go('roster'); break;
+      case 'nav': if (v==='connections') go('connections'); else if (v==='monitor') go('monitor'); else if (v==='settings') { if(!APP.settings) APP.settings={tab:'org',isAdmin:true}; go('settings'); } else if (v==='pm') { if(!APP.pm) APP.pm={on:false}; go('pm'); } else go('roster'); break;
+      case 'conn-add': APP.addconn = { step: 'pick' }; go('addconn'); break;
+      case 'ac-pick': APP.addconn = { step: 'connect', kind: el.dataset.kind, target: v, status: 'idle', repos: ['acme/api','acme/edge'] }; render(); break;
+      case 'ac-back': APP.addconn = { step: 'pick' }; render(); break;
+      case 'ac-cancel': go('connections'); break;
+      case 'ac-connect': APP.addconn.status = el.dataset.to; render(); break;
+      case 'ac-repo': { const r = v; const set = new Set(APP.addconn.repos || []); set.has(r) ? set.delete(r) : set.add(r); APP.addconn.repos = [...set]; render(); break; }
+      case 'ac-done': go('connections'); break;
+      case 'set-tab': APP.settings.tab = v; render(); break;
+      case 'set-role': APP.settings.isAdmin = (v==='admin'); render(); break;
+      case 'set-flag': el.classList.toggle('on'); break;
+      case 'noop': break;
+      case 'pm-toggle': APP.pm.on = (v==='on'); render(); break;
+      case 'add-agent': APP.hire = defaultHire(); go('hire'); break;
+      case 'hire-goto': { if (APP.hire) { const ci = HSTEPS.indexOf(APP.hire.step), ti = HSTEPS.indexOf(v); if (ti <= ci) { APP.hire.step = v; render(); } } break; }
+      case 'hire-next': { const i = HSTEPS.indexOf(APP.hire.step); if (i < HSTEPS.length-1) { APP.hire.step = HSTEPS[i+1]; render(); document.getElementById('scroll').scrollTop = 0; } break; }
+      case 'hire-prev': { const i = HSTEPS.indexOf(APP.hire.step); if (i > 0) { APP.hire.step = HSTEPS[i-1]; render(); document.getElementById('scroll').scrollTop = 0; } break; }
+      case 'hire-avatar': APP.hire.avatar = v; render(); break;
+      case 'hire-vendor': APP.hire.vendor = v; APP.hire.model = ''; render(); break;
+      case 'hire-runtime': APP.hire.runtime = v; APP.hire.model = ''; render(); break;
+      case 'hire-model': APP.hire.model = v; render(); break;
+      case 'hire-tier': { const lvl = +v; const h = APP.hire; if (lvl < h.minTier) h.minTier = lvl; else if (lvl > h.maxTier) h.maxTier = lvl; else if (lvl - h.minTier <= h.maxTier - lvl) h.minTier = lvl; else h.maxTier = lvl; render(); break; }
+      case 'hire-spec': { const s = APP.hire.specialties, i = s.indexOf(v); if (i>=0) s.splice(i,1); else s.push(v); render(); break; }
+      case 'hire-conc': APP.hire.concurrency = Math.max(1, Math.min(5, APP.hire.concurrency + (v==='inc'?1:-1))); render(); break;
+      case 'hire-cap': APP.hire.ceiling = +v; render(); break;
+      case 'hire-deploy': { APP.hire.platforms[v] = el.dataset.to; render(); if (el.dataset.to === 'connecting') { setTimeout(() => { if (APP.view==='hire' && APP.hire.platforms[v]==='connecting') { APP.hire.platforms[v]='done'; render(); } }, 1400); } break; }
+      case 'hire-finish': go('roster'); break;
+      case 'theme': APP.theme = v; localStorage.setItem('tasca-theme', v); document.documentElement.setAttribute('data-theme', v); render(); break;
+      case 'density': APP.ui.density = v; render(); break;
+      case 'rt-depth': APP.ui.eng = (v === 'eng'); render(); break;
+      case 'sort': APP.ui.sort = v; render(); break;
+      case 'filter-state': APP.ui.stateF = v; render(); break;
+      case 'filter-plat': APP.ui.platF = v; render(); break;
+      case 'clear-filters': APP.ui = { ...APP.ui, stateF: 'all', platF: 'all', q: '' }; render(); break;
+      case 'add-agent': case 'assign': /* design stub — flows live in later screens */ break;
+    }
+  });
+  root.addEventListener('input', (e) => {
+    const sb = e.target.closest('[data-act="search"]');
+    if (sb) { APP.ui.q = sb.value; const pos = sb.selectionStart; render(); const ni = document.querySelector('[data-act="search"]'); if (ni) { ni.focus(); ni.setSelectionRange(pos, pos); } return; }
+    const nm = e.target.closest('[data-act="hire-name"]');
+    if (nm) { APP.hire.name = nm.value; const av = document.getElementById('hire-av'); if (av) av.textContent = (nm.value||'New agent').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(); return; }
+    const cr = e.target.closest('[data-act="ac-cred"]');
+    if (cr) { APP.addconn.cred = cr.value; return; }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

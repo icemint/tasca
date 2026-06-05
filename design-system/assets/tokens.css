@@ -1,0 +1,371 @@
+/* ============================================================================
+   TASCA DESIGN TOKENS  ·  single source of truth
+   Three layers:  (1) PRIMITIVES — raw values, theme-agnostic
+                  (2) SEMANTIC   — role aliases, themed (dark default + light)
+                  (3) COMPONENT  — tier / status / review / exec scales
+   Load this LAST (after tasca.css) so the semantic layer is authoritative.
+   Toggle themes with  <html data-theme="light">  /  default = dark.
+   ============================================================================ */
+
+:root {
+  /* ── LAYER 1 · PRIMITIVES ───────────────────────────────────────────────── */
+
+  /* Ink ramp (cool near-black → slate) — hsl(214 …) */
+  --p-ink-950: #070A11;   /* 214 30% 5%  */
+  --p-ink-900: #090D14;   /* 214 24% 6%  */
+  --p-ink-850: #0B1019;   /* 215 24% 7%  */
+  --p-ink-800: #0F1622;   /* 215 38% 10% */
+  --p-ink-700: #141D2C;   /* 215 37% 13% */
+  --p-ink-600: #1A2434;   /* 214 34% 15% */
+
+  /* Slate text ramp */
+  --p-slate-50:  #F3F6FB;
+  --p-slate-100: #E2E8F0;
+  --p-slate-200: #C4CDDA;
+  --p-slate-300: #94A3B8;
+  --p-slate-400: #8B97A8;
+  --p-slate-500: #5C6779;
+  --p-slate-600: #475569;
+  --p-slate-700: #334155;
+  --p-slate-800: #1E293B;
+  --p-slate-900: #0F172A;
+
+  /* White / black alphas (hairlines, scrims) */
+  --p-wa-04: rgba(255,255,255,0.04);
+  --p-wa-07: rgba(255,255,255,0.07);
+  --p-wa-12: rgba(255,255,255,0.12);
+  --p-wa-18: rgba(255,255,255,0.18);
+  --p-ba-50: rgba(4,7,12,0.50);
+  --p-ba-62: rgba(4,7,12,0.62);
+
+  /* Signal blue — hsl(213 91% …) */
+  --p-blue-200: #9AC8FF;
+  --p-blue-300: #6FB3FF;   /* 213 100% 72% */
+  --p-blue-400: #4D9CF6;   /* 213 90% 64%  */
+  --p-blue-500: #2C6FD6;   /* 215 68% 51%  */
+  --p-blue-700: #0052B5;   /* 211 100% 36% — light-theme brand */
+  --p-blue-800: #0072E5;
+  --p-blue-900: #1B3A63;
+  --p-blue-glow-d: rgba(77,156,246,0.16);
+  --p-blue-glow-l: rgba(0,82,181,0.12);
+
+  /* Amber */
+  --p-amber-300: #FFD571;
+  --p-amber-400: #FFC53D;  /* 44 100% 62% */
+  --p-amber-700: #B45309;
+  --p-amber-800: #92400E;
+
+  /* Status / accent hues */
+  --p-green-400: #34D399;  --p-green-700: #15803D;
+  --p-red-400:   #FF6B6B;  --p-red-600:   #DC2626;
+  --p-purple-400:#A78BFA;  --p-purple-700:#7E22CE;
+  --p-violet-400:#8B7BF0;  --p-violet-700:#6D28D9;
+  --p-teal-400:  #2DD4BF;  --p-teal-700:  #0E7490;
+  --p-slate-tier:#8893A5;
+
+  /* ── TYPOGRAPHY (theme-agnostic) ────────────────────────────────────────── */
+  --font-display: "Space Grotesk", system-ui, sans-serif;   /* hero / headings */
+  --font-body:    "Hanken Grotesk", system-ui, sans-serif;  /* UI / body */
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale (1.25 major-third-ish, rem @16px root) */
+  --fs-2xs: 11px;   --lh-2xs: 1.4;
+  --fs-xs:  12px;   --lh-xs:  1.45;
+  --fs-sm:  13px;   --lh-sm:  1.5;
+  --fs-base:15px;   --lh-base:1.6;
+  --fs-md:  16px;   --lh-md:  1.6;
+  --fs-lg:  18px;   --lh-lg:  1.55;
+  --fs-xl:  20px;   --lh-xl:  1.4;
+  --fs-2xl: 26px;   --lh-2xl: 1.25;
+  --fs-3xl: 34px;   --lh-3xl: 1.15;
+  --fs-4xl: 42px;   --lh-4xl: 1.08;
+  --fs-hero: 70px;  --lh-hero:1.02;   /* display, hero */
+
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700;
+
+  --tracking-hero:  -0.035em;
+  --tracking-tight: -0.02em;
+  --tracking-normal:0;
+  --tracking-wide:  0.08em;
+  --tracking-eyebrow:0.18em;
+
+  /* ── SPACING (8-pt grid) ────────────────────────────────────────────────── */
+  --sp-0: 0;     --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-8: 32px;  --sp-10: 40px; --sp-12: 48px;
+  --sp-16: 64px; --sp-20: 80px; --sp-24: 100px; --sp-32: 128px;
+  --maxw: 1200px;
+  --pad: 24px;
+
+  /* ── RADII ──────────────────────────────────────────────────────────────── */
+  --radius-xs:   4px;
+  --radius-tag:  6px;
+  --radius-sm:   8px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-card: 14px;
+  --radius-xl:   20px;
+  --radius-pill: 999px;
+
+  /* ── Z-INDEX LAYERS ─────────────────────────────────────────────────────── */
+  --z-base:    0;
+  --z-raised:  10;
+  --z-sticky:  100;
+  --z-scrim:   200;
+  --z-drawer:  210;
+  --z-assistant:215;
+  --z-popover: 300;
+  --z-toast:   400;
+
+  /* ── OPACITY SCALE ──────────────────────────────────────────────────────── */
+  --op-disabled: 0.4;
+  --op-muted:    0.6;
+  --op-faint:    0.32;
+  --op-hover:    0.08;
+
+  /* ── MOTION ─────────────────────────────────────────────────────────────── */
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+  --ease-emphasis: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast:   120ms;
+  --dur:        220ms;
+  --dur-slow:   320ms;
+
+  /* ── GRADIENTS ─────────────────────────────────────────────────────────── */
+  --gradient-panel: radial-gradient(120% 140% at 85% 0%, rgba(77,156,246,0.22), transparent 55%), linear-gradient(135deg, #0B2A52 0%, #0A1A33 45%, #0B1019 100%);
+  --gradient-aside: radial-gradient(120% 130% at 80% 10%, rgba(77,156,246,0.20), transparent 55%), linear-gradient(160deg, #0B2A52 0%, #0A1A33 45%, #0B1019 100%);
+
+  /* ── LEGACY ALIASES (back-compat: components written before the token split) ─ */
+  --f-display: var(--font-display);
+  --f-body:    var(--font-body);
+  --f-mono:    var(--font-mono);
+  --r-card: var(--radius-card);
+  --r-md:   var(--radius-md);
+  --r-sm:   var(--radius-sm);
+  --r-tag:  var(--radius-tag);
+  --r-pill: var(--radius-pill);
+
+  /* ════════════════════════════════════════════════════════════════════════
+     LAYER 2 · SEMANTIC — DARK (default)
+     ════════════════════════════════════════════════════════════════════════ */
+  --bg:        var(--p-ink-900);
+  --bg-sub:    var(--p-ink-850);
+  --surface:   var(--p-ink-800);
+  --surface-2: var(--p-ink-700);
+  --surface-3: var(--p-ink-600);
+
+  --line:      var(--p-wa-07);
+  --line-2:    var(--p-wa-12);
+  --line-3:    var(--p-wa-18);
+
+  --fg:        var(--p-slate-50);
+  --fg-2:      var(--p-slate-200);
+  --fg-3:      var(--p-slate-400);
+  --fg-4:      var(--p-slate-500);
+  --fg-faint:  #424C5C;
+
+  --signal:     var(--p-blue-400);
+  --signal-2:   var(--p-blue-300);
+  --signal-3:   var(--p-blue-500);
+  --signal-dim: var(--p-blue-900);
+  --signal-glow:var(--p-blue-glow-d);
+
+  --amber:      var(--p-amber-400);
+  --amber-2:    var(--p-amber-300);
+  --amber-deep: #B27B00;
+
+  --green:  var(--p-green-400);
+  --red:    var(--p-red-400);
+  --purple: var(--p-purple-400);
+  --violet: var(--p-violet-400);
+
+  /* elevation — borders are primary; shadow reserved for floating layers */
+  --shadow-sm:  0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md:  0 8px 24px -8px rgba(0,0,0,0.55);
+  --shadow-lg:  0 20px 50px -16px rgba(0,0,0,0.70);
+  --shadow-xl:  0 40px 120px -40px rgba(0,0,0,0.80);
+  --shadow-glow:0 12px 40px -12px var(--signal-glow);
+  --scrim:      var(--p-ba-62);
+
+  /* ── LAYER 3 · COMPONENT — TIER SCALE (dark) ────────────────────────────── */
+  --tier-basic:  var(--p-slate-tier);
+  --tier-low:    var(--p-blue-400);
+  --tier-medium: var(--p-teal-400);
+  --tier-hard:   var(--p-amber-400);
+  --tier-ultra:  var(--p-red-400);
+  /* legacy aliases used across components */
+  --t-basic: var(--tier-basic);   --t-low: var(--tier-low);
+  --t-medium: var(--tier-medium); --t-hard: var(--tier-hard);
+  --t-ultra: var(--tier-ultra);
+
+  /* review-state (PR ↔ ticket) */
+  --review-draft:    var(--p-slate-400);
+  --review-open:     var(--p-blue-400);
+  --review-approved: var(--p-green-400);
+  --review-changes:  var(--p-red-400);
+  --review-merged:   var(--p-purple-400);
+
+  /* execution-state (agent runs) */
+  --exec-idle:    var(--p-slate-400);
+  --exec-running: var(--p-blue-400);
+  --exec-pending: var(--p-amber-400);
+  --exec-failed:  var(--p-red-400);
+  --exec-denied:  var(--p-red-600);
+
+  /* agent-state (roster / team vocabulary) — dark
+     idle=neutral · working=blue · awaiting-input=amber · blocked=red · shipped=green
+     Never color-only: always pair with label + shape (see .astate component). */
+  --state-idle:     var(--p-slate-400);
+  --state-working:  var(--p-blue-400);
+  --state-awaiting: var(--p-amber-400);
+  --state-blocked:  var(--p-red-400);
+  --state-shipped:  var(--p-green-400);
+  --state-queued:   var(--p-violet-400);  /* pipeline state: waiting for a slot */
+
+  /* vendor indicators — NEUTRAL by construction (no brand color dominates).
+     All render in the same muted ink; the glyph/label disambiguates, not hue. */
+  --vendor-fg:     var(--p-slate-300);
+  --vendor-bg:     var(--p-wa-04);
+  --vendor-line:   var(--p-wa-12);
+
+  /* ── FOCUS RING (standardized across all interactive elements) ──────────── */
+  --focus-ring-color: var(--signal);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+  --focus-ring-soft: 0 0 0 3px var(--signal-glow);
+
+  /* ── DIFF (code review surfaces) — dark ─────────────────────────────────── */
+  --diff-add-fg:   #7EE787;
+  --diff-add-bg:   rgba(46,160,67,0.16);
+  --diff-add-line: rgba(46,160,67,0.40);
+  --diff-del-fg:   #FF9492;
+  --diff-del-bg:   rgba(248,81,73,0.16);
+  --diff-del-line: rgba(248,81,73,0.40);
+  --diff-gutter:   var(--fg-4);
+  --diff-context:  var(--surface);
+
+  /* ── SYNTAX (9 roles) — dark (GitHub-dark calibrated) ───────────────────── */
+  --syntax-keyword:     #FF7B72;
+  --syntax-function:    #D2A8FF;
+  --syntax-constant:    #79C0FF;
+  --syntax-string:      #A5D6FF;
+  --syntax-variable:    #FFA657;
+  --syntax-comment:     #8B949E;
+  --syntax-number:      #79C0FF;
+  --syntax-type:        #7EE787;
+  --syntax-punctuation: #C9D1D9;
+
+  /* ── ANSI terminal palette — dark ───────────────────────────────────────── */
+  --ansi-black:#484F58; --ansi-red:#FF7B72; --ansi-green:#3FB950; --ansi-yellow:#D29922;
+  --ansi-blue:#58A6FF; --ansi-magenta:#BC8CFF; --ansi-cyan:#39C5CF; --ansi-white:#B1BAC4;
+  --ansi-bright-black:#6E7681; --ansi-bright-red:#FFA198; --ansi-bright-green:#56D364; --ansi-bright-yellow:#E3B341;
+  --ansi-bright-blue:#79C0FF; --ansi-bright-magenta:#D2A8FF; --ansi-bright-cyan:#56D4DD; --ansi-bright-white:#FFFFFF;
+
+  --fonts-display-loaded: 1; /* marker */
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   LAYER 2 · SEMANTIC — LIGHT THEME
+   Equal specificity to :root, declared later → wins when data-theme="light".
+   Also matches ANY element with [data-theme="light"] so a wrapper can theme
+   its subtree (used to preview both themes side-by-side on one canvas).
+   ════════════════════════════════════════════════════════════════════════════ */
+:root[data-theme="light"], [data-theme="light"] {
+  --bg:        #FFFFFF;
+  --bg-sub:    var(--p-slate-50);
+  --surface:   #FFFFFF;
+  --surface-2: var(--p-slate-50);
+  --surface-3: var(--p-slate-100);
+
+  --line:      var(--p-slate-100);
+  --line-2:    var(--p-slate-200);
+  --line-3:    var(--p-slate-300);
+
+  --fg:        var(--p-slate-900);
+  --fg-2:      var(--p-slate-800);
+  --fg-3:      var(--p-slate-600);
+  --fg-4:      var(--p-slate-500);
+  --fg-faint:  var(--p-slate-300);
+
+  --signal:     var(--p-blue-700);
+  --signal-2:   var(--p-blue-800);
+  --signal-3:   var(--p-blue-700);
+  --signal-glow:var(--p-blue-glow-l);
+
+  --green:  var(--p-green-700);
+  --red:    var(--p-red-600);
+  --purple: var(--p-purple-700);
+  --violet: var(--p-violet-700);
+
+  --shadow-sm:  0 1px 2px rgba(15,23,42,0.06);
+  --shadow-md:  0 4px 12px -2px rgba(15,23,42,0.10);
+  --shadow-lg:  0 18px 40px -12px rgba(15,23,42,0.16);
+  --shadow-xl:  0 30px 80px -24px rgba(15,23,42,0.20);
+  --scrim:      rgba(15,23,42,0.40);
+
+  /* TIER SCALE (light) — darkened for AA text contrast on white surfaces */
+  --tier-basic:  var(--p-slate-600);
+  --tier-low:    var(--p-blue-700);
+  --tier-medium: var(--p-teal-700);
+  --tier-hard:   var(--p-amber-700);
+  --tier-ultra:  var(--p-red-600);
+  --t-basic: var(--tier-basic);   --t-low: var(--tier-low);
+  --t-medium: var(--tier-medium); --t-hard: var(--tier-hard);
+  --t-ultra: var(--tier-ultra);
+
+  --review-draft:    var(--p-slate-600);
+  --review-open:     var(--p-blue-700);
+  --review-approved: var(--p-green-700);
+  --review-changes:  var(--p-red-600);
+  --review-merged:   var(--p-purple-700);
+
+  --exec-idle:    var(--p-slate-600);
+  --exec-running: var(--p-blue-700);
+  --exec-pending: var(--p-amber-700);
+  --exec-failed:  var(--p-red-600);
+  --exec-denied:  var(--p-red-600);
+
+  /* agent-state — light (darkened for AA text contrast on white surfaces) */
+  --state-idle:     var(--p-slate-600);
+  --state-working:  var(--p-blue-700);
+  --state-awaiting: var(--p-amber-700);
+  --state-blocked:  var(--p-red-600);
+  --state-shipped:  var(--p-green-700);
+  --state-queued:   var(--p-violet-700);
+
+  /* vendor indicators — light */
+  --vendor-fg:     var(--p-slate-600);
+  --vendor-bg:     var(--p-slate-50);
+  --vendor-line:   var(--p-slate-200);
+
+  /* focus ring on light */
+  --focus-ring: 0 0 0 2px #FFFFFF, 0 0 0 4px var(--signal);
+  --focus-ring-soft: 0 0 0 3px var(--signal-glow);
+
+  /* DIFF — light (GitHub-light) */
+  --diff-add-fg:   #1A7F37;
+  --diff-add-bg:   #DAFBE1;
+  --diff-add-line: #4AC26B;
+  --diff-del-fg:   #CF222E;
+  --diff-del-bg:   #FFEBE9;
+  --diff-del-line: #FF8182;
+  --diff-gutter:   var(--fg-4);
+  --diff-context:  var(--surface);
+
+  /* SYNTAX — light */
+  --syntax-keyword:     #CF222E;
+  --syntax-function:    #8250DF;
+  --syntax-constant:    #0550AE;
+  --syntax-string:      #0A3069;
+  --syntax-variable:    #953800;
+  --syntax-comment:     #6E7781;
+  --syntax-number:      #0550AE;
+  --syntax-type:        #116329;
+  --syntax-punctuation: #1F2328;
+
+  /* ANSI — light */
+  --ansi-black:#24292F; --ansi-red:#CF222E; --ansi-green:#116329; --ansi-yellow:#4D2D00;
+  --ansi-blue:#0969DA; --ansi-magenta:#8250DF; --ansi-cyan:#1B7C83; --ansi-white:#6E7781;
+  --ansi-bright-black:#57606A; --ansi-bright-red:#A40E26; --ansi-bright-green:#1A7F37; --ansi-bright-yellow:#633C01;
+  --ansi-bright-blue:#218BFF; --ansi-bright-magenta:#A475F9; --ansi-bright-cyan:#3192AA; --ansi-bright-white:#8C959F;
+}

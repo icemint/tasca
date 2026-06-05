@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Sign in & get started</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/roster.css">
+<link rel="stylesheet" href="app/onboarding.css">
+<link rel="stylesheet" href="assets/a11y.css">
+</head>
+<body>
+<div id="onb"></div>
+
+<script src="app/data.js"></script>
+<script src="app/ui.js"></script>
+<script src="app/onboarding.js"></script>
+<script>
+(function () {
+  const root = document.getElementById('onb');
+  window.__onbTheme = localStorage.getItem('tasca-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', window.__onbTheme);
+
+  const S = { step: 'login', connected: null, target: null, hire: {} };
+
+  function render() { root.innerHTML = window.ONB.render(S); }
+
+  root.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]'); if (!el) return;
+    const act = el.dataset.act, v = el.dataset.v;
+    switch (act) {
+      case 'onb-theme':
+        window.__onbTheme = v; localStorage.setItem('tasca-theme', v);
+        document.documentElement.setAttribute('data-theme', v); render(); break;
+      case 'onb-go': S.step = v; render(); break;
+      case 'onb-connect':
+        S.target = el.dataset.k; S.connected = el.dataset.to; render(); break;
+      case 'onb-vendor':
+        S.hire.vendor = v; render(); break;
+      case 'onb-deploy':
+        S.hire.deployed = true; render(); break;
+      case 'noop': break;
+    }
+  });
+  root.addEventListener('input', (e) => {
+    const nm = e.target.closest('[data-act="onb-name"]'); if (!nm) return;
+    S.hire.name = nm.value;
+    const pos = nm.selectionStart;
+    render();
+    const ni = document.querySelector('[data-act="onb-name"]');
+    if (ni) { ni.focus(); try { ni.setSelectionRange(pos, pos); } catch (e) {} }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

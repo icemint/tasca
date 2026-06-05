@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Error pages</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/roster.css">
+<link rel="stylesheet" href="assets/a11y.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); font-family: var(--font-body); color: var(--fg-2); }
+  .err-stage { min-height: 100vh; display: flex; flex-direction: column; }
+  .err-top { display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 28px; border-bottom: 1px solid var(--line); }
+  .err-brand { display: inline-flex; align-items: center; gap: 10px; }
+  .err-mark { width: 24px; height: 24px; display: inline-grid; color: var(--fg); }
+  .brand-word { font-family: var(--font-display); font-size: 18px; font-weight: 700; letter-spacing: -0.03em; }
+  .brand-word .a { color: var(--fg); } .brand-word .b { color: var(--fg-4); }
+  /* demo switcher (not part of the shipped page) */
+  .err-switch { display: inline-flex; gap: 2px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); overflow: hidden; }
+  .err-switch button { padding: 6px 13px; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-4); background: var(--surface); cursor: pointer; border: none; transition: all var(--dur) var(--ease); }
+  .err-switch button.on { color: var(--fg); background: var(--surface-3); }
+  .theme-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--radius-sm); overflow: hidden; margin-left: 12px; }
+  .theme-seg button { padding: 6px 11px; font-size: var(--fs-2xs); font-family: var(--font-mono); text-transform: uppercase; color: var(--fg-4); background: var(--surface); cursor: pointer; border: none; }
+  .theme-seg button.on { color: var(--fg); background: var(--surface-3); }
+
+  .err-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
+  .err-card { width: 100%; max-width: 560px; text-align: center; display: flex; flex-direction: column; align-items: center; }
+  .err-code { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-4); }
+  .err-ico { width: 72px; height: 72px; border-radius: var(--radius-lg); display: grid; place-items: center; margin: 18px 0 22px; border: 1px solid var(--line-2); background: var(--surface); }
+  .err-ico svg { width: 34px; height: 34px; }
+  .err-ico.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, transparent); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+  .err-ico.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent); }
+  .err-ico.lock { color: var(--fg-3); }
+  .err-num { font-family: var(--font-display); font-size: 64px; font-weight: 600; letter-spacing: -0.04em; color: var(--fg); line-height: 1; }
+  .err-card h1 { font-family: var(--font-display); font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.025em; color: var(--fg); margin: 14px 0 0; }
+  .err-card p { font-size: var(--fs-md); color: var(--fg-3); line-height: 1.6; margin: 12px 0 0; max-width: 460px; }
+  .err-card p b { color: var(--fg-2); font-weight: 600; }
+  .err-actions { display: flex; align-items: center; gap: 12px; margin-top: 28px; flex-wrap: wrap; justify-content: center; }
+  .btn-add { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm); padding: 11px 18px; border-radius: var(--radius-sm); background: var(--signal); color: #04101F; border: none; cursor: pointer; text-decoration: none; transition: background var(--dur) var(--ease), transform var(--dur) var(--ease); }
+  .btn-add:hover { background: var(--signal-2); transform: translateY(-1px); }
+  .btn-add svg { width: 15px; height: 15px; }
+  :root[data-theme="light"] .btn-add, [data-theme="light"] .btn-add { color: #fff; }
+  .btn-ghost { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm); padding: 11px 18px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg-2); cursor: pointer; text-decoration: none; transition: all var(--dur) var(--ease); }
+  .btn-ghost:hover { border-color: var(--line-3); color: var(--fg); }
+  .err-ref { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-faint); margin-top: 26px; }
+  .err-links { margin-top: 14px; font-size: var(--fs-sm); display: flex; gap: 10px; align-items: center; color: var(--fg-3); }
+  .err-links a { color: var(--signal-2); text-decoration: none; } .err-links a:hover { text-decoration: underline; }
+  .err-links .sep { color: var(--fg-faint); }
+  .err-status { margin-top: 30px; display: inline-flex; align-items: center; gap: 9px; padding: 9px 15px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface); font-size: var(--fs-xs); color: var(--fg-3); }
+  .err-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; }
+  .err-status .dot.amber { background: var(--amber); }
+</style>
+</head>
+<body>
+<div class="err-stage">
+  <div class="err-top">
+    <span class="err-brand"><span class="err-mark" id="mk"></span><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span></span>
+    <span style="display:flex;align-items:center">
+      <span class="err-switch"><button data-k="404" class="on">404</button><button data-k="500">500</button><button data-k="403">403</button></span>
+      <span class="theme-seg"><button data-t="dark" class="on">Dark</button><button data-t="light">Light</button></span>
+    </span>
+  </div>
+  <div class="err-body"><div class="err-card" id="card"></div></div>
+</div>
+
+<script src="app/ui.js"></script>
+<script src="app/data.js"></script>
+<script>
+(function () {
+  const U = window.UI;
+  document.getElementById('mk').innerHTML = U.MARK;
+  const theme = localStorage.getItem('tasca-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.querySelectorAll('.theme-seg button').forEach(b => b.classList.toggle('on', b.dataset.t === theme));
+
+  const ICON = {
+    compass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5 5-2Z" stroke-linejoin="round"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 8v5M12 16.5v.2"/><path d="M12 3.5l8.5 15h-17l8.5-15Z" stroke-linejoin="round"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="10.5" width="14" height="9" rx="2"/><path d="M8 10.5V7.5a4 4 0 018 0v3" stroke-linecap="round"/></svg>',
+  };
+
+  const PAGES = {
+    '404': {
+      code: 'Error 404 · Not found', num: '404', ico: ['compass', ''],
+      h: 'This page isn’t on the roster', 
+      p: 'The link may be broken, or the agent, task, or connection it pointed to was moved or retired. Nothing’s wrong with your account — this address just doesn’t resolve.',
+      actions: `<a class="btn-add" href="Tasca.html">${U.I.roster||''} Go to your team</a><a class="btn-ghost" href="Tasca-Home.html">Back to home</a>`,
+      links: `<a href="Tasca-Docs.html">Docs</a><span class="sep">·</span><a href="#">Search</a>`,
+      ref: 'path · /agents/unknown',
+    },
+    '500': {
+      code: 'Error 500 · Server error', num: '500', ico: ['alert', 'bad'],
+      h: 'Something broke on our end',
+      p: 'A Tasca service hit an unexpected error — this is on us, not you. <b>Your agents and their work are unaffected;</b> this is a failure rendering this page, not in the routing engine. We’ve logged it and the team is paged.',
+      actions: `<button class="btn-add" onclick="location.reload()">Try again</button><a class="btn-ghost" href="Tasca-Security.html#status">View status</a>`,
+      links: `<a href="#">Contact support</a>`,
+      ref: 'req · 5f3c91a2 · logged 12:04:02',
+      status: { txt: 'Routing engine · operational', amber: false },
+    },
+    '403': {
+      code: 'Error 403 · Forbidden', num: '403', ico: ['lock', 'lock'],
+      h: 'You don’t have access to this',
+      p: 'This surface is restricted — likely an <b>admin-only</b> setting (billing, vendor keys, or members) and you’re signed in as a Member. Ask an org admin to grant access or change your role.',
+      actions: `<a class="btn-add" href="Tasca.html">Back to your team</a><button class="btn-ghost" onclick="alert('Request sent to your org admins')">Request access</button>`,
+      links: `<a href="Tasca-Security.html">Roles &amp; access</a>`,
+      ref: 'resource · org.settings.billing · role=member',
+    },
+  };
+
+  function render(k) {
+    const pg = PAGES[k];
+    document.getElementById('card').innerHTML = `
+      <div class="err-code">${pg.code}</div>
+      <div class="err-ico ${pg.ico[1]}">${ICON[pg.ico[0]]}</div>
+      <div class="err-num">${pg.num}</div>
+      <h1>${pg.h}</h1>
+      <p>${pg.p}</p>
+      <div class="err-actions">${pg.actions}</div>
+      ${pg.status ? `<div class="err-status"><span class="dot ${pg.status.amber?'amber':''}"></span>${pg.status.txt}</div>` : ''}
+      <div class="err-links">${pg.links}</div>
+      <div class="err-ref">${pg.ref}</div>`;
+  }
+
+  document.querySelectorAll('.err-switch button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.err-switch button').forEach(x => x.classList.toggle('on', x === b));
+    render(b.dataset.k);
+  }));
+  document.querySelectorAll('.theme-seg button').forEach(b => b.addEventListener('click', () => {
+    const t = b.dataset.t; localStorage.setItem('tasca-theme', t);
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelectorAll('.theme-seg button').forEach(x => x.classList.toggle('on', x === b));
+  }));
+
+  render('404');
+})();
+</script>
+</body>
+</html>

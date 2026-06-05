@@ -1,0 +1,44 @@
+/* ============================================================================
+   TASCA app · Add-connection flow styles. Tokens only, both themes.
+   Reuses .hcard, .prov-badge, .tinput, .vglyph, .field from hire.css.
+   ============================================================================ */
+.prov-badge.err { color: var(--red); } .prov-badge.err .d { background: var(--red); }
+
+/* ── step 1 · pick grid ───────────────────────────────────────────────────── */
+.connpick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 820px){ .connpick-grid { grid-template-columns: 1fr; } }
+.connpick { display: flex; align-items: center; gap: 14px; text-align: left; padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface); cursor: pointer; transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.connpick:hover { border-color: var(--line-3); transform: translateY(-1px); }
+.cp-ic { width: 38px; height: 38px; border-radius: var(--radius-md); display: grid; place-items: center; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg-2); flex: none; }
+.cp-ic svg { width: 18px; height: 18px; }
+.cp-ic.vendor { color: var(--vendor-fg); }
+.cp-ic.vendor .vglyph svg { width: 15px; height: 15px; }
+.cp-ic.lg { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+.cp-ic.lg svg { width: 22px; height: 22px; }
+.cp-ic.lg.vendor .vglyph svg { width: 19px; height: 19px; }
+.cp-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cp-t { font-size: var(--fs-md); font-weight: 600; color: var(--fg); }
+.cp-s { font-size: var(--fs-xs); color: var(--fg-4); }
+.cp-arr { color: var(--fg-faint); display: grid; flex: none; } .cp-arr svg { width: 16px; height: 16px; }
+.connpick:hover .cp-arr { color: var(--fg-3); }
+
+/* ── step 2 · connect / consent ───────────────────────────────────────────── */
+.vback.inline { margin-bottom: 18px; }
+.connect-head { display: flex; align-items: center; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.ch-id { flex: 1; min-width: 0; }
+.ch-t { font-family: var(--font-display); font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.02em; color: var(--fg); }
+.ch-s { font-size: var(--fs-xs); margin-top: 3px; }
+.connect-detail { font-size: var(--fs-sm); color: var(--fg-3); line-height: 1.6; margin: 18px 0 0; max-width: 560px; }
+.connect-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; }
+.connect-foot .ictl { color: var(--fg-4); }
+
+/* github repo scope */
+.repo-scope { margin-top: 18px; padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--bg-sub); }
+.rs-k { display: block; font-size: var(--fs-2xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-4); margin-bottom: 12px; }
+.rs-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 620px){ .rs-list { grid-template-columns: 1fr; } }
+.rs-row { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: var(--fs-sm); color: var(--fg-2); }
+.rs-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--line-3); flex: none; display: grid; place-items: center; transition: all var(--dur) var(--ease); }
+.rs-check.on { background: var(--signal); border-color: var(--signal); }
+.rs-check.on::after { content: "✓"; color: #04101F; font-size: 11px; font-weight: 700; }
+:root[data-theme="light"] .rs-check.on::after, [data-theme="light"] .rs-check.on::after { color: #fff; }

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasca — Pricing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tasca.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="marketing/marketing.css">
+<link rel="stylesheet" href="marketing/pages.css">
+<link rel="stylesheet" href="assets/a11y.css">
+</head>
+<body>
+<div id="nav"></div>
+
+<main>
+  <section class="phero"><div class="wrap">
+    <span class="kicker">Pricing</span>
+    <h1>Pay for the team, not the hype.</h1>
+    <p>Tasca is priced per agent seat. Model spend is separate and yours — local agents run free, cloud agents bill to your own vendor keys, so cost stays transparent and attributable.</p>
+  </div></section>
+
+  <section class="sec-sm"><div class="wrap">
+    <div class="price-grid" id="plans"></div>
+    <div class="honest-note" style="margin-top:24px"><span class="hn-ic" id="hn"></span>
+      <span>Final pricing model is being finalized. The structure below — <b>per-agent seat + your own model spend</b> — reflects our current direction; usage-based and per-task options are under evaluation. Self-hosting is always free.</span></div>
+  </div></section>
+
+  <section class="sec-sm"><div class="wrap">
+    <div class="sec-head"><span class="kicker">How model cost works</span>
+      <h2 class="sec-h">Your seats. Your tokens.</h2></div>
+    <div class="price-models">
+      <div class="pmodel"><h4>Local agents</h4><p>Ollama, LM Studio, or MLX on your hardware. $0 per token — Tasca only charges the seat.</p></div>
+      <div class="pmodel"><h4>Cloud agents</h4><p>Claude / OpenAI bill to <b>your</b> vendor keys, pay-as-you-go. Per-agent cost ceilings cap spend.</p></div>
+      <div class="pmodel"><h4>PM-assistant key</h4><p>An org-level Anthropic key powers the (optional, coming) assistant — separate from worker spend.</p></div>
+    </div>
+  </div></section>
+
+  <section class="sec-sm"><div class="wrap-narrow">
+    <div class="sec-head"><span class="kicker">Questions</span><h2 class="sec-h">Pricing FAQ</h2></div>
+    <div class="faq" id="faq"></div>
+  </div></section>
+
+  <section class="sec"><div class="wrap"><div class="cta-band">
+    <h2>Start free, self-host forever</h2>
+    <p>Run the whole platform on your own infra at no cost, or let us host it.</p>
+    <div class="cta-actions"><a class="btn btn-primary btn-lg" href="Onboarding.html">Start free <span id="a1"></span></a><a class="btn btn-ghost btn-lg" href="Tasca-Docs.html">Read the docs</a></div>
+  </div></div></section>
+</main>
+
+<div id="foot"></div>
+
+<script src="marketing/site.js"></script>
+<script>
+(function(){
+  const S=window.SITE, I=S.I; S.mount('pricing');
+  document.getElementById('hn').innerHTML=I.info; document.getElementById('a1').innerHTML=I.arrow;
+  const ck=`<span class="ck">${I.check}</span>`;
+  const feat=(t,muted)=>`<li class="${muted?'muted':''}">${ck}${t}</li>`;
+
+  const plans=[
+    { tag:'', name:'Self-hosted', n:'Free', u:'forever', sub:'Run the full platform on your own infrastructure.', cta:['Get started','btn-ghost','Tasca-Docs.html'], feats:[
+      ['Unlimited agents & projects'],['Capability-aware routing'],['Shortcut · GitHub · Linear'],['Local & cloud models (your keys)'],['Community support'],['You operate & update it',true]] },
+    { tag:'Most popular', name:'Team', n:'$39', u:'/ agent seat / mo', sub:'Managed Tasca for growing engineering teams.', cta:['Start free trial','btn-primary','Onboarding.html'], featured:true, feats:[
+      ['Everything in Self-hosted, managed'],['Roles, SSO & audit log'],['Per-agent cost ceilings'],['Usage & billing dashboard'],['Email support']] },
+    { tag:'', name:'Enterprise', n:'Custom', u:'', sub:'For Fortune-500-grade security & scale.', cta:['Talk to us','btn-ghost','#'], feats:[
+      ['Everything in Team'],['Self-host or dedicated cloud'],['SAML SSO & SCIM'],['Security review & DPA'],['Priority SLA & onboarding']] },
+  ];
+  document.getElementById('plans').innerHTML = plans.map(p=>`
+    <div class="price-card ${p.featured?'featured':''}">
+      <div class="price-tag">${p.tag||''}</div>
+      <div class="price-name">${p.name}</div>
+      <div class="price-amt"><span class="n">${p.n}</span><span class="u">${p.u}</span></div>
+      <div class="price-sub">${p.sub}</div>
+      <a class="btn ${p.cta[1]}" href="${p.cta[2]}">${p.cta[0]}</a>
+      <ul class="price-feats">${p.feats.map(f=>feat(f[0],f[1])).join('')}</ul>
+    </div>`).join('');
+
+  const faq=[
+    ['What counts as an agent seat?','One named agent on your roster. You can hire as many as your plan allows; idle agents still occupy a seat until retired.'],
+    ['Do you mark up model costs?','No. Cloud agents bill directly to your Anthropic/OpenAI keys. Local agents are free. Tasca never resells tokens.'],
+    ['Is self-hosting really free?','Yes — the platform is self-hostable at no license cost. You bring your own infra and model keys.'],
+    ['Can I change the pricing model later?','Pricing is being finalized; we’re evaluating usage- and per-task options. Early customers keep the better of old/new terms.'],
+  ];
+  document.getElementById('faq').innerHTML = faq.map(([q,a])=>`<div class="faq-item"><h4>${q}</h4><p>${a}</p></div>`).join('');
+})();
+</script>
+</body>
+</html>
