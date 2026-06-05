@@ -1,0 +1,9 @@
+---
+import { MARK } from '../lib/icons';
+interface Props { href?: string; }
+const { href = '/' } = Astro.props;
+---
+<a class="mbrand" href={href} aria-label="Tasca home">
+  <span class="mbrand-mark" set:html={MARK} />
+  <span class="mbrand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+</a>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Tasca">
+  <rect width="32" height="32" rx="7" fill="#0F1622"/>
+  <rect x="3.5" y="11.8" width="8.8" height="8.8" rx="2.5" fill="#4D9CF6"/>
+  <path d="M12.3 16.2H16.4M16.4 8.5V23.9M16.4 8.5H20M16.4 16.2H20M16.4 23.9H20" stroke="#C4CDDA" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+  <circle cx="22.6" cy="8.5" r="2.6" fill="#C4CDDA"/>
+  <circle cx="22.6" cy="16.2" r="2.6" fill="#C4CDDA"/>
+  <circle cx="22.6" cy="23.9" r="2.6" fill="#C4CDDA"/>
+</svg>

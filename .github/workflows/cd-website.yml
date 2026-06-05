@@ -1,0 +1,94 @@
+name: CD (website)
+
+# Build the Tasca marketing site (Astro static → nginx image), push it to GHCR
+# under an immutable sha-<short> tag, then point the Coolify marketing resource
+# at that tag and redeploy. Serves tasca.dev (the app lives separately on
+# app.tasca.dev).
+#
+# Runs only when the site changes on main (or manually) — never on PRs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'scripts/coolify-deploy.sh'
+      - '.github/workflows/cd-website.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cd-website-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/icemint/tasca-website
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9.15.4"
+
+jobs:
+  build-and-deploy:
+    name: Build marketing site → GHCR → Coolify (SHA-pinned)
+    runs-on: ubuntu-24.04
+    # Job-level so the deploy step's `if:` can read the secret.
+    env:
+      COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
+      COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      COOLIFY_WEBSITE_RESOURCE_UUID: ${{ secrets.COOLIFY_WEBSITE_RESOURCE_UUID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image tag
+        id: vars
+        run: echo "sha_tag=sha-$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+
+      - name: Install website deps
+        working-directory: website
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static site
+        working-directory: website
+        run: pnpm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image (nginx + dist)
+        uses: docker/build-push-action@v6
+        with:
+          context: website
+          file: website/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_tag }}
+          cache-from: type=gha,scope=website
+          cache-to: type=gha,mode=max,scope=website
+
+      # Deploy by the immutable SHA tag (coolify #5318). PATCH the resource's
+      # image tag, trigger a deploy, then poll the rollout to terminal status.
+      # Skips gracefully until COOLIFY_WEBSITE_RESOURCE_UUID is set.
+      - name: Deploy to Coolify (PATCH image tag → deploy → verify rollout)
+        if: ${{ env.COOLIFY_WEBSITE_RESOURCE_UUID != '' }}
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
+          COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_WEBSITE_RESOURCE_UUID }}
+        run: bash scripts/coolify-deploy.sh

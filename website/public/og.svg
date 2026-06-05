@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <radialGradient id="glow" cx="80%" cy="0%" r="80%">
+      <stop offset="0%" stop-color="#4D9CF6" stop-opacity="0.22"/>
+      <stop offset="55%" stop-color="#4D9CF6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#090D14"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <g stroke="#FFFFFF" stroke-opacity="0.05" stroke-width="1">
+    <path d="M0 158 H1200 M0 316 H1200 M0 474 H1200 M300 0 V630 M600 0 V630 M900 0 V630"/>
+  </g>
+  <!-- mark -->
+  <g transform="translate(96,86) scale(2.1)">
+    <rect width="32" height="32" rx="7" fill="#0F1622" stroke="#FFFFFF" stroke-opacity="0.1"/>
+    <rect x="3.5" y="11.8" width="8.8" height="8.8" rx="2.5" fill="#4D9CF6"/>
+    <path d="M12.3 16.2H16.4M16.4 8.5V23.9M16.4 8.5H20M16.4 16.2H20M16.4 23.9H20" stroke="#C4CDDA" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+    <circle cx="22.6" cy="8.5" r="2.6" fill="#C4CDDA"/>
+    <circle cx="22.6" cy="16.2" r="2.6" fill="#C4CDDA"/>
+    <circle cx="22.6" cy="23.9" r="2.6" fill="#C4CDDA"/>
+  </g>
+  <text x="172" y="132" font-size="40" font-weight="700" letter-spacing="-1.5"><tspan fill="#F3F6FB">Tas</tspan><tspan fill="#5C6779">ca</tspan></text>
+  <text x="96" y="330" font-size="74" font-weight="700" letter-spacing="-2.5" fill="#F3F6FB">Your AI dev team —</text>
+  <text x="96" y="418" font-size="74" font-weight="700" letter-spacing="-2.5"><tspan fill="#6FB3FF">named, capable</tspan><tspan fill="#F3F6FB">, in your tools.</tspan></text>
+  <text x="96" y="500" font-size="30" fill="#94A3B8">The control plane for your AI dev workforce · Shortcut · GitHub · Linear</text>
+  <text x="96" y="566" font-size="24" font-weight="600" letter-spacing="1" fill="#4D9CF6">tasca.dev</text>
+</svg>

@@ -1,0 +1,78 @@
+---
+// Global CSS — order mirrors the design system: base (tasca) → tokens → marketing → pages → a11y.
+import '../styles/tasca.css';
+import '../styles/tokens.css';
+import '../styles/marketing.css';
+import '../styles/pages.css';
+import '../styles/a11y.css';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+
+interface Props {
+  title: string;
+  description: string;
+  active?: string;
+  ogImage?: string;
+}
+const { title, description, active, ogImage = '/og.png' } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const ogUrl = new URL(ogImage, Astro.site);
+---
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href={canonical} />
+  <!-- theme: applied before paint to avoid a flash -->
+  <script is:inline>
+    (function () { try { document.documentElement.setAttribute('data-theme', localStorage.getItem('tasca-theme') || 'dark'); } catch (e) {} })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#090D14" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Tasca" />
+  <meta property="og:title" content={title} />
+  <meta property="og:description" content={description} />
+  <meta property="og:url" content={canonical} />
+  <meta property="og:image" content={ogUrl} />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={title} />
+  <meta name="twitter:description" content={description} />
+  <meta name="twitter:image" content={ogUrl} />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <Nav active={active} />
+  <main id="main">
+    <slot />
+  </main>
+  <Footer />
+  <script>
+    function syncTheme(t: string) {
+      document.documentElement.setAttribute('data-theme', t);
+      document.querySelectorAll<HTMLButtonElement>('.mtheme button').forEach((b) =>
+        b.classList.toggle('on', b.dataset.t === t)
+      );
+    }
+    let t = 'dark';
+    try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}
+    syncTheme(t);
+    document.querySelectorAll<HTMLButtonElement>('.mtheme button').forEach((b) =>
+      b.addEventListener('click', () => {
+        const v = b.dataset.t!;
+        try { localStorage.setItem('tasca-theme', v); } catch (e) {}
+        syncTheme(v);
+      })
+    );
+  </script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+---
+import Base from '../layouts/Base.astro';
+import { I, APP_URL } from '../lib/icons';
+
+const arr = `<span class="arr">Read ${I.arrow}</span>`;
+interface Card { ic: string; h: string; p: string; }
+const cards: Card[] = [
+  { ic: I.plug, h: 'Quickstart', p: 'Connect your first platform and deploy an agent in five minutes.' },
+  { ic: I.route, h: 'Capability tiers', p: 'How tiers work, the required fields per tier, and prompt scaffolding.' },
+  { ic: I.shield, h: 'Self-hosting', p: 'Run Tasca on your own infra: Postgres, OAuth, reverse proxy.' },
+  { ic: I.id, h: 'Native identities', p: 'How agent identities are provisioned per platform and kept least-privilege.' },
+];
+const concepts: Card[] = [
+  { ic: I.roster, h: 'The roster', p: 'Agents as team members — state, tiers, throughput, cost.' },
+  { ic: I.route, h: 'Routing decisions', p: 'How the engine scores eligibility and why every decision is inspectable.' },
+  { ic: I.audit, h: 'Audit & roles', p: 'Owner / admin / member / guest, and the immutable action log.' },
+  { ic: I.spark, h: 'PM-assistant <span class="tag coming" style="margin-left:6px">Coming</span>', p: 'Advisory triage and decomposition — design preview, not yet live.' },
+];
+const sidebar = [
+  { h: 'Start', items: [['Quickstart', true], ['Core concepts', false], ['Self-hosting', false]] },
+  { h: 'Guides', items: [['Connect Shortcut', false], ['Connect GitHub', false], ['Connect Linear', false], ['Hire an agent', false], ['Capability tiers', false]] },
+  { h: 'Reference', items: [['Routing engine', false], ['Roles & access', false], ['Audit log', false], ['API & MCP', false]] },
+];
+---
+<Base
+  title="Tasca — Docs"
+  description="Everything to run your AI dev team: guides for connecting platforms, hiring agents, tuning capability tiers, and self-hosting Tasca."
+  active="docs"
+>
+  <section class="phero"><div class="wrap">
+    <span class="kicker">Documentation</span>
+    <h1>Everything to run your AI dev team.</h1>
+    <p>Guides for connecting platforms, hiring agents, tuning capability tiers, and self-hosting Tasca. Start with the quickstart, or jump to a topic.</p>
+  </div></section>
+
+  <section class="sec-sm"><div class="wrap">
+    <div class="docs-layout">
+      <aside class="docs-side">
+        {sidebar.map((g) => (
+          <div class="grp"><h5>{g.h}</h5>{g.items.map(([label, on]) => <a class={on ? 'on' : ''} href="#">{label}</a>)}</div>
+        ))}
+      </aside>
+      <div class="docs-main">
+        <div class="codeblock" style="margin-bottom:28px"><span class="c"># Self-host Tasca in one command</span><br />
+        <span class="b">$</span> docker run -p 8080:8080 <span class="g">ghcr.io/tasca/tasca:latest</span><br /><br />
+        <span class="c"># then open http://localhost:8080 and connect Shortcut</span></div>
+
+        <div class="docs-cards">
+          {cards.map((c) => (
+            <a class="doc-card" href="#"><div class="doc-card-ic" set:html={c.ic} /><h3 set:html={c.h} /><p>{c.p}</p><Fragment set:html={arr} /></a>
+          ))}
+        </div>
+
+        <div class="sec-head" style="margin:40px 0 16px"><h2 class="sec-h" style="font-size:24px">Core concepts</h2></div>
+        <div class="docs-cards">
+          {concepts.map((c) => (
+            <a class="doc-card" href="#"><div class="doc-card-ic" set:html={c.ic} /><h3 set:html={c.h} /><p>{c.p}</p><Fragment set:html={arr} /></a>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="sec"><div class="wrap"><div class="cta-band">
+    <h2>Ready to build?</h2>
+    <p>Connect a platform and hire your first agent — the quickstart takes five minutes.</p>
+    <div class="cta-actions"><a class="btn btn-primary btn-lg" href={APP_URL}>Start free <span set:html={I.arrow} /></a><a class="btn btn-ghost btn-lg" href="/product">Explore the product</a></div>
+  </div></div></section>
+</Base>

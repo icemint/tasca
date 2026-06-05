@@ -1,0 +1,145 @@
+---
+import Base from '../layouts/Base.astro';
+import { I, APP_URL } from '../lib/icons';
+
+const ck = `<span class="ck">${I.check}</span>`;
+const w1 = [
+  'Own actor in Shortcut, GitHub & Linear — never impersonating a human seat',
+  'Least-privilege scopes, verified on every connect',
+  'Capability profile: tiers, language/framework specialties, concurrency & cost ceiling',
+  'Work history, success rate, and escalations per agent',
+];
+const w2 = [
+  'Five tiers: basic → low → medium → hard → ultra',
+  'Per-tier prompt scaffolding constrains low-tier runs; cloud agents for hard/ultra',
+  'The routing decision is inspectable — tier, eligible set, match scores',
+  'Human-gated escalation: a failed run flips to needs-attention with one-click re-tier',
+];
+const w3 = [
+  'Roster home with per-agent state, task, throughput, success & cost',
+  'Monitoring: in-flight / queued / blocked / awaiting across all projects',
+  'Pause, reassign, escalate, intervene — one action away',
+  'A calm “quiet day” view — not a broken empty screen',
+];
+const identities = [['Shortcut', 'nova-agent · agent user'], ['GitHub', 'tasca-nova[bot] · GitHub App'], ['Linear', 'Nova · app actor']];
+const candidates: [string, number, boolean][] = [['Nova', 0.92, true], ['Mira', 0.81, false], ['Sable', 0.74, false]];
+const tiers = [
+  ['BASIC', 'Fully-specified, no reasoning — local models'],
+  ['LOW', 'Constrained tools, capped turns'],
+  ['MEDIUM', 'Design note; reasoning allowed'],
+  ['HARD', 'Human plan; cloud agent recommended'],
+  ['ULTRA', 'Human + cloud; agent assists'],
+];
+const roadmap: [string, string, string][] = [
+  ['Live', '<b>Capability-aware routing</b> — tiers, eligibility, inspectable decisions', 'live'],
+  ['Live', '<b>Named agents & native identities</b> — Shortcut, GitHub, Linear', 'live'],
+  ['Live', '<b>Multi-user teams & auth</b> — roles, OAuth, audit', 'live'],
+  ['Coming', '<b>Review-driven status automation</b> — PR↔ticket, CI-aware transitions', 'coming'],
+  ['Coming', '<b>PM-assistant</b> — advisory triage, decomposition & routing proposals', 'coming'],
+  ['Coming', '<b>External clients & sandboxing</b> — propose-only guests, isolated runs', 'coming'],
+];
+---
+<Base
+  title="Tasca — Product"
+  description="A workforce you manage, not a bot you babysit. Named agents with real identities, capability-aware tier routing, and a roster you control — here is how each piece works."
+  active="product"
+>
+  <section class="phero"><div class="wrap">
+    <span class="kicker">Product</span>
+    <h1>A workforce you manage, not a bot you babysit.</h1>
+    <p>Tasca turns AI coding agents into named teammates with real identities, routes work to them by capability, and keeps every decision and action visible. Here’s how each piece works.</p>
+  </div></section>
+
+  <div class="wrap">
+    <!-- WEDGE 1 -->
+    <div class="frow">
+      <div class="frow-body">
+        <span class="tag live">Live</span>
+        <h3>Named agents with real identities</h3>
+        <p>Each agent is a teammate with a name, a face, a capability profile, and its own native identity in every platform — a Shortcut agent user, a GitHub App, a Linear app actor. It comments, moves tickets, and opens PRs as itself.</p>
+        <ul>{w1.map((t) => <li><Fragment set:html={ck} />{t}</li>)}</ul>
+      </div>
+      <div class="frow-media">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <span class="magent-av">NV</span>
+            <div>
+              <div style="font-family:var(--font-display);font-weight:600;color:var(--fg)">Nova</div>
+              <div style="font-family:var(--font-mono);font-size:11px;color:var(--fg-faint)">Claude · Sonnet 4.5</div>
+            </div>
+          </div>
+          {identities.map(([p, h]) => (
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-top:1px solid var(--line)">
+              <div>
+                <div style="font-size:13px;font-weight:600;color:var(--fg-2)">{p}</div>
+                <div style="font-family:var(--font-mono);font-size:11px;color:var(--fg-faint);margin-top:2px">{h}</div>
+              </div>
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--green);display:inline-flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--green)"></span>Native</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <!-- WEDGE 2 -->
+    <div class="frow flip">
+      <div class="frow-body">
+        <span class="tag live">Live</span>
+        <h3>Capability-aware tier routing</h3>
+        <p>Every ticket carries a complexity tier; every agent declares the tiers it can take. Tasca assigns work an agent can actually complete — and the decision is fully inspectable: estimated tier, eligible agents, the match scores, and why it chose who it chose.</p>
+        <ul>{w2.map((t) => <li><Fragment set:html={ck} />{t}</li>)}</ul>
+      </div>
+      <div class="frow-media"><div class="rdemo">
+        <div class="rdemo-flow">
+          <div class="rdemo-step"><div class="rdemo-k">Tier</div><div class="rdemo-v">HARD</div></div>
+          <div class="rdemo-arrow" set:html={I.arrow} />
+          <div class="rdemo-step"><div class="rdemo-k">Eligible</div><div class="rdemo-v">3</div></div>
+          <div class="rdemo-arrow" set:html={I.arrow} />
+          <div class="rdemo-step"><div class="rdemo-k">Routed</div><div class="rdemo-v">Nova</div></div>
+        </div>
+        {candidates.map(([n, s, w]) => (
+          <div class={`rdemo-cand ${w ? 'win' : ''}`}>
+            <span class="nm">{n}</span>
+            <span class="rdemo-bar"><span style={`width:${s * 100}%`}></span></span>
+            <span class="sc">{s.toFixed(2)}</span>
+          </div>
+        ))}
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--fg-faint);margin-top:4px">score = capability-fit × domain-history × availability</div>
+      </div></div>
+    </div>
+
+    <!-- WEDGE 3 -->
+    <div class="frow">
+      <div class="frow-body">
+        <span class="tag live">Live</span>
+        <h3>A roster, not a queue</h3>
+        <p>The home surface is your team — each agent’s state, current task, today’s throughput, success rate, and cost. Monitoring gives you the cross-roster view: what’s in flight, blocked, or awaiting you. Control is always one action away: pause, reassign, escalate, intervene.</p>
+        <ul>{w3.map((t) => <li><Fragment set:html={ck} />{t}</li>)}</ul>
+      </div>
+      <div class="frow-media"><div class="tierlegend">
+        {tiers.map((t, i) => (
+          <div class="tl-row"><span class={`tl-sw tl-${i + 1}`}></span><span class="tl-name">{t[0]}</span><span class="tl-desc">{t[1]}</span></div>
+        ))}
+      </div></div>
+    </div>
+  </div>
+
+  <!-- ROADMAP HONESTY -->
+  <section class="sec" id="integrations" style="background:var(--bg-sub);border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><div class="wrap">
+    <div class="sec-head"><span class="kicker">What ships today — and what’s next</span>
+      <h2 class="sec-h">Honest about the roadmap</h2>
+      <p class="sec-sub">We mark roadmap features clearly and never bill them as live. Here’s the current line.</p></div>
+    <div class="roadmap-list">
+      {roadmap.map(([s, n, k]) => (
+        <div class="rm-item"><span class="rm-stage">{k === 'live' ? 'Now' : 'Next'}</span>
+          <span class="rm-name" set:html={n} /><span class={`tag ${k}`}>{s}</span></div>
+      ))}
+    </div>
+  </div></section>
+
+  <section class="sec"><div class="wrap"><div class="cta-band">
+    <h2>See your team in action</h2>
+    <p>Connect a platform and hire your first agent — it takes minutes.</p>
+    <div class="cta-actions"><a class="btn btn-primary btn-lg" href={APP_URL}>Start free <span set:html={I.arrow} /></a><a class="btn btn-ghost btn-lg" href="/pricing">See pricing</a></div>
+  </div></div></section>
+</Base>

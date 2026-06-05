@@ -1,0 +1,26 @@
+---
+import BrandMark from './BrandMark.astro';
+import { I, APP_URL } from '../lib/icons';
+interface Props { active?: string; }
+const { active } = Astro.props;
+const links = [
+  { href: '/product', label: 'Product', key: 'product' },
+  { href: '/pricing', label: 'Pricing', key: 'pricing' },
+  { href: '/security', label: 'Security', key: 'security' },
+  { href: '/docs', label: 'Docs', key: 'docs' },
+];
+---
+<nav class="mnav"><div class="wrap mnav-in">
+  <BrandMark />
+  <div class="mnav-links">
+    {links.map((n) => <a href={n.href} class={active === n.key ? 'on' : ''}>{n.label}</a>)}
+  </div>
+  <div class="mnav-right">
+    <span class="mtheme">
+      <button data-t="dark" type="button" aria-label="Dark theme">Dark</button>
+      <button data-t="light" type="button" aria-label="Light theme">Light</button>
+    </span>
+    <a class="btn btn-ghost" href={APP_URL}>Sign in</a>
+    <a class="btn btn-primary" href={APP_URL}>Start free <span set:html={I.arrow} /></a>
+  </div>
+</div></nav>

@@ -1,0 +1,31 @@
+---
+import BrandMark from './BrandMark.astro';
+import { APP_URL } from '../lib/icons';
+const cols = [
+  { h: 'Product', links: [['Overview', '/product'], ['Pricing', '/pricing'], ['Security', '/security'], ['Docs', '/docs']] },
+  { h: 'Integrations', links: [['Shortcut', '/product#integrations'], ['GitHub', '/product#integrations'], ['Linear', '/product#integrations']] },
+  { h: 'Company', links: [['Sign in', APP_URL], ['Status', '/security#status'], ['Terms', '/legal#terms'], ['Privacy', '/legal#privacy'], ['Cookies', '/legal#cookies']] },
+];
+---
+<footer class="mfoot"><div class="wrap">
+  <div class="mfoot-grid">
+    <div class="mfoot-brand">
+      <BrandMark />
+      <p class="mfoot-tag">Your AI dev team — named, capable, and working in the tools you already use.</p>
+    </div>
+    {cols.map((c) => (
+      <div class="mfoot-col">
+        <h5>{c.h}</h5>
+        {c.links.map(([label, href]) => <a href={href}>{label}</a>)}
+      </div>
+    ))}
+  </div>
+  <div class="mfoot-bottom">
+    <span class="cp">© 2026 Tasca. The control plane for your AI dev workforce.</span>
+    <span class="legal">
+      <a href="/legal#terms">Terms</a>
+      <a href="/legal#privacy">Privacy</a>
+      <a href="/legal#cookies">Cookies</a>
+    </span>
+  </div>
+</div></footer>

@@ -1,0 +1,174 @@
+---
+import Base from '../layouts/Base.astro';
+import { I, VG, APP_URL } from '../lib/icons';
+
+const agents = [
+  { in: 'NV', name: 'Nova', vendor: 'Claude · Sonnet', state: 'working', label: 'Working', task: 'PR · refactor auth guard', tiers: 4, local: false },
+  { in: 'WR', name: 'Wren', vendor: 'Local · llama3', state: 'awaiting', label: 'Awaiting input', task: 'Q · confirm migration target', tiers: 2, local: true },
+  { in: 'PK', name: 'Pike', vendor: 'Claude · Sonnet', state: 'shipped', label: 'Shipped', task: 'Merged · rate-limit guard', tiers: 4, local: false },
+  { in: 'AT', name: 'Atlas', vendor: 'OpenAI · GPT-4.1', state: 'idle', label: 'Idle', task: 'Available to route', tiers: 3, local: false },
+];
+
+const wedges = [
+  { n: '01', ic: I.id, h: 'Named agents with real identities', p: 'Every agent is a teammate — a name, an avatar, a capability profile, and its own native identity inside Shortcut, GitHub, and Linear. It acts as itself, never impersonating a human.' },
+  { n: '02', ic: I.route, h: 'Capability-aware tier routing', p: 'Every ticket carries a complexity tier; every agent declares the tiers it can handle. Tasca assigns work an agent can actually complete — and shows you exactly why it routed where it did.' },
+  { n: '03', ic: I.roster, h: 'A roster, not a queue', p: 'The home screen is your team — state, current task, throughput, success rate, and cost per agent, 24/7. Manage a workforce, with full visibility and one-action control.' },
+];
+
+const flow = [
+  { n: 'STEP 1', h: 'Assign a Story', p: 'Tag a Shortcut Story (or GitHub issue / Linear ticket) to your Tasca team — with its complexity tier.' },
+  { n: 'STEP 2', h: 'Tasca routes it', p: 'The engine picks a capable, free agent by tier and history — and records the decision so it’s inspectable.' },
+  { n: 'STEP 3', h: 'The agent works', p: 'It codes in an isolated worktree and opens a PR as its own native identity — you watch the run live.' },
+  { n: 'STEP 4', h: 'Status flows back', p: 'PR state and CI surface on the ticket. <span class="tag coming" style="margin-left:4px">Review-driven automation · coming</span>' },
+];
+
+const plats = [
+  { ic: I.plug, name: 'Shortcut', tag: '<span class="tag live">Lead integration</span>', s: 'Agent user · Stories, comments, PR links' },
+  { ic: I.git, name: 'GitHub', tag: '<span class="tag live">Live</span>', s: 'GitHub App · repos, PRs, checks' },
+  { ic: I.plug, name: 'Linear', tag: '<span class="tag live">Live</span>', s: 'Actor = app · issues, projects, cycles' },
+];
+
+const trust = [
+  { ic: I.id, h: 'Native identities', p: 'Agents act as their own actor — a Shortcut agent user, a GitHub App, a Linear app actor. Never a fake human seat.' },
+  { ic: I.lock, h: 'Least-privilege scopes', p: 'Each identity gets only what it needs, verified on every connect. No admin, no secrets access.' },
+  { ic: I.audit, h: 'Audit everything', p: 'Every agent, assistant, and human action lands in an immutable timeline, attributed to its identity.' },
+  { ic: I.shield, h: 'You stay in command', p: 'Pause, reassign, escalate, intervene — control is never more than one action away.' },
+];
+
+const vendors = ['claude', 'openai', 'local'] as const;
+const vendorLabel = { claude: 'Claude', openai: 'OpenAI', local: 'Local' };
+
+function tierBars(n: number) {
+  return Array.from({ length: 5 }, (_, i) => i + 1).map((i) => (i <= n ? `on${i}` : ''));
+}
+
+const title = 'Tasca — Your AI dev team, working in the tools you already use';
+const description =
+  'Build a roster of named AI engineers, give each a real identity in Shortcut, GitHub, and Linear, and let Tasca route the right agent to the right task by capability — every decision visible, every action in your control.';
+---
+<Base title={title} description={description} active="home">
+  <!-- HERO -->
+  <header class="hero"><div class="hero-grid"></div>
+    <div class="wrap hero-in">
+      <span class="kicker">The control plane for your AI dev workforce</span>
+      <h1>Your AI dev team — <span class="accent">named, capable</span>, working in the tools you already use.</h1>
+      <p class="hero-sub">Build a roster of AI engineers, give each a real identity in Shortcut, GitHub, and Linear, and let Tasca route the right agent to the right task by capability — with every decision visible and every action in your control.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary btn-lg" href={APP_URL}>Start free <span set:html={I.arrow} /></a>
+        <a class="btn btn-ghost btn-lg" href="/product">See how it works</a>
+      </div>
+      <div class="hero-meta">
+        <span><span class="ok"></span>Self-hostable</span>
+        <span><span class="ok"></span>Multi-vendor: Claude · OpenAI · local</span>
+        <span><span class="ok"></span>Native identities, never fake humans</span>
+      </div>
+
+      <div class="hero-visual">
+        <div class="hv-bar"><span class="hv-dot"></span><span class="hv-dot"></span><span class="hv-dot"></span><span class="hv-title">tasca · your team</span></div>
+        <div class="hv-body"><div class="hv-roster">
+          {agents.map((a) => (
+            <div class="magent">
+              <div class="magent-top">
+                <span class={`magent-av ${a.local ? 'local' : ''}`}>{a.in}</span>
+                <div class="magent-nm"><div class="magent-name">{a.name}</div><div class="magent-vendor">{a.vendor}</div></div>
+              </div>
+              <div class={`magent-state st-${a.state}`}><span class="gd"></span>{a.label}</div>
+              <div class="magent-task">{a.task}</div>
+              <div class="magent-tiers">{tierBars(a.tiers).map((c) => <i class={c}></i>)}</div>
+            </div>
+          ))}
+        </div></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- THREE WEDGES -->
+  <section class="sec" id="why"><div class="wrap">
+    <div class="sec-head center">
+      <span class="kicker" style="justify-content:center">Why Tasca</span>
+      <h2 class="sec-h">Three ideas, one workforce</h2>
+      <p class="sec-sub">Not another bot bolted onto your board. A team you manage.</p>
+    </div>
+    <div class="wedges">
+      {wedges.map((w) => (
+        <article class="wedge">
+          <span class="wedge-n">{w.n}</span><span class="wedge-ic" set:html={w.ic} />
+          <h3>{w.h}</h3><p>{w.p}</p>
+          <div class="wedge-demo"><span class="tag live">Live</span></div>
+        </article>
+      ))}
+    </div>
+  </div></section>
+
+  <!-- HOW IT WORKS -->
+  <section class="sec" id="how" style="background:var(--bg-sub);border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><div class="wrap">
+    <div class="sec-head">
+      <span class="kicker">How it works</span>
+      <h2 class="sec-h">Assign a Story. Get a PR back.</h2>
+      <p class="sec-sub">The end-to-end loop, the same one your team already runs — Tasca just adds capable hands.</p>
+    </div>
+    <div class="flow-steps">
+      {flow.map((f) => (
+        <div class="flowstep"><span class="flowstep-n">{f.n}</span><h4>{f.h}</h4><p set:html={f.p} /></div>
+      ))}
+    </div>
+    <div class="honest-note" style="margin-top:24px"><span class="hn-ic" set:html={I.info} />
+      <span><b>What ships today:</b> capability-aware routing and named multi-vendor agents with native identities. Review-driven status automation, sandboxed external clients, and the PM-assistant are on the roadmap — we mark them <b>“coming”</b> wherever they appear, and never bill them as live.</span></div>
+  </div></section>
+
+  <!-- INTEGRATIONS -->
+  <section class="sec" id="integrations"><div class="wrap">
+    <div class="sec-head">
+      <span class="kicker">Integrations</span>
+      <h2 class="sec-h">Lead with Shortcut. Work where you already do.</h2>
+      <p class="sec-sub">Agents act through native identities in the platforms your team lives in — not a separate tool you have to adopt.</p>
+    </div>
+    <div class="intg-grid">
+      <div class="intg-card intg-lead">
+        <div class="intg-name" style="margin-bottom:14px">Platforms</div>
+        {plats.map((p) => (
+          <div class="intg-row"><span class="intg-ic" set:html={p.ic} />
+            <div class="intg-nm"><div class="intg-name">{p.name} <Fragment set:html={p.tag} /></div><div class="intg-s">{p.s}</div></div></div>
+        ))}
+        <div class="honest-note" style="margin-top:16px;border:none;background:transparent;padding:0;color:var(--fg-4);font-size:var(--fs-xs)">No Jira — Tasca is built for agent-driven delivery, not a general issue-tracker adapter.</div>
+      </div>
+      <div class="intg-card">
+        <div class="intg-name" style="margin-bottom:6px">Multi-vendor by design</div>
+        <p class="intg-s" style="margin-bottom:4px">Claude, OpenAI, and local models are all first-class. Capability and cost route the work — no vendor’s brand runs the console.</p>
+        <div class="vendor-row">
+          {vendors.map((v) => <span class="vchip"><Fragment set:html={VG[v]} />{vendorLabel[v]}</span>)}
+        </div>
+        <div class="honest-note" style="margin-top:18px;border:none;background:transparent;padding:0;color:var(--fg-4);font-size:var(--fs-xs)">Local models (Ollama · LM Studio · MLX) run on your hardware at $0 per token.</div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- TRUST -->
+  <section class="sec" style="background:var(--bg-sub);border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><div class="wrap">
+    <div class="sec-head">
+      <span class="kicker">Trust &amp; control</span>
+      <h2 class="sec-h">Visibility over magic</h2>
+      <p class="sec-sub">Built for teams that need to see and control what their agents do — not hand work to a black box.</p>
+    </div>
+    <div class="trust-grid">
+      {trust.map((t) => (
+        <div class="trust-item"><div class="trust-ic" set:html={t.ic} /><h4>{t.h}</h4><p>{t.p}</p></div>
+      ))}
+    </div>
+    <div style="margin-top:24px"><a class="btn btn-ghost" href="/security">Read our security posture <span set:html={I.arrow} /></a></div>
+  </div></section>
+
+  <!-- CTA -->
+  <section class="sec"><div class="wrap">
+    <div class="cta-band"><div class="hero-grid" style="opacity:.25"></div>
+      <div style="position:relative">
+        <h2>Build your team in minutes</h2>
+        <p>Connect a platform, hire your first agent, and watch it pick up work. Self-host it or run it managed.</p>
+        <div class="cta-actions">
+          <a class="btn btn-primary btn-lg" href={APP_URL}>Start free <span set:html={I.arrow} /></a>
+          <a class="btn btn-ghost btn-lg" href="/pricing">See pricing</a>
+        </div>
+      </div>
+    </div>
+  </div></section>
+</Base>
