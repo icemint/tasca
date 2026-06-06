@@ -92,6 +92,96 @@ export interface CapabilityMatch {
   reasons: string[];
 }
 
+// ── Agent-identity primitive (Devin-modeled) ──────────────────────────────────
+// Every agent is a ServiceUser (a credential-bearing principal, never a fake
+// human account) with an internal stable `principalId`, an RBAC role, a
+// capability profile, delegation/attribution, and per-platform identity
+// bindings. The shared entity *types* live here in domain (alongside Agent /
+// CapabilityProfile); the Postgres schema + repositories live in @tasca/identity.
+
+export const AGENT_STATUSES = ['active', 'paused', 'retired'] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+export const PLATFORMS = ['shortcut', 'github', 'linear'] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
+/**
+ * The internal credential-bearing principal for an agent (1:1 with `agent`).
+ *
+ * `principalId` is the internal "who did this" anchor for audit attribution and
+ * is **stable across external-credential rotation** — it never depends on any
+ * one platform token. This mirrors the Shortcut warning that a `Shortcut-Token`
+ * dies when the creating user is removed: the internal principal must outlive
+ * any external secret, so audit history stays continuous through re-provisioning.
+ */
+export interface ServiceUser {
+  id: string;
+  agentId: string;
+  /** Internal stable id used for audit attribution. Survives token rotation. */
+  principalId: string;
+}
+
+/** Reusable least-privilege role: internal capabilities + per-platform scopes. */
+export interface RbacRole {
+  id: string;
+  name: string;
+  /** Internal capabilities, e.g. `task.claim`, `pr.create`, `status.post`. */
+  permissions: string[];
+  /** Least-privilege scopes to request per platform, keyed by platform. */
+  downstreamScopes: Record<string, string[]>;
+}
+
+export const IDENTITY_BINDING_STATES = ['provisioned', 'active', 'revoked'] as const;
+export type IdentityBindingState = (typeof IDENTITY_BINDING_STATES)[number];
+
+/**
+ * One row per platform an agent is deployed into — maps the agent to its NATIVE
+ * identity there (Shortcut agent-user in Stage 1; GitHub App / Linear actor=app
+ * later).
+ *
+ * `credentialRef` is a **pointer** into the secret store (NOT the secret).
+ * Crucially it is **per-binding**: whether Shortcut resolves to one token per
+ * agent or one workspace token acting-as a chosen agent-user is a binding-layer
+ * detail, absorbed here without any model change. The stable `principalId` on
+ * the agent's `service_user` is unaffected when this `credentialRef` rotates.
+ */
+export interface IdentityBinding {
+  id: string;
+  agentId: string;
+  platform: Platform;
+  /** Native external id, e.g. the Shortcut agent-user id. */
+  externalId: string;
+  /** Mentionable @handle on the platform. */
+  externalHandle: string | null;
+  /** Pointer to the secret store — never the secret itself. Per-binding. */
+  credentialRef: string | null;
+  state: IdentityBindingState;
+}
+
+/** Human-of-record / attribution (Devin `create_as_user_id` analogue). */
+export interface Delegation {
+  agentId: string;
+  onBehalfOfUserId: string;
+  attributionLabel: string;
+}
+
+/**
+ * An immutable record of a privileged action, attributed to a stable
+ * `principalId` (never to an external credential).
+ */
+export interface AuditEvent {
+  id: string;
+  /** The acting agent's stable service-user principal id. */
+  principalId: string;
+  agentId: string;
+  action: string;
+  /** Optional target (task / story / PR id). */
+  target: string | null;
+  platform: Platform | null;
+  payload: Record<string, unknown>;
+  at: Date;
+}
+
 // ── Claim (CAS) ─────────────────────────────────────────────────────────────
 export interface ClaimResult {
   won: boolean;
