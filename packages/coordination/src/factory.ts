@@ -26,6 +26,8 @@ export interface CreateCoordinationDeps {
   execution: ExecutionPort;
   status: StatusReporter;
   verifier: WebhookVerifier;
+  /** Optional GitHub webhook verifier (POST /webhooks/github); absent → 404. */
+  githubVerifier?: WebhookVerifier;
   content: TaskContentSource;
   classifier?: LlmClassifierPort;
   breakerThreshold?: number;
@@ -114,6 +116,7 @@ export function createCoordination(
     directory,
     audit,
     content: input.content,
+    ...(input.githubVerifier !== undefined ? { githubVerifier: input.githubVerifier } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),

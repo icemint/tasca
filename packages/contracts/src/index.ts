@@ -138,3 +138,64 @@ export const ShortcutWebhookV1Schema = z
   })
   .passthrough();
 export type ShortcutWebhookV1 = z.infer<typeof ShortcutWebhookV1Schema>;
+
+// ── GitHub webhook payload (issues / issue_comment) ──────────────────────────
+// The wire shape GitHub POSTs for the two intake events: `issues` (action
+// `assigned`) and `issue_comment` (action `created`). Validated at the trust
+// boundary before parseEvent inspects it. Only the fields the intake needs are
+// modeled; `.passthrough()` tolerates the large remainder GitHub sends. The
+// idempotency key is the `X-GitHub-Delivery` HEADER (not a body field), so it is
+// not modeled here — the verifier reads it off the headers.
+
+/** A GitHub user (actor / assignee / commenter). Identified by numeric id + login. */
+export const GitHubUserSchema = z
+  .object({
+    id: z.number(),
+    login: z.string(),
+  })
+  .passthrough();
+
+/** The repository the event occurred in. `full_name` is `owner/repo`. */
+export const GitHubRepositorySchema = z
+  .object({
+    full_name: z.string(),
+  })
+  .passthrough();
+
+/** The issue an event targets. `number` is per-repo; the parser composes a global id. */
+export const GitHubIssueSchema = z
+  .object({
+    number: z.number(),
+    node_id: z.string().optional(),
+    assignees: z.array(GitHubUserSchema).optional(),
+  })
+  .passthrough();
+
+/** A comment body — scanned for @-mentions of registered agents. */
+export const GitHubCommentSchema = z
+  .object({
+    id: z.number(),
+    body: z.string(),
+  })
+  .passthrough();
+
+/**
+ * The top-level GitHub webhook envelope (issues + issue_comment subset).
+ *
+ * `sender` is the ACTOR (who triggered the event) — used for self-dedupe, NEVER
+ * as an assignee. On an `issues` action `assigned`, the just-assigned user is the
+ * top-level `assignee` (distinct from the full `issue.assignees` list). Treating
+ * `sender` as the assignee is the same easy bug as Shortcut's `member_id`.
+ */
+export const GitHubWebhookSchema = z
+  .object({
+    action: z.string(),
+    sender: GitHubUserSchema.optional(),
+    repository: GitHubRepositorySchema.optional(),
+    issue: GitHubIssueSchema.optional(),
+    /** The user just assigned on `issues.assigned` (the assignment signal). */
+    assignee: GitHubUserSchema.optional(),
+    comment: GitHubCommentSchema.optional(),
+  })
+  .passthrough();
+export type GitHubWebhook = z.infer<typeof GitHubWebhookSchema>;
