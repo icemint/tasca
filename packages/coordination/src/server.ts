@@ -26,6 +26,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
   githubVerifier?: WebhookVerifier;
   /**
+   * The auth handler (GET/POST /api/auth/*). Consulted before the 404; returns
+   * `true` when it owned the request. Absent (OAuth env unset) → /api/auth/*
+   * falls through to a 404, keeping the feature flag OFF by default.
+   */
+  authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  /**
    * Schedules the post-ack orchestration. Defaults to `queueMicrotask` with a
    * last-resort `.catch` so a rejected run is logged, never an unhandledRejection
    * that could crash the process; tests pass a collector to await it.
@@ -172,6 +178,12 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
         return;
       }
       await handleWebhook(verifier, req, res);
+      return;
+    }
+
+    // Auth routes (only when wired). The handler returns true if it owned the
+    // request; a false return falls through to the 404 below.
+    if (deps.authHandler && (await deps.authHandler(req, res))) {
       return;
     }
 

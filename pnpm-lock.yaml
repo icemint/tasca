@@ -30,6 +30,22 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/auth:
+    dependencies:
+      '@tasca/domain':
+        specifier: workspace:*
+        version: link:../domain
+      pg:
+        specifier: ^8.13.1
+        version: 8.21.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.0
+
   packages/contracts:
     dependencies:
       '@tasca/domain':
@@ -44,6 +60,9 @@ importers:
       '@tasca/adapters':
         specifier: workspace:*
         version: link:../adapters
+      '@tasca/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@tasca/contracts':
         specifier: workspace:*
         version: link:../contracts
