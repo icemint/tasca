@@ -4,7 +4,7 @@
 // + Shortcut webhook Zod schemas live in @tasca/contracts (the shared seam);
 // the gated write-back/provisioning halves are stubbed (throw) here.
 //
-// Boundary: imports ONLY @tasca/{domain,contracts,identity} + node builtins.
+// Boundary: imports ONLY @tasca/{domain,contracts} + node builtins.
 // No routing/execution/coordination. No new runtime deps (node:crypto/https/fetch).
 
 export { ShortcutAdapter } from './shortcut';

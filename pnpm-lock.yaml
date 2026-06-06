@@ -26,9 +26,6 @@ importers:
       '@tasca/domain':
         specifier: workspace:*
         version: link:../domain
-      '@tasca/identity':
-        specifier: workspace:*
-        version: link:../identity
 
   packages/contracts:
     dependencies:

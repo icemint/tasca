@@ -98,6 +98,20 @@ describe('ShortcutAdapter.verifyWebhook (HMAC-SHA-256, constant-time)', () => {
     expect(res.ok).toBe(false);
   });
 
+  it('rejects a correct-LENGTH but non-hex signature (past the length guard, into the buffer guard)', () => {
+    // A SHA-256 hex digest is 64 chars. Forge one that is 64 chars but not hex:
+    // it survives the `a.length !== b.length` guard and must be rejected by the
+    // empty/short-buffer guard inside constantTimeHexEqual — never throwing.
+    const body = JSON.stringify(samplePayload());
+    const sixtyFourNonHex = 'z'.repeat(64);
+    expect(sixtyFourNonHex.length).toBe(sign(body).length);
+    let res: ReturnType<ReturnType<typeof adapter>['verifyWebhook']>;
+    expect(() => {
+      res = adapter().verifyWebhook(body, { 'Payload-Signature': sixtyFourNonHex });
+    }).not.toThrow();
+    expect(res!.ok).toBe(false);
+  });
+
   it('reads the signature header case-insensitively', () => {
     const body = JSON.stringify(samplePayload());
     const res = adapter().verifyWebhook(body, { 'payload-signature': sign(body) });
@@ -234,6 +248,30 @@ describe('ShortcutAdapter.parseEvent (owner_ids.adds → AdapterEvent)', () => {
     const events = adapter().parseEvent({ ok: true, rawBody: 'not json {' }, REGISTERED);
     expect(events).toEqual([]);
   });
+
+  it('emits at most one event per (story, agent) — dedupes a repeated owner-add across actions', () => {
+    // The same (story 5001, Elvis) pair recurs: once via a duplicate inside one
+    // adds[], once via a second story.update action on the same story. The
+    // coordination loop must not double-dispatch → exactly one event.
+    const body = JSON.stringify(
+      samplePayload({
+        actions: [
+          { id: 5001, entity_type: 'story', action: 'update', changes: { owner_ids: { adds: [ELVIS, ELVIS] } } },
+          { id: 5001, entity_type: 'story', action: 'update', changes: { owner_ids: { adds: [ELVIS] } } },
+        ],
+      })
+    );
+    const events = adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED);
+    expect(events).toEqual([
+      { type: 'task.assigned', platform: 'shortcut', externalStoryId: '5001', agentExternalId: ELVIS },
+    ]);
+  });
+});
+
+describe('ShortcutAdapter constructor (secret guard)', () => {
+  it('refuses to construct with an empty webhook secret (forgeable signature)', () => {
+    expect(() => new ShortcutAdapter({ webhookSecret: '' })).toThrow(/webhookSecret/);
+  });
 });
 
 describe('ShortcutAdapter.dedupeBySelf', () => {
@@ -310,6 +348,17 @@ describe('ShortcutAdapter.registerWebhook (REST v3, injected fetch)', () => {
     await expect(
       a.registerWebhook({ webhookUrl: 'https://x', secret: SECRET, token: 't' })
     ).rejects.toThrow(/403/);
+  });
+
+  it('throws on a 2xx response that omits the webhook id', async () => {
+    // A success status with no `id` would otherwise yield the string "undefined"
+    // as a webhook id — refuse it so the caller cannot store a bogus handle.
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 201 })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    await expect(
+      a.registerWebhook({ webhookUrl: 'https://x', secret: SECRET, token: 't' })
+    ).rejects.toThrow(/missing webhook id/i);
   });
 });
 
