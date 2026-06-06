@@ -29,7 +29,7 @@ import type { IdentityBinding, Platform } from '@tasca/domain';
 // NO new runtime deps — node:crypto / node:fetch only.
 
 const GATED_MESSAGE =
-  'gated: pending GitHub identity decision — see docs/Tasca-GitHub-Kickoff-Brief.md (GitHub App vs per-agent PAT)';
+  'gated: GitHub App write-back not yet built/installed — see docs/Tasca-GitHub-Kickoff-Brief.md (per-customer GitHub App; provisioning + postStatus are Phase 2)';
 
 /** The header GitHub signs the raw body into: `sha256=<hex>` (HMAC-SHA-256). */
 const SIGNATURE_HEADER = 'x-hub-signature-256';

@@ -317,7 +317,7 @@ describe('GitHubAdapter.registerWebhook (REST v3, injected fetch)', () => {
 describe('GitHubAdapter gated halves (stubbed)', () => {
   it('provisionIdentity throws the gated error citing the brief', async () => {
     await expect(adapter().provisionIdentity('agent_elvis', {})).rejects.toThrow(
-      /gated: pending GitHub identity decision/
+      /gated: GitHub App write-back not yet built/
     );
   });
 
