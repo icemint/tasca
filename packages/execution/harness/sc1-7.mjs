@@ -118,8 +118,14 @@ async function main() {
     baseBranch = ref.replace(/^origin\//, '');
     hasRemoteHead = true;
   } catch {
-    // empty repo: no remote HEAD. Fall back to the local initial branch name.
-    baseBranch = git(['rev-parse', '--abbrev-ref', 'HEAD'], REPO_PATH) || 'main';
+    // Empty repo: no remote HEAD, and HEAD is an UNBORN branch (no commit yet).
+    // `rev-parse --abbrev-ref HEAD` fails without a commit; `symbolic-ref` reads
+    // the unborn branch name. Fall back to 'main' only if even that is unset.
+    try {
+      baseBranch = git(['symbolic-ref', '--short', 'HEAD'], REPO_PATH);
+    } catch {
+      baseBranch = 'main';
+    }
   }
   console.log(`base branch: ${baseBranch} (remote HEAD present: ${hasRemoteHead})`);
 
