@@ -81,18 +81,19 @@ jobs:
         working-directory: packages/execution
         run: pnpm harness
 
-  # Unrun stub: the real-agent + real-PR criteria (SC3-real-agent / SC4).
-  # Both are pure shell, no Electron — they only need credentials wired in. This
-  # job is gated off by default; flip `if:` to true (or trigger via dispatch
-  # once the repo/org secrets exist) and it runs with no code change.
+  # The real-agent + real-PR criteria (SC3-real-agent / SC4). Both are pure
+  # shell, no Electron — they need credentials (pre-wired below) and the Claude
+  # Code CLI. Gated to manual dispatch + spike/* branches so it does NOT run on
+  # every PR (it makes real API calls and opens a real PR on the target repo).
   spike-sc1-7:
     name: full SC1-7 (real agent + real PR) — gated
     needs: headless-boot
-    if: false
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/spike/') }}
     runs-on: ubuntu-24.04
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SPIKE_GH_TOKEN: ${{ secrets.SPIKE_GH_TOKEN }}
+      GH_TOKEN: ${{ secrets.SPIKE_GH_TOKEN }}
       SPIKE_TARGET_REPO: roadhero/agentic-playground
     steps:
       - uses: actions/checkout@v6
@@ -123,11 +124,17 @@ jobs:
           TASCA_PYTHON_311: python3.11
           COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: node scripts/build-vendor.mjs
-      # TODO(creds): swap the trivial command for the provider CLI argv and run
-      # the real-PR path (git push + gh pr create) against SPIKE_TARGET_REPO.
-      # The harness + ExecutionPort already structure this as a 1-step add:
-      #   - spawnAgent({ command: <claude-code argv> })   (SC3 real agent)
-      #   - openPr({ ... })                                 (SC4 real PR)
-      - name: Full SC1-7 harness (gated on credentials)
+      # Install the Claude Code CLI (the real SC3 agent) onto PATH.
+      - name: Install Claude Code CLI
+        run: |
+          npm i -g @anthropic-ai/claude-code
+          claude --version
+      # Authenticate git + gh to the target repo via the spike token, so
+      # `git push` / `gh pr create` work for SC4. The harness also calls this,
+      # but wiring it here makes the credential helper available process-wide.
+      - name: Auth git/gh to target repo
+        run: gh auth setup-git
+      # Full SC1-7: Story -> isolated worktree -> REAL Claude Code agent -> REAL PR.
+      - name: Full SC1-7 harness (real agent + real PR)
         working-directory: packages/execution
-        run: pnpm harness
+        run: pnpm harness:sc17

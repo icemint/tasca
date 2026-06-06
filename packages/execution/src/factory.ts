@@ -138,7 +138,10 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
         id: input.id,
         command: input.command,
         cwd: input.cwd,
-        ...(input.env ? { env: input.env } : {}),
+        // Merge over the parent env (PATH/HOME/...) per the ExecutionPort
+        // contract — passing only input.env strips PATH and breaks CLI spawns
+        // (exit 127, command not found).
+        env: { ...process.env, ...(input.env ?? {}) } as Record<string, string>,
       });
       return {
         pid: handle.pid,
