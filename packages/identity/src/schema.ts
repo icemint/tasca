@@ -20,9 +20,9 @@ CREATE TABLE IF NOT EXISTS agent (
   id                      text PRIMARY KEY,
   name                    text NOT NULL,
   avatar_url              text,
-  vendor                  text NOT NULL DEFAULT 'claude',
+  vendor                  text NOT NULL DEFAULT 'claude' CHECK (vendor IN ('claude','openai','local')),
   model                   text NOT NULL,
-  status                  text NOT NULL DEFAULT 'active',
+  status                  text NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','retired')),
   rbac_role_id            text REFERENCES rbac_role(id),
   human_of_record_user_id text,
   version                 integer NOT NULL DEFAULT 0,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS service_user (
 export const CAPABILITY_PROFILE_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS capability_profile (
   agent_id              text PRIMARY KEY REFERENCES agent(id) ON DELETE CASCADE,
-  max_tier              text NOT NULL,
+  max_tier              text NOT NULL CHECK (max_tier IN ('basic','low','medium','hard','ultra')),
   tiers_covered         jsonb NOT NULL DEFAULT '[]'::jsonb,
   language_specialties  jsonb NOT NULL DEFAULT '[]'::jsonb,
   framework_specialties jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -75,11 +75,11 @@ export const IDENTITY_BINDING_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS identity_binding (
   id              text PRIMARY KEY,
   agent_id        text NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
-  platform        text NOT NULL,
+  platform        text NOT NULL CHECK (platform IN ('shortcut','github','linear')),
   external_id     text NOT NULL,
   external_handle text,
   credential_ref  text,
-  state           text NOT NULL DEFAULT 'provisioned',
+  state           text NOT NULL DEFAULT 'provisioned' CHECK (state IN ('provisioned','active','revoked')),
   provisioned_at  timestamptz NOT NULL DEFAULT now(),
   UNIQUE (agent_id, platform)
 );`;
@@ -100,10 +100,12 @@ CREATE TABLE IF NOT EXISTS audit_event (
   agent_id     text NOT NULL,
   action       text NOT NULL,
   target       text,
-  platform     text,
+  platform     text CHECK (platform IS NULL OR platform IN ('shortcut','github','linear')),
   payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
   at           timestamptz NOT NULL DEFAULT now()
-);`;
+);
+-- Audit read path filters by principal_id, ordered by (at, id) — index it.
+CREATE INDEX IF NOT EXISTS audit_event_principal_at_idx ON audit_event (principal_id, at, id);`;
 
 /**
  * All identity DDL in dependency order (roles → agent → dependents). Apply this

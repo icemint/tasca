@@ -69,7 +69,9 @@ export async function bindShortcutIdentity(
     action: 'identity.binding.shortcut.bound',
     target: input.shortcutAgentUserId,
     platform: 'shortcut',
-    payload: { bindingId: binding.id, credentialRef: input.credentialRef },
+    // Record only the binding id — never the credential_ref pointer (it reveals
+    // secret-store locations in the broadly-readable, append-only audit table).
+    payload: { bindingId: binding.id },
   });
 
   return binding;
@@ -101,7 +103,8 @@ export async function rotateShortcutCredential(
     action: 'identity.binding.shortcut.credential_rotated',
     target: binding.externalId,
     platform: 'shortcut',
-    payload: { bindingId: binding.id, credentialRef: newCredentialRef },
+    // Mark that a rotation happened — never the new credential_ref pointer itself.
+    payload: { bindingId: binding.id, rotated: true },
   });
 
   return binding;
