@@ -1,0 +1,129 @@
+name: spike-headless-boot
+
+# The vendor's green gate for @tasca/execution: build the de-Electron Emdash
+# fork from the native-rebuild recipe and prove the headless boot (SC1/SC2/
+# SC3-trivial/SC5/SC6) on Linux + macOS. This is heavy (native compiles) and is
+# deliberately ISOLATED from ci.yml — it runs only on changes under
+# packages/execution or this workflow, plus on manual dispatch.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/execution/**'
+      - '.github/workflows/spike-headless-boot.yml'
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'packages/execution/**'
+      - '.github/workflows/spike-headless-boot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-headless-boot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  headless-boot:
+    name: build + headless boot (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      # keytar (node-gyp) needs libsecret headers on Linux.
+      - name: Install libsecret (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # Pin Python 3.11: 3.12+ removed distutils and node-gyp fails.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install workspace (root)
+        run: pnpm install --frozen-lockfile
+
+      - name: Activate vendor pnpm
+        working-directory: packages/execution/vendor/emdash
+        run: corepack prepare pnpm@10.28.2 --activate
+
+      - name: Build the de-Electron vendor fork (native-rebuild recipe)
+        working-directory: packages/execution
+        env:
+          TASCA_PYTHON_311: python3.11
+        run: node scripts/build-vendor.mjs
+
+      - name: Headless boot harness (SC1/SC2/SC3-trivial/SC5/SC6)
+        working-directory: packages/execution
+        run: pnpm harness
+
+  # Unrun stub: the real-agent + real-PR criteria (SC3-real-agent / SC4).
+  # Both are pure shell, no Electron — they only need credentials wired in. This
+  # job is gated off by default; flip `if:` to true (or trigger via dispatch
+  # once the repo/org secrets exist) and it runs with no code change.
+  spike-sc1-7:
+    name: full SC1-7 (real agent + real PR) — gated
+    needs: headless-boot
+    if: false
+    runs-on: ubuntu-24.04
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SPIKE_GH_TOKEN: ${{ secrets.SPIKE_GH_TOKEN }}
+      SPIKE_TARGET_REPO: roadhero/agentic-playground
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install libsecret (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pnpm install --frozen-lockfile
+      - name: Activate vendor pnpm
+        working-directory: packages/execution/vendor/emdash
+        run: corepack prepare pnpm@10.28.2 --activate
+      - name: Build the de-Electron vendor fork
+        working-directory: packages/execution
+        env:
+          TASCA_PYTHON_311: python3.11
+        run: node scripts/build-vendor.mjs
+      # TODO(creds): swap the trivial command for the provider CLI argv and run
+      # the real-PR path (git push + gh pr create) against SPIKE_TARGET_REPO.
+      # The harness + ExecutionPort already structure this as a 1-step add:
+      #   - spawnAgent({ command: <claude-code argv> })   (SC3 real agent)
+      #   - openPr({ ... })                                 (SC4 real PR)
+      - name: Full SC1-7 harness (gated on credentials)
+        working-directory: packages/execution
+        run: pnpm harness
