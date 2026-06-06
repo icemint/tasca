@@ -101,8 +101,11 @@ jobs:
             echo "::warning::could not set ports_exposes=80 (continuing; verify app.tasca.dev after deploy)"
           fi
 
+      # Gate on the resource UUID (not just the API URL): the build + GHCR push
+      # still run, and the deploy skips gracefully until COOLIFY_RESOURCE_UUID is
+      # set — same pattern as cd-worker. Avoids a hard fail on an unset UUID.
       - name: Deploy to Coolify (PATCH image tag → deploy → verify rollout)
-        if: ${{ env.COOLIFY_API_URL != '' }}
+        if: ${{ env.COOLIFY_RESOURCE_UUID != '' }}
         env:
           IMAGE: ${{ env.IMAGE }}
           SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
