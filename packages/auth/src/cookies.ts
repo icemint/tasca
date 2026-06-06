@@ -12,7 +12,9 @@ export interface CookieOptions {
 
 /** Parse a `Cookie:` request header into a name→value map. Tolerates noise. */
 export function parseCookies(header?: string): Record<string, string> {
-  const out: Record<string, string> = {};
+  // Null-prototype map so a cookie named `__proto__`/`constructor` can't pollute
+  // the prototype chain or shadow lookups.
+  const out: Record<string, string> = Object.create(null);
   if (!header) return out;
   for (const part of header.split(';')) {
     const eq = part.indexOf('=');

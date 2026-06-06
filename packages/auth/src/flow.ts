@@ -148,7 +148,10 @@ export async function completeAuth(
     throw err;
   }
 
-  if (!identity.email) {
+  // Require a VERIFIED email. email (lower-cased) is unique per app_user, so an
+  // unverified address would let a user register / collide on an email they have
+  // not proven they own — refuse it rather than admit an unverified identity.
+  if (!identity.email || !identity.emailVerified) {
     return { ok: false, error: 'no_email' };
   }
 
