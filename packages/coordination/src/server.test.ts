@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus, TierEstimate } from '@tasca/domain';
 import type { CoordinationStore } from './store';
-import type { WebhookVerifier, RawWebhook, VerifiedWebhook, StatusReporter } from './ports';
+import type { WebhookVerifier, RawWebhook, VerifiedWebhook, StatusReporter, Logger } from './ports';
 import type {
   AgentDirectory,
   AuditSink,
@@ -14,19 +14,40 @@ import type {
 } from './orchestrate';
 import type { ExecutionPort, AgentProcessHandle } from '@tasca/execution';
 
-// Minimal store that counts task creations + enforces webhook idempotency.
+// Minimal store: counts distinct tasks (get-or-create by story) + a webhook
+// processing-ledger. `failCreateOnce` simulates a crash mid-orchestration.
 class CountingStore implements CoordinationStore {
   createdTasks = 0;
-  private seen = new Set<string>();
+  failCreateOnce = false;
+  private ledger = new Map<string, 'received' | 'processed'>();
+  private tasksByStory = new Map<string, Task>();
+
+  ledgerStatus(platform: string, externalEventId: string) {
+    return this.ledger.get(`${platform}:${externalEventId}`);
+  }
+
   async recordWebhookEvent(input: { platform: string; externalEventId: string }) {
     const key = `${input.platform}:${input.externalEventId}`;
-    if (this.seen.has(key)) return { fresh: false };
-    this.seen.add(key);
-    return { fresh: true };
+    const existing = this.ledger.get(key);
+    if (existing === undefined) {
+      this.ledger.set(key, 'received');
+      return { fresh: true, alreadyProcessed: false };
+    }
+    return { fresh: false, alreadyProcessed: existing === 'processed' };
   }
-  async createTask(input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }): Promise<Task> {
+  async markWebhookProcessed(input: { platform: string; externalEventId: string }) {
+    this.ledger.set(`${input.platform}:${input.externalEventId}`, 'processed');
+  }
+  async getOrCreateTask(input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }): Promise<Task> {
+    if (this.failCreateOnce) {
+      this.failCreateOnce = false;
+      throw new Error('db blip mid-orchestration');
+    }
+    const key = `${input.platform}:${input.externalStoryId}`;
+    const existing = this.tasksByStory.get(key);
+    if (existing) return existing;
     this.createdTasks += 1;
-    return {
+    const task: Task = {
       id: randomUUID(),
       externalStoryId: input.externalStoryId,
       platform: input.platform,
@@ -37,10 +58,13 @@ class CountingStore implements CoordinationStore {
       repoRef: input.repoRef ?? null,
       tierEstimate: null,
     };
+    this.tasksByStory.set(key, task);
+    return task;
   }
   async getTask() { return null; }
   async setTierEstimate(_id: string, _e: TierEstimate) {}
   async setStatus(_id: string, _s: TaskStatus) {}
+  async resetForRetry(_id: string) {}
   async incrementFailureCount() { return 1; }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
@@ -83,7 +107,12 @@ function verifierFor(eventId: string): WebhookVerifier {
   };
 }
 
-function makeServerDeps(store: CoordinationStore, verifier: WebhookVerifier, run: (w: () => Promise<void>) => void): CoordinationServerDeps {
+function makeServerDeps(
+  store: CoordinationStore,
+  verifier: WebhookVerifier,
+  run: (w: () => Promise<void>) => void,
+  logger?: Logger
+): CoordinationServerDeps {
   return {
     store,
     claim: { async tryClaim() { return { won: false, newVersion: null }; } },
@@ -94,6 +123,7 @@ function makeServerDeps(store: CoordinationStore, verifier: WebhookVerifier, run
     content: noopContent,
     verifier,
     runAsync: run,
+    ...(logger ? { logger } : {}),
   };
 }
 
@@ -155,7 +185,7 @@ describe('coordination HTTP entry (node:http handler)', () => {
     expect(store.createdTasks).toBe(0);
   });
 
-  it('idempotent intake: the same event id twice creates exactly one task', async () => {
+  it('redelivery of a PROCESSED event → 200 duplicate, schedules no new work', async () => {
     const store = new CountingStore();
     const work: Array<() => Promise<void>> = [];
     const handle = createRequestHandler(makeServerDeps(store, verifierFor('evt-dup'), (w) => work.push(w)));
@@ -163,18 +193,76 @@ describe('coordination HTTP entry (node:http handler)', () => {
     const r1 = fakeRes();
     await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-dup"}'), r1.res);
     expect(r1.statusCode).toBe(202);
+    // Drain → orchestration runs → ledger flips to processed.
+    expect(work).toHaveLength(1);
+    for (const w of work) await w();
+    await flush();
+    expect(store.ledgerStatus('shortcut', 'evt-dup')).toBe('processed');
 
+    work.length = 0;
     const r2 = fakeRes();
     await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-dup"}'), r2.res);
     expect(r2.statusCode).toBe(200);
     expect(r2.body).toBe('duplicate');
+    expect(work).toHaveLength(0); // no re-drive of an already-processed event
+    expect(store.createdTasks).toBe(1);
+  });
 
-    // Drain the one scheduled orchestration; the duplicate scheduled nothing.
+  it('two deliveries for the same story before processing → both proceed, get-or-create yields ONE task', async () => {
+    // Distinct event ids, same story (a re-assignment delivered twice). Neither is
+    // "processed" yet, so both re-drive — exactly-one-task is guaranteed by
+    // get-or-create + the CAS, not by the webhook ledger.
+    const store = new CountingStore();
+    const work: Array<() => Promise<void>> = [];
+    const handle1 = createRequestHandler(makeServerDeps(store, verifierFor('evt-a'), (w) => work.push(w)));
+    const handle2 = createRequestHandler(makeServerDeps(store, verifierFor('evt-b'), (w) => work.push(w)));
+
+    const r1 = fakeRes();
+    await handle1(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-a"}'), r1.res);
+    const r2 = fakeRes();
+    await handle2(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-b"}'), r2.res);
+    expect(r1.statusCode).toBe(202);
+    expect(r2.statusCode).toBe(202);
+
+    expect(work).toHaveLength(2);
+    for (const w of work) await w();
+    await flush();
+    expect(store.createdTasks).toBe(1);
+  });
+
+  it('crash before task creation leaves the ledger received → redelivery re-drives and creates the task', async () => {
+    // must-fix #2 regression: a post-record failure must NOT silently consume the
+    // event id. The first attempt throws (db blip) before the task is created;
+    // the ledger stays `received`; a redelivery of the SAME event id re-drives.
+    const store = new CountingStore();
+    store.failCreateOnce = true;
+    const errors: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const logger: Logger = { error: (msg, ctx) => errors.push({ msg, ...(ctx ? { ctx } : {}) }) };
+    const work: Array<() => Promise<void>> = [];
+    const handle = createRequestHandler(makeServerDeps(store, verifierFor('evt-crash'), (w) => work.push(w), logger));
+
+    const r1 = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-crash"}'), r1.res);
+    expect(r1.statusCode).toBe(202);
+    for (const w of work) await w(); // first orchestration throws
+    await flush();
+
+    // Failure was observable, and the ledger was NOT advanced to processed.
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.ctx).toMatchObject({ externalEventId: 'evt-crash' });
+    expect(store.ledgerStatus('shortcut', 'evt-crash')).toBe('received');
+    expect(store.createdTasks).toBe(0);
+
+    // Redelivery is NOT treated as a duplicate (it never processed) → re-drives.
+    work.length = 0;
+    const r2 = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-crash"}'), r2.res);
+    expect(r2.statusCode).toBe(202);
     expect(work).toHaveLength(1);
     for (const w of work) await w();
     await flush();
-
     expect(store.createdTasks).toBe(1);
+    expect(store.ledgerStatus('shortcut', 'evt-crash')).toBe('processed');
   });
 
   it('unknown route → 404', async () => {

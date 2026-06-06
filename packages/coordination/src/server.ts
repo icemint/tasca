@@ -13,16 +13,19 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { CoordinationStore } from './store';
-import type { WebhookVerifier } from './ports';
+import type { WebhookVerifier, Logger } from './ports';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
   verifier: WebhookVerifier;
   /**
-   * Schedules the post-ack orchestration. Defaults to `queueMicrotask` (fire and
-   * forget); tests pass a collector to await the work deterministically.
+   * Schedules the post-ack orchestration. Defaults to `queueMicrotask` with a
+   * last-resort `.catch` so a rejected run is logged, never an unhandledRejection
+   * that could crash the process; tests pass a collector to await it.
    */
   runAsync?: (work: () => Promise<void>) => void;
+  /** Structured logger for post-ack failures. Defaults to `console`. */
+  logger?: Logger;
 }
 
 const MAX_BODY_BYTES = 1_000_000; // reject oversized webhook bodies
@@ -58,7 +61,18 @@ function headerMap(req: IncomingMessage): Record<string, string | undefined> {
  * unit-tested without binding a socket.
  */
 export function createRequestHandler(deps: CoordinationServerDeps) {
-  const runAsync = deps.runAsync ?? ((work) => queueMicrotask(() => void work()));
+  const logger = deps.logger ?? console;
+  // Default scheduler: run after the ack, but attach a last-resort `.catch` so a
+  // rejection is logged rather than escaping as an unhandledRejection. The work
+  // closure below already handles its own errors; this is defense in depth.
+  const runAsync =
+    deps.runAsync ??
+    ((work) =>
+      queueMicrotask(() => {
+        void work().catch((err) =>
+          logger.error('coordination: post-ack work rejected', { err: String(err) })
+        );
+      }));
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET' && req.url === '/healthz') {
@@ -83,24 +97,43 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
         return;
       }
 
-      // Idempotent enqueue: a re-delivered event id is a no-op (one task).
-      const { fresh } = await deps.store.recordWebhookEvent({
+      // Idempotency ledger: record this event as `received`. Only an event that
+      // already reached `processed` is a true duplicate to drop — a row still
+      // `received` (a prior attempt recorded it then crashed before finishing) is
+      // re-driven, so a post-record crash can't silently consume the event.
+      const { alreadyProcessed } = await deps.store.recordWebhookEvent({
         platform: verified.platform,
         externalEventId: verified.externalEventId,
         payload: verified.payload,
       });
-      if (!fresh) {
+      if (alreadyProcessed) {
         res.writeHead(200).end('duplicate');
         return;
       }
 
       const events: AdapterEvent[] = deps.verifier.parse(verified);
+      const ledgerKey = {
+        platform: verified.platform,
+        externalEventId: verified.externalEventId,
+      };
 
-      // Fast-ack: 202 now, orchestrate after the response.
+      // Fast-ack: 202 now, orchestrate after the response. The work is detached
+      // from the response, so it owns its errors: on success the ledger row is
+      // flipped to `processed`; on failure it is logged WITH context and left
+      // `received` so a redelivery re-drives it (get-or-create + the CAS make the
+      // re-drive idempotent — no duplicate task, no double-dispatch).
       res.writeHead(202).end('accepted');
       runAsync(async () => {
-        for (const event of events) {
-          await orchestrateTaskAssigned(event, deps);
+        try {
+          for (const event of events) {
+            await orchestrateTaskAssigned(event, deps);
+          }
+          await deps.store.markWebhookProcessed(ledgerKey);
+        } catch (err) {
+          logger.error('coordination: orchestration failed after ack', {
+            ...ledgerKey,
+            err: err instanceof Error ? err.message : String(err),
+          });
         }
       });
       return;

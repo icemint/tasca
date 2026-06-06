@@ -30,15 +30,25 @@ class FakeStore implements CoordinationStore {
   tasks = new Map<string, Task>();
   routingDecisions: Array<{ taskId: string; winnerAgentId: string | null }> = [];
   pullRequests: Array<{ taskId: string; url: string }> = [];
-  seenEvents = new Set<string>();
+  events = new Map<string, 'received' | 'processed'>();
 
   async recordWebhookEvent(input: { platform: string; externalEventId: string }) {
     const key = `${input.platform}:${input.externalEventId}`;
-    if (this.seenEvents.has(key)) return { fresh: false };
-    this.seenEvents.add(key);
-    return { fresh: true };
+    const existing = this.events.get(key);
+    if (existing === undefined) {
+      this.events.set(key, 'received');
+      return { fresh: true, alreadyProcessed: false };
+    }
+    return { fresh: false, alreadyProcessed: existing === 'processed' };
   }
-  async createTask(input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }) {
+  async markWebhookProcessed(input: { platform: string; externalEventId: string }) {
+    this.events.set(`${input.platform}:${input.externalEventId}`, 'processed');
+  }
+  async getOrCreateTask(input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }) {
+    // Get-or-create keyed by (platform, externalStoryId), mirroring the PG unique.
+    for (const t of this.tasks.values()) {
+      if (t.platform === input.platform && t.externalStoryId === input.externalStoryId) return t;
+    }
     const task: Task = {
       id: randomUUID(),
       externalStoryId: input.externalStoryId,
@@ -63,6 +73,12 @@ class FakeStore implements CoordinationStore {
   async setStatus(taskId: string, status: TaskStatus) {
     const t = this.tasks.get(taskId)!;
     t.status = status;
+    t.version += 1;
+  }
+  async resetForRetry(taskId: string) {
+    const t = this.tasks.get(taskId)!;
+    t.status = 'routable';
+    t.claimedBy = null;
     t.version += 1;
   }
   async incrementFailureCount(taskId: string) {
@@ -285,8 +301,8 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
   });
 });
 
-describe('orchestrateTaskAssigned — failure path → breaker → needs_attention (§6.14)', () => {
-  it('first failure → failed (below threshold), task is left for retry', async () => {
+describe('orchestrateTaskAssigned — failure path → auto-recover → breaker (§6.14)', () => {
+  it('first failure (below threshold) → task RESET to routable, claim cleared, for re-drive', async () => {
     const store = new FakeStore();
     const outcome = await orchestrateTaskAssigned(
       EVENT,
@@ -300,40 +316,40 @@ describe('orchestrateTaskAssigned — failure path → breaker → needs_attenti
     expect(outcome.kind).toBe('failed');
     if (outcome.kind !== 'failed') return;
     expect(outcome.failureCount).toBe(1);
-    expect(store.tasks.get(outcome.taskId)!.status).toBe('failed');
+    // Must be re-claimable: routable + claim cleared (the CAS only claims routable
+    // rows, so leaving it 'failed'/claimed would strand the documented retry).
+    const task = store.tasks.get(outcome.taskId)!;
+    expect(task.status).toBe('routable');
+    expect(task.claimedBy).toBeNull();
   });
 
-  it('failure count reaching N=2 trips the breaker → needs_attention', async () => {
+  it('re-driving the SAME story on failure accumulates failures until the breaker trips at N=2', async () => {
+    // The real auto-recover loop: same store + same event delivered twice. First
+    // failure resets the task to routable (fc=1); the second delivery get-or-creates
+    // the SAME task, re-wins the CAS, fails again (fc=2) → breaker → needs_attention.
     const store = new FakeStore();
-    // Seed a task already at failure_count 1 by running once, then re-run on it.
-    // Simpler: drive incrementFailureCount to N by pre-failing the store task.
     const first = await orchestrateTaskAssigned(
       EVENT,
-      makeDeps({ store, execution: new FakeExecution({ spawnError: new Error('spawn boom') }), status: new FakeStatus(), audit: new FakeAudit() })
+      makeDeps({ store, execution: new FakeExecution({ spawnExitCode: 1 }), status: new FakeStatus(), audit: new FakeAudit() })
     );
     expect(first.kind).toBe('failed');
+    if (first.kind !== 'failed') return;
+    expect(first.failureCount).toBe(1);
 
-    // Second independent assignment that also fails, but seeded at count 1 so it
-    // reaches the threshold: bump the new task's count by routing again with a
-    // store whose failure increment starts from a tripped value.
-    const trippingStore = new FakeStore();
-    // Pre-load: monkeypatch incrementFailureCount to simulate an existing failure.
-    const realInc = trippingStore.incrementFailureCount.bind(trippingStore);
-    trippingStore.incrementFailureCount = async (id: string) => {
-      await realInc(id);
-      return realInc(id); // second bump → count 2
-    };
-    const tripped = await orchestrateTaskAssigned(
+    const second = await orchestrateTaskAssigned(
       EVENT,
-      makeDeps({ store: trippingStore, execution: new FakeExecution({ spawnExitCode: 2 }), status: new FakeStatus(), audit: new FakeAudit() })
+      makeDeps({ store, execution: new FakeExecution({ spawnExitCode: 2 }), status: new FakeStatus(), audit: new FakeAudit() })
     );
-    expect(tripped.kind).toBe('needs_attention');
-    if (tripped.kind !== 'needs_attention') return;
-    expect(tripped.failureCount).toBe(2);
-    expect(trippingStore.tasks.get(tripped.taskId)!.status).toBe('needs_attention');
+    expect(second.kind).toBe('needs_attention');
+    if (second.kind !== 'needs_attention') return;
+    // Same task row was re-driven — one task total, count accumulated to the threshold.
+    expect(store.tasks.size).toBe(1);
+    expect(second.taskId).toBe(first.taskId);
+    expect(second.failureCount).toBe(2);
+    expect(store.tasks.get(second.taskId)!.status).toBe('needs_attention');
   });
 
-  it('a PR-open failure also feeds the breaker (spawn ok, PR throws)', async () => {
+  it('a PR-open failure also feeds the breaker (spawn ok, PR throws) → reset for retry', async () => {
     const store = new FakeStore();
     const exec = new FakeExecution({ spawnExitCode: 0, prError: new Error('gh failed') });
     const outcome = await orchestrateTaskAssigned(
@@ -342,6 +358,7 @@ describe('orchestrateTaskAssigned — failure path → breaker → needs_attenti
     );
     expect(exec.spawnCalls).toBe(1);
     expect(outcome.kind).toBe('failed');
+    expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('routable');
   });
 });
 

@@ -97,9 +97,11 @@ export async function orchestrateTaskAssigned(
   const breakerThreshold = deps.breakerThreshold ?? 2;
   const perProjectLimit = deps.perProjectLimit ?? 1;
 
-  // §6.4 — ingest + persist as a task (routable, version 0).
+  // §6.4 — ingest: get-or-create the task for this story (routable, v0 on first
+  // delivery; the existing row on re-delivery / re-assignment). Re-driving the
+  // same row is what lets failure_count accumulate toward the breaker (§6.14).
   const repoRef = event.repoHint ?? null;
-  const task = await deps.store.createTask({
+  const task = await deps.store.getOrCreateTask({
     externalStoryId: event.externalStoryId,
     platform: event.platform,
     repoRef,
@@ -209,17 +211,31 @@ export async function orchestrateTaskAssigned(
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
-    // §6.14 — failure path: counter++ → breaker(n) → at N → needs_attention.
-    await deps.store.setStatus(task.id, 'failed');
+    // §6.14 — failure path: counter++ → breaker(n). At/over the threshold the
+    // task trips to needs_attention (human-gated). Below it, the task is RESET to
+    // routable (claim cleared, version bumped) so a re-delivery / re-assignment of
+    // the story re-claims the SAME row and the next failure increments the same
+    // counter — the breaker only trips because the row is re-driven, not replaced.
     const failureCount = await deps.store.incrementFailureCount(task.id);
+    const outcome = breaker(failureCount, breakerThreshold);
+
+    if (outcome === 'needs_attention') {
+      await deps.store.setStatus(task.id, 'needs_attention');
+    } else {
+      await deps.store.resetForRetry(task.id);
+    }
+
     await audit(deps, principalId, winner.agentId, event, {
       action: 'task.failed',
       target: task.id,
-      payload: { failureCount, error: err instanceof Error ? err.message : String(err) },
+      payload: {
+        failureCount,
+        outcome,
+        error: err instanceof Error ? err.message : String(err),
+      },
     });
 
-    if (breaker(failureCount, breakerThreshold) === 'needs_attention') {
-      await deps.store.setStatus(task.id, 'needs_attention');
+    if (outcome === 'needs_attention') {
       return { kind: 'needs_attention', taskId: task.id, failureCount };
     }
     return { kind: 'failed', taskId: task.id, failureCount };

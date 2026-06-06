@@ -12,7 +12,7 @@ import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
 import type { LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
-import type { StatusReporter, WebhookVerifier } from './ports';
+import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
 
@@ -30,6 +30,8 @@ export interface CreateCoordinationDeps {
   classifier?: LlmClassifierPort;
   breakerThreshold?: number;
   perProjectLimit?: number;
+  /** Structured logger for post-ack failures; defaults to `console` in the server. */
+  logger?: Logger;
 }
 
 /**
@@ -115,6 +117,7 @@ export function createCoordination(
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
+    ...(input.logger !== undefined ? { logger: input.logger } : {}),
   };
 
   return {

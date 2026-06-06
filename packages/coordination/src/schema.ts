@@ -35,7 +35,14 @@ DO $$ BEGIN
   ALTER TABLE task ADD CONSTRAINT task_platform_chk CHECK (
     platform IN ('shortcut','github','linear')
   );
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;`;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- A task is identified by its source story: (platform, external_story_id) is
+-- unique so ingest is get-or-create. Re-delivery / re-assignment of the same
+-- story re-drives the SAME task row, which is what makes the failure_count the
+-- breaker reads accumulate across attempts (auto-recover-on-re-assign, §6.14).
+-- A unique INDEX (not a named ADD CONSTRAINT) keeps this DDL re-appliable —
+-- IF NOT EXISTS is natively idempotent — and ON CONFLICT infers it all the same.
+CREATE UNIQUE INDEX IF NOT EXISTS task_platform_story_uniq ON task (platform, external_story_id);`;
 
 /**
  * Workspace-level connection to a platform (Shortcut in Stage 1). Holds the
@@ -55,9 +62,13 @@ CREATE TABLE IF NOT EXISTS platform_connection (
 
 /**
  * Raw inbound webhook log keyed by the platform's event id — the idempotency
- * anchor (scaffold §7). The UNIQUE on (platform, external_event_id) makes a
- * re-delivered event a no-op insert, so the same event id processed twice yields
- * exactly one task.
+ * anchor (scaffold §7). It is a *processing ledger*, not a bare seen-set: a row
+ * starts `received` and is flipped to `processed` only once orchestration has
+ * durably run. The UNIQUE on (platform, external_event_id) makes a re-delivered
+ * event a no-op insert, but only a `processed` row short-circuits delivery — a
+ * row still `received` (orchestration crashed or never completed between the
+ * record and the run) is re-driven on redelivery, so a post-record crash cannot
+ * silently consume an event and yield zero tasks.
  */
 export const WEBHOOK_EVENT_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS webhook_event (
@@ -65,9 +76,13 @@ CREATE TABLE IF NOT EXISTS webhook_event (
   platform          text NOT NULL CHECK (platform IN ('shortcut','github','linear')),
   external_event_id text NOT NULL,
   payload           jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status            text NOT NULL DEFAULT 'received' CHECK (status IN ('received','processed')),
   received_at       timestamptz NOT NULL DEFAULT now(),
+  processed_at      timestamptz,
   UNIQUE (platform, external_event_id)
-);`;
+);
+ALTER TABLE webhook_event ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'received';
+ALTER TABLE webhook_event ADD COLUMN IF NOT EXISTS processed_at timestamptz;`;
 
 /**
  * The persisted routing decision — the routing inspector's data (design brief

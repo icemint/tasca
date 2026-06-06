@@ -20,6 +20,7 @@ export type {
   WebhookVerifier,
   RawWebhook,
   VerifiedWebhook,
+  Logger,
   ClaimPort,
   LlmClassifierPort,
   ExecutionPort,

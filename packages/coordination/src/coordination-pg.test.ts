@@ -183,7 +183,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     const GATE = 553311;
     const racePool = new Pool({ connectionString: url, max: N + 4, options: `-c search_path=${SCHEMA}` });
     try {
-      const task = await store.createTask({ externalStoryId: 'sc-race', platform: 'shortcut', repoRef: '/r' });
+      const task = await store.getOrCreateTask({ externalStoryId: 'sc-race', platform: 'shortcut', repoRef: '/r' });
 
       const gate = await racePool.connect();
       await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
@@ -216,18 +216,58 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     }
   });
 
-  it('idempotent webhook intake: same event id twice → one webhook_event row, one task', async () => {
+  it('webhook ledger: a received-but-unprocessed redelivery is not a duplicate; a processed one is', async () => {
     const first = await store.recordWebhookEvent({ platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
+    expect(first).toEqual({ fresh: true, alreadyProcessed: false });
+    // Redelivery while still `received` (prior attempt not finished) → re-drivable.
     const second = await store.recordWebhookEvent({ platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
-    expect(first.fresh).toBe(true);
-    expect(second.fresh).toBe(false);
+    expect(second).toEqual({ fresh: false, alreadyProcessed: false });
 
-    // Only the fresh delivery would proceed to createTask in the server path.
-    if (first.fresh) await store.createTask({ externalStoryId: 'sc-x', platform: 'shortcut' });
+    // Once processed, a redelivery is a true duplicate.
+    await store.markWebhookProcessed({ platform: 'shortcut', externalEventId: 'evt-x' });
+    const third = await store.recordWebhookEvent({ platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
+    expect(third).toEqual({ fresh: false, alreadyProcessed: true });
 
+    // Exactly one ledger row regardless of redelivery count.
     const rows = await pool.query('SELECT count(*)::int AS c FROM webhook_event WHERE external_event_id=$1', ['evt-x']);
     expect(rows.rows[0].c).toBe(1);
-    const tasks = await pool.query('SELECT count(*)::int AS c FROM task WHERE external_story_id=$1', ['sc-x']);
+  });
+
+  it('get-or-create: two deliveries for the same story yield ONE task row', async () => {
+    const a = await store.getOrCreateTask({ externalStoryId: 'sc-dup', platform: 'shortcut' });
+    const b = await store.getOrCreateTask({ externalStoryId: 'sc-dup', platform: 'shortcut' });
+    expect(b.id).toBe(a.id);
+    const tasks = await pool.query('SELECT count(*)::int AS c FROM task WHERE external_story_id=$1', ['sc-dup']);
+    expect(tasks.rows[0].c).toBe(1);
+  });
+
+  it('auto-recover: a failed attempt resets the SAME task to routable and re-wins the CAS (real Postgres)', async () => {
+    // The headline §6.14 fix. First delivery fails in execution (spawn exit 1) →
+    // task reset to routable, claim cleared, failure_count 1. Re-delivering the
+    // SAME story re-drives the SAME row, succeeds, and dispatches.
+    const failingExec: ExecutionPort = {
+      ...okExecution,
+      spawnAgent(): AgentProcessHandle {
+        return { pid: 1, onData() {}, onExit(l) { queueMicrotask(() => l(1)); }, onError() {}, kill() {} };
+      },
+    };
+    const base = { store, claim: new PgClaimRepository(pool), status, directory: directory(), audit: auditSink, content };
+
+    const first = await orchestrateTaskAssigned(EVENT, { ...base, execution: failingExec });
+    expect(first.kind).toBe('failed');
+    if (first.kind !== 'failed') return;
+
+    const reset = await store.getTask(first.taskId);
+    expect(reset?.status).toBe('routable');
+    expect(reset?.claimedBy).toBeNull();
+    expect(reset?.failureCount).toBe(1);
+
+    const second = await orchestrateTaskAssigned(EVENT, { ...base, execution: okExecution });
+    expect(second.kind).toBe('dispatched');
+    if (second.kind !== 'dispatched') return;
+    expect(second.taskId).toBe(first.taskId); // same row re-driven, not a new task
+
+    const tasks = await pool.query('SELECT count(*)::int AS c FROM task WHERE external_story_id=$1', [EVENT.externalStoryId]);
     expect(tasks.rows[0].c).toBe(1);
   });
 });

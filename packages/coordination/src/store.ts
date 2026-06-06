@@ -19,8 +19,16 @@ export interface CreateTaskInput {
 }
 
 export interface RecordWebhookResult {
-  /** False when this (platform, externalEventId) was already recorded. */
+  /** True when this insert created the ledger row (first delivery of this id). */
   fresh: boolean;
+  /**
+   * True when a row for this (platform, externalEventId) already exists AND it is
+   * `processed` — i.e. orchestration durably completed for it, so a redelivery is
+   * a genuine duplicate and must be dropped. A row that exists but is still
+   * `received` (a prior attempt recorded the event then crashed before finishing)
+   * is NOT alreadyProcessed: redelivery should re-drive it.
+   */
+  alreadyProcessed: boolean;
 }
 
 /**
@@ -28,15 +36,33 @@ export interface RecordWebhookResult {
  * depends only on this interface so it is unit-testable with an in-memory fake.
  */
 export interface CoordinationStore {
-  /** Idempotency gate: record an inbound event; `fresh:false` if already seen. */
+  /**
+   * Idempotency ledger: record an inbound event as `received`. `fresh:true` when
+   * this delivery created the row; `alreadyProcessed:true` when an existing row is
+   * already `processed` (a true duplicate to drop). An existing-but-`received` row
+   * returns `{fresh:false, alreadyProcessed:false}` so a crashed prior attempt is
+   * re-driven on redelivery.
+   */
   recordWebhookEvent(input: {
     platform: 'shortcut' | 'github' | 'linear';
     externalEventId: string;
     payload?: unknown;
   }): Promise<RecordWebhookResult>;
 
-  /** Persist a new task at status `routable`, version 0. */
-  createTask(input: CreateTaskInput): Promise<Task>;
+  /** Flip a ledger row to `processed` once orchestration has durably completed. */
+  markWebhookProcessed(input: {
+    platform: 'shortcut' | 'github' | 'linear';
+    externalEventId: string;
+  }): Promise<void>;
+
+  /**
+   * Get-or-create the task for a source story. A task is identified by
+   * (platform, external_story_id): the first delivery creates it at status
+   * `routable`, version 0; a later delivery / re-assignment returns the EXISTING
+   * row as-is (whatever its current status, version, failure_count). This is what
+   * lets a re-assigned story re-drive the same task and accumulate failures.
+   */
+  getOrCreateTask(input: CreateTaskInput): Promise<Task>;
 
   getTask(taskId: string): Promise<Task | null>;
 
@@ -45,6 +71,15 @@ export interface CoordinationStore {
 
   /** Move a task to a new status, incrementing its version. */
   setStatus(taskId: string, status: TaskStatus): Promise<void>;
+
+  /**
+   * Return a task to a re-claimable state after a failed attempt below the
+   * breaker threshold: status `routable`, `claimed_by` cleared, version bumped so
+   * the next CAS uses a fresh expected version. Without this the failed task would
+   * be stranded (the CAS only claims `routable` rows) and the breaker's retry
+   * outcome would be unreachable.
+   */
+  resetForRetry(taskId: string): Promise<void>;
 
   /** Increment and return the task's failure_count (failure path). */
   incrementFailureCount(taskId: string): Promise<number>;
@@ -100,22 +135,49 @@ export class PgCoordinationStore implements CoordinationStore {
     externalEventId: string;
     payload?: unknown;
   }): Promise<RecordWebhookResult> {
-    // ON CONFLICT DO NOTHING + RETURNING: a fresh insert returns a row, a
-    // duplicate (same platform + event id) returns none — the idempotency gate.
-    const res = await this.db.query(
-      `INSERT INTO webhook_event (id, platform, external_event_id, payload)
-       VALUES ($1,$2,$3,$4::jsonb)
+    // Insert the ledger row as `received`. ON CONFLICT DO NOTHING means a fresh
+    // delivery returns a row (rowCount 1); a redelivery returns none. For a
+    // redelivery we must distinguish a genuine duplicate (existing row already
+    // `processed`) from a crashed prior attempt (`received`) — so we read the
+    // existing status and re-drive only the latter.
+    const inserted = await this.db.query(
+      `INSERT INTO webhook_event (id, platform, external_event_id, payload, status)
+       VALUES ($1,$2,$3,$4::jsonb,'received')
        ON CONFLICT (platform, external_event_id) DO NOTHING
        RETURNING id`,
       [randomUUID(), input.platform, input.externalEventId, JSON.stringify(input.payload ?? {})]
     );
-    return { fresh: res.rowCount === 1 };
+    if (inserted.rowCount === 1) {
+      return { fresh: true, alreadyProcessed: false };
+    }
+    const existing = await this.db.query<{ status: string }>(
+      `SELECT status FROM webhook_event WHERE platform = $1 AND external_event_id = $2`,
+      [input.platform, input.externalEventId]
+    );
+    return { fresh: false, alreadyProcessed: existing.rows[0]?.status === 'processed' };
   }
 
-  async createTask(input: CreateTaskInput): Promise<Task> {
+  async markWebhookProcessed(input: {
+    platform: 'shortcut' | 'github' | 'linear';
+    externalEventId: string;
+  }): Promise<void> {
+    await this.db.query(
+      `UPDATE webhook_event SET status = 'processed', processed_at = now()
+        WHERE platform = $1 AND external_event_id = $2`,
+      [input.platform, input.externalEventId]
+    );
+  }
+
+  async getOrCreateTask(input: CreateTaskInput): Promise<Task> {
+    // Get-or-create on (platform, external_story_id). The no-op DO UPDATE makes
+    // RETURNING fire on conflict too, so we always get the live row back — a new
+    // one on first delivery, the existing one (with its accumulated version /
+    // failure_count / status) on re-delivery.
     const res = await this.db.query<TaskRow>(
       `INSERT INTO task (id, external_story_id, platform, status, version, failure_count, repo_ref)
        VALUES ($1,$2,$3,'routable',0,0,$4)
+       ON CONFLICT (platform, external_story_id)
+         DO UPDATE SET external_story_id = EXCLUDED.external_story_id
        RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate`,
       [randomUUID(), input.externalStoryId, input.platform, input.repoRef ?? null]
     );
@@ -143,6 +205,14 @@ export class PgCoordinationStore implements CoordinationStore {
     await this.db.query(
       `UPDATE task SET status = $2, version = version + 1, updated_at = now() WHERE id = $1`,
       [taskId, status]
+    );
+  }
+
+  async resetForRetry(taskId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE task SET status = 'routable', claimed_by = NULL, version = version + 1, updated_at = now()
+        WHERE id = $1`,
+      [taskId]
     );
   }
 

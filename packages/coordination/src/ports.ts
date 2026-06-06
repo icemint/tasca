@@ -62,6 +62,17 @@ export interface WebhookVerifier {
   parse(verified: VerifiedWebhook): AdapterEvent[];
 }
 
+/**
+ * Minimal structured-logging seam. The post-ack orchestration runs detached from
+ * the HTTP response, so a rejection there has no caller to surface it — it MUST
+ * be logged with context rather than swallowed. Defaults to `console` at the
+ * composition root; injectable so a host can route it to its real logger.
+ */
+export interface Logger {
+  error(message: string, context?: Record<string, unknown>): void;
+  info?(message: string, context?: Record<string, unknown>): void;
+}
+
 // Re-export the proven ports the composition root wires, so consumers import the
 // whole coordination seam-set from one place.
 export type { ClaimPort, LlmClassifierPort } from '@tasca/routing';
