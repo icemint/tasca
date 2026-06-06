@@ -112,7 +112,8 @@ function makeServerDeps(
   verifier: WebhookVerifier,
   run: (w: () => Promise<void>) => void,
   logger?: Logger,
-  githubVerifier?: WebhookVerifier
+  githubVerifier?: WebhookVerifier,
+  authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
 ): CoordinationServerDeps {
   return {
     store,
@@ -126,6 +127,7 @@ function makeServerDeps(
     runAsync: run,
     ...(logger ? { logger } : {}),
     ...(githubVerifier ? { githubVerifier } : {}),
+    ...(authHandler ? { authHandler } : {}),
   };
 }
 
@@ -307,6 +309,44 @@ describe('coordination HTTP entry (node:http handler)', () => {
     await flush();
     expect(store.createdTasks).toBe(1);
     expect(store.ledgerStatus('github', 'gh-delivery-1')).toBe('processed');
+  });
+
+  it('GET /api/auth/* → 404 when no auth handler is wired (flag OFF)', async () => {
+    const store = new CountingStore();
+    const handle = createRequestHandler(makeServerDeps(store, verifierFor('e1'), (w) => void w()));
+    const res = fakeRes();
+    await handle(fakeReq('GET', '/api/auth/me', ''), res.res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('GET /api/auth/* → consults an injected auth handler when wired', async () => {
+    const store = new CountingStore();
+    let consultedUrl: string | undefined;
+    const authHandler = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+      consultedUrl = req.url;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"authenticated":false}');
+      return true;
+    };
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('e1'), (w) => void w(), undefined, undefined, authHandler)
+    );
+    const res = fakeRes();
+    await handle(fakeReq('GET', '/api/auth/me', ''), res.res);
+    expect(consultedUrl).toBe('/api/auth/me');
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('{"authenticated":false}');
+  });
+
+  it('falls through to 404 when the auth handler declines (returns false)', async () => {
+    const store = new CountingStore();
+    const declining = async (): Promise<boolean> => false;
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('e1'), (w) => void w(), undefined, undefined, declining)
+    );
+    const res = fakeRes();
+    await handle(fakeReq('GET', '/some/other/path', ''), res.res);
+    expect(res.statusCode).toBe(404);
   });
 
   it('POST /webhooks/github → 401 on a bad signature', async () => {

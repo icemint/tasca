@@ -38,6 +38,8 @@ body { background: var(--bg); font-family: var(--font-body); }
 .oauth-btn { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 11px 16px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-family: var(--font-body); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; transition: all var(--dur) var(--ease); }
 .oauth-btn:hover { border-color: var(--line-3); background: var(--surface-2); }
 .oauth-btn svg { width: 18px; height: 18px; flex: none; }
+.auth-error { margin: 0 0 16px; padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--danger, #e5484d); background: color-mix(in srgb, var(--danger, #e5484d) 12%, transparent); color: var(--danger, #e5484d); font-size: var(--fs-sm); line-height: 1.4; }
+.auth-error[hidden] { display: none; }
 .auth-or { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--fg-faint); font-size: var(--fs-xs); }
 .auth-or::before, .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .auth-form { display: flex; flex-direction: column; gap: 10px; }

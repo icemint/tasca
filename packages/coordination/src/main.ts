@@ -20,6 +20,7 @@
 import { Pool } from 'pg';
 import { TASK_TABLE_DDL } from '@tasca/db';
 import { IDENTITY_SCHEMA_DDL } from '@tasca/identity';
+import { AUTH_SCHEMA_DDL, PgAuthRepository, createAuthHandler, parseAuthEnv } from '@tasca/auth';
 import { createExecution } from '@tasca/execution';
 import { ShortcutAdapter, GitHubAdapter } from '@tasca/adapters';
 import type { AdapterEvent, VerifiedEvent } from '@tasca/contracts';
@@ -76,6 +77,7 @@ async function applySchema(pool: Pool): Promise<void> {
   const statements: readonly string[] = [
     TASK_TABLE_DDL, // the @tasca/db base task table (the CAS target) — must be first
     ...IDENTITY_SCHEMA_DDL, // agent/service_user/rbac/profile/binding/delegation/audit
+    ...AUTH_SCHEMA_DDL, // human login: app_user/auth_identity/oauth_state/session (no hard FK to the above)
     ...COORDINATION_SCHEMA_DDL, // task coordination columns + routing_decision/pull_request/ledger
   ];
   for (const ddl of statements) {
@@ -232,6 +234,33 @@ async function main(): Promise<void> {
     logger.info?.('GITHUB_WEBHOOK_SECRET unset — /webhooks/github disabled');
   }
 
+  // Human OAuth login (GitHub + Google). Feature flag OFF by default: only when
+  // ALL 5 OAuth env vars are present do we construct the repo + handler and start
+  // the expiry sweep. Absent → the /api/auth/* routes 404 (handler stays undefined).
+  const authEnv = parseAuthEnv();
+  let authHandler: ReturnType<typeof createAuthHandler> | undefined;
+  let authSweep: ReturnType<typeof setInterval> | undefined;
+  if (authEnv) {
+    const authRepo = new PgAuthRepository(pool);
+    authHandler = createAuthHandler({
+      repo: authRepo,
+      redirectBase: authEnv.OAUTH_REDIRECT_BASE,
+      clientIds: { github: authEnv.GITHUB_OAUTH_CLIENT_ID, google: authEnv.GOOGLE_OAUTH_CLIENT_ID },
+      clientSecrets: { github: authEnv.GITHUB_OAUTH_CLIENT_SECRET, google: authEnv.GOOGLE_OAUTH_CLIENT_SECRET },
+    });
+    // Hourly sweep of expired sessions + oauth-state rows. unref() so it never
+    // holds the process open during shutdown.
+    authSweep = setInterval(() => {
+      void authRepo.deleteExpired().catch((err) =>
+        logger.error('auth expiry sweep failed', { err: err instanceof Error ? err.message : String(err) })
+      );
+    }, 3_600_000);
+    authSweep.unref();
+    logger.info?.('auth enabled (OAuth env present)');
+  } else {
+    logger.info?.('auth disabled (OAuth env unset)');
+  }
+
   const execution = createExecution(dbFile ? { dbFile } : {});
   // Ready the execution-local store (migrates the SQLite). Guarded, not fatal:
   // intake + routing don't touch execution, and nothing dispatches until an agent
@@ -256,6 +285,7 @@ async function main(): Promise<void> {
     agentIds,
     logger,
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
+    ...(authHandler ? { authHandler } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
   });
@@ -269,6 +299,7 @@ async function main(): Promise<void> {
       githubBindings: githubBindingRows.rows.length,
       github: ghVerifier ? 'verifying' : 'disabled (no secret)',
       webhooks: webhookSecret ? 'verifying' : 'rejecting (no secret)',
+      auth: authHandler ? 'enabled' : 'disabled',
     });
   });
 
@@ -283,6 +314,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info?.('shutting down', { signal });
+    if (authSweep) clearInterval(authSweep);
     server.close(() => {
       void Promise.allSettled([pool.end(), execution.close()]).then(() => process.exit(0));
     });

@@ -41,17 +41,11 @@ import { MARK, GITHUB, GOOGLE } from '../lib/icons';
           <div class="auth-mark" set:html={MARK} />
           <h1>Sign in to Tasca</h1>
           <p class="auth-sub">Your AI dev team — named, capable, working in the tools you already use.</p>
+          <div class="auth-error" id="auth-error" role="alert" hidden></div>
           <div class="oauth-col">
             <a class="oauth-btn" href="/api/auth/github"><span set:html={GITHUB} /><span>Continue with GitHub</span></a>
             <a class="oauth-btn" href="/api/auth/google"><span set:html={GOOGLE} /><span>Continue with Google</span></a>
           </div>
-          <div class="auth-or"><span>or</span></div>
-          <form class="auth-form" method="post" action="/api/auth/login">
-            <input class="tinput" type="email" name="email" placeholder="you@company.com" aria-label="Email" autocomplete="email" />
-            <input class="tinput" type="password" name="password" placeholder="Password" aria-label="Password" autocomplete="current-password" />
-            <button class="btn-add wide" type="submit">Sign in</button>
-          </form>
-          <div class="auth-foot"><a href="/api/auth/github">Create an account</a><span class="sep">·</span><a href="/account/reset">Forgot password?</a></div>
         </div>
         <div class="auth-legal mono">Tasca uses OAuth (GitHub / Google). We never see your password for those providers.</div>
       </div>
@@ -59,6 +53,24 @@ import { MARK, GITHUB, GOOGLE } from '../lib/icons';
   </div>
 
   <script>
+    // Surface an OAuth failure passed back as ?error=… from the worker callback.
+    (function () {
+      const messages: Record<string, string> = {
+        auth: 'Sign-in could not be completed. Please try again.',
+        denied: 'Sign-in was cancelled.',
+        provider_unavailable: 'The sign-in provider is temporarily unavailable. Please try again.',
+        no_email: 'We could not read a verified email from that account. Please use an account with a verified email.',
+      };
+      try {
+        const code = new URLSearchParams(window.location.search).get('error');
+        if (!code) return;
+        const el = document.getElementById('auth-error');
+        if (!el) return;
+        el.textContent = messages[code] ?? messages.auth;
+        el.hidden = false;
+      } catch (e) {}
+    })();
+
     function syncTheme(t: string) {
       document.documentElement.setAttribute('data-theme', t);
       document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));

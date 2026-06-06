@@ -8,6 +8,7 @@
   "scripts": { "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@tasca/adapters": "workspace:*",
+    "@tasca/auth": "workspace:*",
     "@tasca/contracts": "workspace:*",
     "@tasca/db": "workspace:*",
     "@tasca/domain": "workspace:*",

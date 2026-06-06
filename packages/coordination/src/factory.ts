@@ -28,6 +28,8 @@ export interface CreateCoordinationDeps {
   verifier: WebhookVerifier;
   /** Optional GitHub webhook verifier (POST /webhooks/github); absent → 404. */
   githubVerifier?: WebhookVerifier;
+  /** Optional auth handler (GET/POST /api/auth/*); absent → those paths 404. */
+  authHandler?: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<boolean>;
   content: TaskContentSource;
   classifier?: LlmClassifierPort;
   breakerThreshold?: number;
@@ -117,6 +119,7 @@ export function createCoordination(
     audit,
     content: input.content,
     ...(input.githubVerifier !== undefined ? { githubVerifier: input.githubVerifier } : {}),
+    ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
