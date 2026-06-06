@@ -68,6 +68,12 @@ class CountingStore implements CoordinationStore {
   async incrementFailureCount() { return 1; }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
+  // read-side (unused by the webhook/intake tests)
+  async listTasks() { return []; }
+  async getRoutingDecisionForTask() { return null; }
+  async listRoutingDecisions() { return []; }
+  async listPullRequestsForTask() { return []; }
+  async listConnections() { return []; }
 }
 
 const noopExecution: ExecutionPort = {

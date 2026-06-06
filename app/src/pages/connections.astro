@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+---
+<AppShell title="Connections" active="connections">
+  <div id="view"></div>
+</AppShell>
+<script>
+  import { mount } from '../lib/mount';
+  import { loadConnections } from '../lib/views/connections';
+  const el = document.getElementById('view');
+  if (el) void mount(el, loadConnections);
+</script>

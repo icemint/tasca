@@ -25,6 +25,7 @@ export type {
   NewAgentInput,
   AgentRecord,
   CreatedAgent,
+  AgentWithProfile,
   BindIdentityInput,
 } from './identity-repo';
 

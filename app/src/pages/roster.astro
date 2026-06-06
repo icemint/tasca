@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+---
+<AppShell title="Roster" active="roster">
+  <div id="view"></div>
+</AppShell>
+<script>
+  import { mount } from '../lib/mount';
+  import { loadRoster } from '../lib/views/roster';
+  const el = document.getElementById('view');
+  if (el) void mount(el, loadRoster);
+</script>

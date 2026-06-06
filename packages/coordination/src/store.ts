@@ -9,6 +9,52 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { CapabilityMatch, Task, TaskStatus, TierEstimate } from '@tasca/domain';
 
+// ── Read-side projections (the read-only API surface, app/ UI track) ──────────
+// These are query-only shapes the read API serves; they project existing rows
+// (task / routing_decision / pull_request) — no aggregate columns the schema
+// doesn't carry (throughput, cost-burn, success-over-time) are invented here.
+
+/** A task as the roster / monitoring lists need it (no per-attempt detail). */
+export interface TaskSummary {
+  id: string;
+  externalStoryId: string;
+  platform: 'shortcut' | 'github' | 'linear';
+  status: TaskStatus;
+  tierEstimate: TierEstimate | null;
+  repoRef: string | null;
+  claimedBy: string | null;
+  failureCount: number;
+}
+
+/** A persisted routing decision, projected for the inspector. */
+export interface RoutingDecisionRecord {
+  id: string;
+  taskId: string;
+  tierEstimate: TierEstimate;
+  candidates: CapabilityMatch[];
+  winnerAgentId: string | null;
+  createdAt: string;
+}
+
+/** A pull request linked to a task. */
+export interface PullRequestRecord {
+  url: string;
+  state: 'open' | 'merged' | 'closed';
+  createdAt: string;
+}
+
+/** Per-platform connection health + webhook delivery counters (last 24h). */
+export interface ConnectionSummary {
+  platform: 'shortcut' | 'github' | 'linear';
+  workspaceId: string;
+  health: 'healthy' | 'degraded' | 'revoked';
+  webhook: {
+    received24h: number;
+    processed24h: number;
+    lastReceivedAt: string | null;
+  };
+}
+
 /** A pool or a single checked-out connection — both expose `.query`. */
 export type Queryable = Pool | PoolClient;
 
@@ -94,6 +140,23 @@ export interface CoordinationStore {
 
   /** Persist the PR a run opened and link it to the task. */
   recordPullRequest(input: { taskId: string; url: string }): Promise<void>;
+
+  // ── Read-side (the read-only API serves these; query-only, no writes) ───────
+
+  /** List task summaries, newest first; optionally filtered by status, capped by limit. */
+  listTasks(filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]>;
+
+  /** The most recent routing decision for a task, or null if none recorded yet. */
+  getRoutingDecisionForTask(taskId: string): Promise<RoutingDecisionRecord | null>;
+
+  /** Recent routing decisions across all tasks, newest first. */
+  listRoutingDecisions(limit?: number): Promise<RoutingDecisionRecord[]>;
+
+  /** Pull requests linked to a task, newest first. */
+  listPullRequestsForTask(taskId: string): Promise<PullRequestRecord[]>;
+
+  /** Per-platform connection summaries with 24h webhook delivery counters. */
+  listConnections(): Promise<ConnectionSummary[]>;
 }
 
 interface TaskRow {
@@ -250,4 +313,152 @@ export class PgCoordinationStore implements CoordinationStore {
       [randomUUID(), input.taskId, input.url]
     );
   }
+
+  // ── Read-side queries ───────────────────────────────────────────────────────
+
+  async listTasks(filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
+    // Newest-first by created_at; status filter is optional. The limit is clamped
+    // to a sane ceiling so a hostile/oversized ?limit can't ask for the whole table.
+    const limit = clampLimit(filter?.limit, 50, 200);
+    const params: unknown[] = [];
+    let where = '';
+    if (filter?.status) {
+      params.push(filter.status);
+      where = `WHERE status = $1`;
+    }
+    params.push(limit);
+    const res = await this.db.query<TaskRow>(
+      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate
+         FROM task ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+      params
+    );
+    return res.rows.map(mapTaskSummary);
+  }
+
+  async getRoutingDecisionForTask(taskId: string): Promise<RoutingDecisionRecord | null> {
+    const res = await this.db.query<RoutingDecisionRow>(
+      `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, created_at
+         FROM routing_decision WHERE task_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [taskId]
+    );
+    const row = res.rows[0];
+    return row ? mapRoutingDecision(row) : null;
+  }
+
+  async listRoutingDecisions(limit?: number): Promise<RoutingDecisionRecord[]> {
+    const capped = clampLimit(limit, 50, 200);
+    const res = await this.db.query<RoutingDecisionRow>(
+      `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, created_at
+         FROM routing_decision ORDER BY created_at DESC, id DESC LIMIT $1`,
+      [capped]
+    );
+    return res.rows.map(mapRoutingDecision);
+  }
+
+  async listPullRequestsForTask(taskId: string): Promise<PullRequestRecord[]> {
+    const res = await this.db.query<PullRequestRow>(
+      `SELECT url, state, created_at FROM pull_request WHERE task_id = $1 ORDER BY created_at DESC`,
+      [taskId]
+    );
+    return res.rows.map((r) => ({
+      url: r.url,
+      state: r.state as PullRequestRecord['state'],
+      createdAt: toIso(r.created_at),
+    }));
+  }
+
+  async listConnections(): Promise<ConnectionSummary[]> {
+    // One row per configured platform_connection. Webhook counters are derived
+    // from the webhook_event ledger over the last 24h — real counts, not seeded;
+    // a platform with no events shows honest zeros and a null last-received.
+    const res = await this.db.query<ConnectionRow>(
+      `SELECT
+         pc.platform,
+         pc.workspace_id,
+         pc.health,
+         COALESCE(w.received_24h, 0)  AS received_24h,
+         COALESCE(w.processed_24h, 0) AS processed_24h,
+         w.last_received_at
+       FROM platform_connection pc
+       LEFT JOIN (
+         SELECT platform,
+                count(*) FILTER (WHERE received_at >= now() - interval '24 hours')                          AS received_24h,
+                count(*) FILTER (WHERE status = 'processed' AND processed_at >= now() - interval '24 hours') AS processed_24h,
+                max(received_at)                                                                             AS last_received_at
+           FROM webhook_event GROUP BY platform
+       ) w ON w.platform = pc.platform
+       ORDER BY pc.platform`
+    );
+    return res.rows.map((r) => ({
+      platform: r.platform as ConnectionSummary['platform'],
+      workspaceId: r.workspace_id,
+      health: r.health as ConnectionSummary['health'],
+      webhook: {
+        received24h: Number(r.received_24h),
+        processed24h: Number(r.processed_24h),
+        lastReceivedAt: r.last_received_at ? toIso(r.last_received_at) : null,
+      },
+    }));
+  }
+}
+
+/** Clamp a caller-supplied limit to [1, max], falling back to `fallback`. */
+function clampLimit(limit: number | undefined, fallback: number, max: number): number {
+  if (limit === undefined || !Number.isFinite(limit)) return fallback;
+  const n = Math.floor(limit);
+  if (n < 1) return 1;
+  return n > max ? max : n;
+}
+
+/** pg returns timestamptz as a Date; normalize to an ISO string for the JSON wire. */
+function toIso(v: Date | string): string {
+  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+}
+
+function mapTaskSummary(row: TaskRow): TaskSummary {
+  return {
+    id: row.id,
+    externalStoryId: row.external_story_id,
+    platform: row.platform as TaskSummary['platform'],
+    status: row.status as TaskStatus,
+    tierEstimate: row.tier_estimate,
+    repoRef: row.repo_ref,
+    claimedBy: row.claimed_by,
+    failureCount: row.failure_count,
+  };
+}
+
+interface RoutingDecisionRow {
+  id: string;
+  task_id: string;
+  tier_estimate: TierEstimate;
+  candidates: CapabilityMatch[];
+  winner_agent_id: string | null;
+  created_at: Date | string;
+}
+
+function mapRoutingDecision(row: RoutingDecisionRow): RoutingDecisionRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    tierEstimate: row.tier_estimate,
+    candidates: row.candidates ?? [],
+    winnerAgentId: row.winner_agent_id,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+interface PullRequestRow {
+  url: string;
+  state: string;
+  created_at: Date | string;
+}
+
+interface ConnectionRow {
+  platform: string;
+  workspace_id: string;
+  health: string;
+  received_24h: number | string;
+  processed_24h: number | string;
+  last_received_at: Date | string | null;
 }

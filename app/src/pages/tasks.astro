@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+---
+<AppShell title="Task" active="monitoring">
+  <div id="view"></div>
+</AppShell>
+<script>
+  import { mount } from '../lib/mount';
+  import { loadTask } from '../lib/views/task';
+  const el = document.getElementById('view');
+  if (el) void mount(el, loadTask);
+</script>

@@ -17,10 +17,18 @@
 // This is the ONE place the coordination package composes @tasca/adapters; the
 // library surface (index.ts) stays adapter-free so inner consumers don't pull it.
 
+import type { IncomingMessage } from 'node:http';
 import { Pool } from 'pg';
 import { TASK_TABLE_DDL } from '@tasca/db';
 import { IDENTITY_SCHEMA_DDL } from '@tasca/identity';
-import { AUTH_SCHEMA_DDL, PgAuthRepository, createAuthHandler, parseAuthEnv } from '@tasca/auth';
+import {
+  AUTH_SCHEMA_DDL,
+  PgAuthRepository,
+  createAuthHandler,
+  parseAuthEnv,
+  parseCookies,
+  SESSION_COOKIE,
+} from '@tasca/auth';
 import { createExecution } from '@tasca/execution';
 import { ShortcutAdapter, GitHubAdapter } from '@tasca/adapters';
 import type { AdapterEvent, VerifiedEvent } from '@tasca/contracts';
@@ -240,8 +248,18 @@ async function main(): Promise<void> {
   const authEnv = parseAuthEnv();
   let authHandler: ReturnType<typeof createAuthHandler> | undefined;
   let authSweep: ReturnType<typeof setInterval> | undefined;
+  // Session verifier for the read API: resolves the session cookie to a userId so
+  // /api/* read endpoints enforce a real login. Only wired when auth is enabled;
+  // when unset, read-api fails closed in production (503) and is open in dev.
+  let verifySession: ((req: IncomingMessage) => Promise<{ userId: string } | null>) | undefined;
   if (authEnv) {
     const authRepo = new PgAuthRepository(pool);
+    verifySession = async (req) => {
+      const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      if (!sid) return null;
+      const session = await authRepo.getSession(sid);
+      return session ? { userId: session.user.id } : null;
+    };
     authHandler = createAuthHandler({
       repo: authRepo,
       redirectBase: authEnv.OAUTH_REDIRECT_BASE,
@@ -286,6 +304,7 @@ async function main(): Promise<void> {
     logger,
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
     ...(authHandler ? { authHandler } : {}),
+    ...(verifySession ? { verifySession } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
   });

@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+---
+<AppShell title="Settings" active="settings">
+  <div id="view"></div>
+</AppShell>
+<script>
+  import { mount } from '../lib/mount';
+  import { loadSettings } from '../lib/views/settings';
+  const el = document.getElementById('view');
+  if (el) void mount(el, loadSettings);
+</script>

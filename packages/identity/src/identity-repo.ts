@@ -44,6 +44,16 @@ export interface CreatedAgent {
   serviceUser: ServiceUser;
 }
 
+/**
+ * Read-side projection: an agent joined to its capability profile. The profile
+ * is `null` when none has been set yet (so the UI shows an honest empty/"—"
+ * rather than fabricated capability numbers).
+ */
+export interface AgentWithProfile {
+  agent: AgentRecord;
+  profile: CapabilityProfile | null;
+}
+
 export interface BindIdentityInput {
   agentId: string;
   platform: Platform;
@@ -115,6 +125,48 @@ export class PgIdentityRepository {
     } finally {
       if (ownsTx) (client as PoolClient).release();
     }
+  }
+
+  /**
+   * Read-side: list agents joined to their capability profile, ordered by name.
+   * `status` filters the roster (default: all). This is the read API's agent
+   * source — query-only, projects existing columns, invents nothing.
+   */
+  async listAgentsWithProfiles(status?: AgentStatus): Promise<AgentWithProfile[]> {
+    const params: unknown[] = [];
+    let where = '';
+    if (status) {
+      params.push(status);
+      where = `WHERE a.status = $1`;
+    }
+    const res = await this.db.query<AgentWithProfileRow>(
+      `SELECT a.id, a.name, a.avatar_url, a.vendor, a.model, a.status,
+              a.rbac_role_id, a.human_of_record_user_id, a.version,
+              cp.max_tier, cp.tiers_covered, cp.language_specialties, cp.framework_specialties,
+              cp.concurrency_limit, cp.cost_ceiling, cp.avg_latency_ms, cp.success_rate
+         FROM agent a
+         LEFT JOIN capability_profile cp ON cp.agent_id = a.id
+         ${where}
+        ORDER BY a.name ASC, a.id ASC`,
+      params
+    );
+    return res.rows.map(mapAgentWithProfile);
+  }
+
+  /** Read-side: a single agent joined to its capability profile, or null. */
+  async getAgentWithProfile(agentId: string): Promise<AgentWithProfile | null> {
+    const res = await this.db.query<AgentWithProfileRow>(
+      `SELECT a.id, a.name, a.avatar_url, a.vendor, a.model, a.status,
+              a.rbac_role_id, a.human_of_record_user_id, a.version,
+              cp.max_tier, cp.tiers_covered, cp.language_specialties, cp.framework_specialties,
+              cp.concurrency_limit, cp.cost_ceiling, cp.avg_latency_ms, cp.success_rate
+         FROM agent a
+         LEFT JOIN capability_profile cp ON cp.agent_id = a.id
+        WHERE a.id = $1`,
+      [agentId]
+    );
+    const row = res.rows[0];
+    return row ? mapAgentWithProfile(row) : null;
   }
 
   async getServiceUser(agentId: string): Promise<ServiceUser | null> {
@@ -406,6 +458,36 @@ function mapCapabilityProfile(row: CapabilityProfileRow): CapabilityProfile {
     avgLatencyMs: row.avg_latency_ms,
     successRate: toNum(row.success_rate),
   };
+}
+
+interface AgentWithProfileRow extends AgentRow {
+  // capability_profile columns (all nullable via the LEFT JOIN)
+  max_tier: string | null;
+  tiers_covered: Tier[] | null;
+  language_specialties: string[] | null;
+  framework_specialties: string[] | null;
+  concurrency_limit: number | null;
+  cost_ceiling: string | number | null;
+  avg_latency_ms: number | null;
+  success_rate: string | number | null;
+}
+
+function mapAgentWithProfile(row: AgentWithProfileRow): AgentWithProfile {
+  const profile: CapabilityProfile | null =
+    row.max_tier === null
+      ? null
+      : {
+          agentId: row.id,
+          maxTier: row.max_tier as Tier,
+          tiersCovered: row.tiers_covered ?? [],
+          languageSpecialties: row.language_specialties ?? [],
+          frameworkSpecialties: row.framework_specialties ?? [],
+          concurrencyLimit: row.concurrency_limit ?? 0,
+          costCeiling: toNum(row.cost_ceiling) ?? 0,
+          avgLatencyMs: row.avg_latency_ms,
+          successRate: toNum(row.success_rate),
+        };
+  return { agent: mapAgent(row), profile };
 }
 
 function mapBinding(row: IdentityBindingRow): IdentityBinding {

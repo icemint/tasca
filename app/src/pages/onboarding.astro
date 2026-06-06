@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+---
+<AppShell title="Onboarding" active="onboarding">
+  <div id="view"></div>
+</AppShell>
+<script>
+  import { mount } from '../lib/mount';
+  import { loadOnboarding } from '../lib/views/onboarding';
+  const el = document.getElementById('view');
+  if (el) void mount(el, loadOnboarding);
+</script>

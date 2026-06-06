@@ -15,6 +15,8 @@ import { PgCoordinationStore } from './store';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
+import type { SessionInfo } from './read-api';
+import type { IncomingMessage } from 'node:http';
 
 /**
  * Concrete dependencies the host supplies at the composition root. The Postgres
@@ -36,6 +38,12 @@ export interface CreateCoordinationDeps {
   perProjectLimit?: number;
   /** Structured logger for post-ack failures; defaults to `console` in the server. */
   logger?: Logger;
+  /**
+   * Optional session verifier for the read-only app API. Injected by the host when
+   * the Auth track is wired; absent → the read API allows in non-prod and fails
+   * closed in prod (coordination never hard-depends on @tasca/auth).
+   */
+  verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
 }
 
 /**
@@ -118,6 +126,12 @@ export function createCoordination(
     directory,
     audit,
     content: input.content,
+    readApi: {
+      store,
+      identity,
+      ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+      ...(input.logger !== undefined ? { logger: input.logger } : {}),
+    },
     ...(input.githubVerifier !== undefined ? { githubVerifier: input.githubVerifier } : {}),
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
