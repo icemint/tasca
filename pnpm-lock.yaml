@@ -18,6 +18,15 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.20)
 
+  packages/adapters:
+    dependencies:
+      '@tasca/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@tasca/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/contracts:
     dependencies:
       '@tasca/domain':
