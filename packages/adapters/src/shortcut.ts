@@ -1,0 +1,239 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import {
+  ShortcutWebhookV1Schema,
+  type AdapterEvent,
+  type PlatformAdapter,
+  type Reject,
+  type StatusUpdate,
+  type VerifiedEvent,
+} from '@tasca/contracts';
+import type { IdentityBinding, Platform } from '@tasca/domain';
+
+// @tasca/adapters — the Shortcut platform adapter (scaffold §4.2; brief
+// "Buildable NOW"). Implements ONLY the ungated intake half against the
+// documented Outgoing Webhook v1 + REST v3 surfaces:
+//   - verifyWebhook : HMAC-SHA-256 of the raw body vs the Payload-Signature header
+//   - parseEvent    : story.update owner_ids.adds ∩ registered agents → AdapterEvent
+//   - registerWebhook: POST /api/v3/integrations/webhook → webhook id
+//   - dedupeBySelf  : drop our own round-tripped writes (actor == our persona)
+// The gated halves (provisionIdentity / postStatus) are typed but THROW — they
+// depend on kickoff confirmations #2/#4 (see docs/Tasca-Shortcut-Kickoff-Brief.md).
+//
+// Boundary: imports only @tasca/{domain,contracts,identity} + node builtins.
+// NO new runtime deps — node:crypto / node:fetch only.
+
+const GATED_MESSAGE =
+  'gated: pending Shortcut confirmation — see docs/Tasca-Shortcut-Kickoff-Brief.md item 2 (token-issuance model)';
+
+/** The header Shortcut signs the raw body into (HMAC-SHA-256, hex). */
+const SIGNATURE_HEADER = 'payload-signature';
+
+/** Shortcut REST v3 base. Overridable for tests; no trailing slash. */
+const DEFAULT_API_BASE = 'https://api.app.shortcut.com';
+
+export interface ShortcutAdapterConfig {
+  /** The workspace webhook secret used to verify the Payload-Signature HMAC. */
+  webhookSecret: string;
+  /**
+   * Our own persona member UUIDs. Events whose ACTOR `member_id` is in this set
+   * are our writes round-tripping back through the stream — dedupeBySelf drops
+   * them. Distinct from the *assignee* agent ids passed to parseEvent.
+   */
+  selfMemberIds?: ReadonlySet<string>;
+  /** REST v3 base override (tests). Defaults to the public Shortcut API. */
+  apiBase?: string;
+  /** fetch override (tests). Defaults to global fetch (node:fetch). */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Look up a header case-insensitively (Node lowercases incoming header names,
+ * but callers may forward a mixed-case map — normalize defensively).
+ */
+function getHeader(headers: Record<string, string | undefined>, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === target) return headers[key];
+  }
+  return undefined;
+}
+
+/**
+ * Constant-time compare of two hex signatures. Returns false (never throws) on
+ * any length mismatch or non-hex input, so a malformed signature is a clean
+ * reject rather than an exception. timingSafeEqual requires equal-length
+ * buffers, so the length guard precedes it — but the actual byte comparison
+ * stays constant-time for equal-length inputs (the only case an attacker
+ * controls once a length is fixed).
+ */
+function constantTimeHexEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let bufA: Buffer;
+  let bufB: Buffer;
+  try {
+    bufA = Buffer.from(a, 'hex');
+    bufB = Buffer.from(b, 'hex');
+  } catch {
+    return false;
+  }
+  // Buffer.from('zz','hex') yields an empty/short buffer silently — guard length.
+  if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+export class ShortcutAdapter implements PlatformAdapter {
+  readonly platform: Platform = 'shortcut';
+
+  private readonly webhookSecret: string;
+  private readonly selfMemberIds: ReadonlySet<string>;
+  private readonly apiBase: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(config: ShortcutAdapterConfig) {
+    this.webhookSecret = config.webhookSecret;
+    this.selfMemberIds = config.selfMemberIds ?? new Set();
+    this.apiBase = (config.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
+    this.fetchImpl = config.fetchImpl ?? fetch;
+  }
+
+  /**
+   * Verify HMAC-SHA-256 over the RAW UTF-8 body keyed by the workspace secret,
+   * compared CONSTANT-TIME against the `Payload-Signature` header. Rejects on a
+   * missing or mismatched signature. Never throws — returns a discriminated
+   * VerifiedEvent | Reject so the endpoint can fast-ack/reject without exception
+   * flow. The signature MUST be computed over the exact bytes received (the raw
+   * body), not a re-serialized JSON object.
+   */
+  verifyWebhook(
+    rawBody: string,
+    headers: Record<string, string | undefined>
+  ): VerifiedEvent | Reject {
+    const provided = getHeader(headers, SIGNATURE_HEADER);
+    if (!provided) {
+      return { ok: false, reason: 'missing Payload-Signature header' };
+    }
+    const expected = createHmac('sha256', this.webhookSecret).update(rawBody, 'utf8').digest('hex');
+    if (!constantTimeHexEqual(provided.trim(), expected)) {
+      return { ok: false, reason: 'signature mismatch' };
+    }
+    return { ok: true, rawBody };
+  }
+
+  /**
+   * Parse a verified webhook into normalized `AdapterEvent`s. Validates the
+   * payload with the Zod schema FIRST (malformed → []), then scans `actions[]`
+   * for `entity_type:'story'` && `action:'update'` whose
+   * `changes.owner_ids.adds` intersects the registered `agentExternalIds` set.
+   * Each matching owner-add UUID yields one `task.assigned` event.
+   *
+   * Critically: the top-level `member_id` is the ACTOR, never the assignee — it
+   * is NOT consulted here. Self-dedupe (dropping our own round-tripped writes by
+   * actor) is a SEPARATE concern; see `dedupeBySelf`.
+   */
+  parseEvent(verified: VerifiedEvent, agentExternalIds: ReadonlySet<string>): AdapterEvent[] {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(verified.rawBody);
+    } catch {
+      return [];
+    }
+    const parsed = ShortcutWebhookV1Schema.safeParse(raw);
+    if (!parsed.success) return [];
+    const payload = parsed.data;
+
+    const events: AdapterEvent[] = [];
+    const externalStoryId = payload.primary_id !== undefined ? String(payload.primary_id) : undefined;
+
+    for (const action of payload.actions) {
+      if (action.entity_type !== 'story' || action.action !== 'update') continue;
+      const adds = action.changes?.owner_ids?.adds;
+      if (!adds || adds.length === 0) continue;
+
+      // The story id is the action's own id when present, else the envelope's
+      // primary_id. Skip if neither is resolvable (no story to route to).
+      const storyId = action.id !== undefined ? String(action.id) : externalStoryId;
+      if (!storyId) continue;
+
+      for (const ownerId of adds) {
+        // Only owner-adds that match a REGISTERED agent-user become events.
+        // A non-registered owner add (a human teammate) is ignored.
+        if (!agentExternalIds.has(ownerId)) continue;
+        events.push({
+          type: 'task.assigned',
+          platform: 'shortcut',
+          externalStoryId: storyId,
+          agentExternalId: ownerId,
+        });
+      }
+    }
+    return events;
+  }
+
+  /**
+   * Drop events that originated from our OWN writes round-tripping through the
+   * outgoing stream. The webhook envelope's actor `member_id` is matched against
+   * our persona member UUIDs; if it is one of ours, every event from that
+   * envelope is our echo and must not be re-dispatched.
+   *
+   * Because `parseEvent` discards `member_id` (correctly — it is the actor, not
+   * the assignee), the actor must be supplied here explicitly. Callers pass the
+   * `member_id` they read off the same verified payload they parsed.
+   */
+  dedupeBySelf(events: AdapterEvent[], actorMemberId: string | undefined): AdapterEvent[] {
+    if (actorMemberId !== undefined && this.selfMemberIds.has(actorMemberId)) {
+      return [];
+    }
+    return events;
+  }
+
+  /**
+   * Self-register the outgoing webhook at install:
+   * `POST /api/v3/integrations/webhook {webhook_url, secret}` with the
+   * `Shortcut-Token` header (REST v3). Resolves to the created webhook id (a
+   * string) so it can be deleted later. Uses node:fetch — no new deps.
+   */
+  async registerWebhook(input: {
+    webhookUrl: string;
+    secret: string;
+    token: string;
+  }): Promise<string> {
+    const res = await this.fetchImpl(`${this.apiBase}/api/v3/integrations/webhook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Shortcut-Token': input.token,
+      },
+      body: JSON.stringify({ webhook_url: input.webhookUrl, secret: input.secret }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`shortcut registerWebhook failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+    const json = (await res.json()) as { id?: string | number };
+    if (json.id === undefined || json.id === null) {
+      throw new Error('shortcut registerWebhook: response missing webhook id');
+    }
+    return String(json.id);
+  }
+
+  /**
+   * GATED — write-back identity / provisioning. Throws until the token-issuance
+   * model (Shortcut-side token vs Devin-style partner trust) is confirmed. Do
+   * NOT implement here; see docs/Tasca-Shortcut-Kickoff-Brief.md item 2.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async provisionIdentity(_agentId: string, _workspaceConn: unknown): Promise<IdentityBinding> {
+    throw new Error(GATED_MESSAGE);
+  }
+
+  /**
+   * GATED — status-back (comment + state + PR link) under the agent's native
+   * Shortcut identity. Throws until the token-issuance model is confirmed; the
+   * attribution path depends on whether writes carry a per-persona token or an
+   * act-as mechanism. See docs/Tasca-Shortcut-Kickoff-Brief.md item 2.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async postStatus(_binding: IdentityBinding, _update: StatusUpdate): Promise<void> {
+    throw new Error(GATED_MESSAGE);
+  }
+}
