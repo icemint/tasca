@@ -54,7 +54,11 @@ jobs:
 
       - name: Install app deps
         working-directory: app
-        run: pnpm install --frozen-lockfile
+        # --ignore-workspace: app/ is a standalone Astro project with its own
+        # lockfile. Without this, pnpm walks up to the repo's pnpm-workspace.yaml
+        # and installs the workspace instead, leaving app/node_modules empty
+        # (astro not found at build).
+        run: pnpm install --frozen-lockfile --ignore-workspace
 
       - name: Build static app shell
         working-directory: app
