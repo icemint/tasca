@@ -27,6 +27,34 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
+  packages/coordination:
+    dependencies:
+      '@tasca/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@tasca/db':
+        specifier: workspace:*
+        version: link:../db
+      '@tasca/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@tasca/execution':
+        specifier: workspace:*
+        version: link:../execution
+      '@tasca/identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@tasca/routing':
+        specifier: workspace:*
+        version: link:../routing
+      pg:
+        specifier: ^8.13.1
+        version: 8.21.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.0
+
   packages/db:
     dependencies:
       '@tasca/domain':

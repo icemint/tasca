@@ -1,0 +1,19 @@
+{
+  "name": "@tasca/coordination",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@tasca/contracts": "workspace:*",
+    "@tasca/db": "workspace:*",
+    "@tasca/domain": "workspace:*",
+    "@tasca/execution": "workspace:*",
+    "@tasca/identity": "workspace:*",
+    "@tasca/routing": "workspace:*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": { "@types/pg": "^8.11.10" }
+}
