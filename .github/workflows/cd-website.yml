@@ -55,7 +55,10 @@ jobs:
 
       - name: Install website deps
         working-directory: website
-        run: pnpm install --frozen-lockfile
+        # --ignore-workspace: website/ is a standalone Astro project with its own
+        # lockfile. Without this, pnpm walks up to the repo's pnpm-workspace.yaml
+        # and installs the workspace instead, leaving website/node_modules empty.
+        run: pnpm install --frozen-lockfile --ignore-workspace
 
       - name: Build static site
         working-directory: website
