@@ -1,0 +1,4 @@
+[submodule "packages/execution/vendor/emdash"]
+	path = packages/execution/vendor/emdash
+	url = https://github.com/generalaction/emdash.git
+	shallow = true
