@@ -79,7 +79,7 @@ native ABI are where Electron coupling is deepest and most likely to blow the ti
 ### Task 0 — Fork, pin, and stand up the headless workspace (Day 1)
 - Fork `emdash` at a **specific upstream commit/tag** (record the SHA; prefer a release tag ≥ the Apache-2.0
   relicense, PR #1691 / v0.4.48, so the license is clean — confirm during this task). Vendor it into the Tasca
-  monorepo as a package (e.g. `packages/execution-core`), tracked with a pinned upstream remote.
+  monorepo as the **`@tasca/execution`** package (`packages/execution/`), tracked with a pinned upstream remote.
 - Stand up a throwaway **`headless-smoke` entrypoint** (a `node` script) that does nothing but import the core
   module and exit 0. This is the canary: the moment an import pulls in `electron`, it fails here.
 - Inventory every `import`/`require` of `electron` and every Electron-only global (`app`, `BrowserWindow`,
@@ -136,7 +136,7 @@ native ABI are where Electron coupling is deepest and most likely to blow the ti
   (`SIGINT`/`SIGTERM`, `process.on('exit')`).
 - Define the **config surface** (repo path, base branch, agent CLI selection, secret-store path, DB file path)
   as structured input — env + a config object — so the coordination layer drives it deterministically.
-- **Done when:** `node packages/execution-core/headless.js <config>` boots the full module with no Electron.
+- **Done when:** `node packages/execution/headless.js <config>` boots the full module with no Electron.
 
 ### Task 5 — Wire the end-to-end happy path & prove it (Days 8–10)
 - Compose the above into the single driveable flow (SC7): **reserve/create worktree (SC2) → PTY-spawn Claude
@@ -287,7 +287,7 @@ fork and stop tracking upstream.** Operationalized:
 ---
 
 ## 7. Deliverables of the Spike
-1. The pinned, vendored fork in the monorepo (`packages/execution-core` or equivalent) with the fork SHA recorded.
+1. The pinned, vendored fork in the monorepo (`packages/execution`, `@tasca/execution`) with the fork SHA recorded.
 2. A headless entrypoint demonstrating SC1–SC7 (worktree → Claude Code → PR), runnable from `node` on Linux + macOS.
 3. The **seam map** (every Electron touchpoint and how it was cut).
 4. The **native-module rebuild recipe** (Node version + build steps), reproducible in CI.

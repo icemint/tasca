@@ -186,8 +186,15 @@ All adapters emit the **same** normalized `AdapterEvent` (defined in `@tasca/con
   - **Idempotency:** dedupe by Shortcut event id; webhook handler is fast-ack (verify + enqueue, then 200) so heavy work happens off the request thread.
 - **Status-back** (`postStatus`): under Elvis's agent identity — (1) post a **comment** on the Story (progress / PR opened / blocked), (2) update the Story **workflow state** (e.g. → In Review), (3) attach/link the **PR URL**. Driven by execution lifecycle events from `@tasca/execution`.
 
-### 4.3 Open confirmations (carry from PRD §5.1 / §10, resolve in kickoff before building intake)
+### 4.3 Open confirmations (carry from PRD §5.1 / §10, resolve in kickoff before building intake — **gates build step 6**)
 (a) programmatic agent-user creation surface; (b) the exact "assigned to agent" webhook payload; (c) Agent API SDK timeline. Until confirmed, build against a thin Shortcut client wrapper with the payload shape behind a Zod schema so a contract change is a one-file edit.
+
+**(d) MCP-server vs Agent-API split — confirm the surface boundary.** Shortcut exposes two distinct surfaces and we must use the right one for each job:
+- **`@shortcut/mcp` (MCP server)** = read/write *tooling* — an agent's hands for querying and mutating Stories, comments, etc. during a run. It is how a working agent *operates on* Shortcut data.
+- **Agent API** = *identity + intake* — provisioning the native agent-user and receiving the assignment webhook. It is how an agent *is* a teammate and *gets handed* work.
+The adapter's `provisionIdentity` + `verifyWebhook`/`parseEvent` ride the **Agent API**; the executing agent's in-run Shortcut reads/writes ride the **MCP server**. Confirm this division (and whether status-back is Agent-API or MCP) at kickoff.
+
+**(e) THE real unknown — single-per-workspace token vs. per-agent native identity.** The `Shortcut-Token` is user- and workspace-specific (PRD §5.1). If a workspace yields effectively **one** service token, how does each roster agent (Elvis, Mira, …) act as a **distinct** agent-user — separate `owner_ids`, separate comment authorship, separate audit trail? Possible shapes to confirm with the Shortcut team: one agent-user *per* Tasca agent each with its own token; or one workspace service token that can *act-as* a chosen agent-user per call; or a hybrid. **This is the one genuine blocker — resolve it before building intake (step 6).** The `@tasca/identity` model already isolates this: `identity_binding.credential_ref` is per-binding, and the internal `principal_id` is stable regardless of how the external token(s) shake out — so whichever shape Shortcut confirms is a binding-layer detail, not a re-architecture.
 
 ---
 
@@ -259,7 +266,7 @@ Each checkpoint is a demoable, testable increment. Routing is invested in early 
    - **Checkpoint:** unit tests prove **exactly-one-claim** under concurrent attempts (CAS), breaker trips at N=2 → `needs_attention`, tier estimate persists for inspection. **No platform/LLM needed** (ports mocked).
 5. **Emdash fork → headless execution (timeboxed ~2–3 wks).** Fork into `@tasca/execution`; de-Electron (headless secrets, non-Electron PTY transport, rebuild native DB, headless bootstrap); expose `ExecutionPort`; verify worktree-pool + PTY-spawn **Claude Code** + PR creation headlessly.
    - **Checkpoint:** from a Node test harness, dispatch a trivial task → worktree reserved → Claude Code runs → PR opened. **Fallback (PRD §9.2):** if spike overruns, reimplement only worktree+PTY and pin the fork.
-6. **Shortcut adapter.** `PlatformAdapter` interface + Shortcut impl: provisioning, `verifyWebhook` (HMAC-SHA-256), `parseEvent`, `postStatus`. Webhook endpoint + idempotent intake in `coordination`. **(Gate: kickoff confirmation of Agent API surface, PRD §10.)**
+6. **Shortcut adapter.** `PlatformAdapter` interface + Shortcut impl: provisioning, `verifyWebhook` (HMAC-SHA-256), `parseEvent`, `postStatus`. Webhook endpoint + idempotent intake in `coordination`. **(GATE: §4.3 kickoff confirmations — esp. (e) the single-token-vs-per-agent-identity question, the one genuine blocker; and (d) the MCP-vs-Agent-API split. Do not build intake until resolved.)**
    - **Checkpoint:** a real Shortcut Story assigned to Elvis lands a verified webhook → normalized `task.assigned`; a manual `postStatus` posts a comment + state change + PR link as Elvis.
 7. **Wire the coordination loop (end-to-end).** `coordination` composes adapter event → routing (estimate/match/claim) → execution dispatch → status-back; persist `routing_decision`, `pull_request`, `audit_event`, `cost_event`; emit lifecycle events to the web API.
    - **Checkpoint (THE advance benchmark, PRD §9.1):** Story assigned to Elvis in one project → routed → worktree → Claude Code → PR → comment+state+PR-link back to Shortcut, end-to-end, reliably; failure path lands `needs_attention`.

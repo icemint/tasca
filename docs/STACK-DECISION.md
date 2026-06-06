@@ -57,4 +57,4 @@ Starting TS and adding an isolated Python service later is far cheaper and lower
 - Proceed to the **de-Electron Emdash spike** and the **Stage 1 scaffold** (companion docs) on this basis.
 
 ---
-*One open thread for the scaffold/spike to reconcile: the execution-fork package is named `@tasca/execution` in the scaffold and `packages/execution-core` in the spike — same package; pick one name at build time.*
+*Resolved (owner, 2026-06-06): the execution-fork package is **`@tasca/execution`** (`packages/execution/`) — `execution-core` dropped.*
