@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { estimateTier, heuristics, matchCapability, breaker, canDispatch, atomicClaim } from './index';
+import { TIERS } from '@tasca/domain';
 import type {
+  Tier,
   ClaimPort,
   ClaimOutcome,
   CapabilityProfile,
@@ -38,6 +40,29 @@ describe('tier estimation', () => {
     const f = heuristics({ title: 'Refactor the auth guard in src/auth/guard.ts and middleware.ts', body: '' });
     expect(f.hasReasoningVerb).toBe(true);
     expect(f.scopeHint).toBe('multi-file');
+  });
+
+  it('falls back to the heuristic prior when the classifier returns malformed output', async () => {
+    const malformed: LlmClassifierPort = {
+      // tier not in TIERS, confidence out of [0,1] — must be rejected
+      classify: async () => ({ tier: 'urgent', confidence: 5 }) as unknown as { tier: Tier; confidence: number },
+    };
+    const est = await estimateTier({ title: 'do', body: 'thing' }, { classifier: malformed });
+    expect(est.classifierUsed).toBe(false);
+    expect(TIERS).toContain(est.tier);
+    expect(est.confidence).toBeGreaterThanOrEqual(0);
+    expect(est.confidence).toBeLessThanOrEqual(1);
+  });
+
+  it('falls back to the heuristic prior when the classifier call throws', async () => {
+    const throwing: LlmClassifierPort = {
+      classify: async () => {
+        throw new Error('429 rate limited');
+      },
+    };
+    const est = await estimateTier({ title: 'do', body: 'thing' }, { classifier: throwing });
+    expect(est.classifierUsed).toBe(false);
+    expect(est.tier).toBe('basic'); // the prior for this low-signal task
   });
 });
 

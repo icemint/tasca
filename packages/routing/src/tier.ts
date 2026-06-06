@@ -1,5 +1,6 @@
 import type { Tier, TierFeatures, TierEstimate } from '@tasca/domain';
 import { TIERS } from '@tasca/domain';
+import { ClassifierOutputSchema } from '@tasca/contracts';
 import type { LlmClassifierPort } from './ports';
 
 const REASONING_VERBS = [
@@ -70,9 +71,34 @@ export async function estimateTier(
   const prior = heuristicPrior(signals);
   const threshold = opts.classifierConfidenceThreshold ?? 0.8;
 
+  // Fallback used whenever we skip, error, or reject the classifier.
+  const priorEstimate: TierEstimate = {
+    tier: prior.tier,
+    confidence: prior.confidence,
+    signals,
+    classifierUsed: false,
+  };
+
+  // High-confidence heuristic (e.g. explicit label) → skip the budgeted LLM call.
   if (!opts.classifier || prior.confidence >= threshold) {
-    return { tier: prior.tier, confidence: prior.confidence, signals, classifierUsed: false };
+    return priorEstimate;
   }
-  const c = await opts.classifier.classify({ title: task.title, body: task.body, features: signals });
-  return { tier: c.tier, confidence: c.confidence, signals, classifierUsed: true };
+
+  // The classifier is a remote LLM call: a rejection (timeout / 5xx / rate-limit)
+  // is expected, not exceptional — degrade to the heuristic prior, never crash
+  // the routing decision.
+  let raw: unknown;
+  try {
+    raw = await opts.classifier.classify({ title: task.title, body: task.body, features: signals });
+  } catch {
+    return priorEstimate;
+  }
+
+  // The static port type does not constrain real model output — validate at this
+  // trust boundary and reject/fallback on malformed output (scaffold §3).
+  const parsed = ClassifierOutputSchema.safeParse(raw);
+  if (!parsed.success) {
+    return priorEstimate;
+  }
+  return { tier: parsed.data.tier, confidence: parsed.data.confidence, signals, classifierUsed: true };
 }

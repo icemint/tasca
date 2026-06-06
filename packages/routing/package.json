@@ -6,5 +6,5 @@
   "main": "./src/index.ts",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "typecheck": "tsc --noEmit" },
-  "dependencies": { "@tasca/domain": "workspace:*" }
+  "dependencies": { "@tasca/domain": "workspace:*", "@tasca/contracts": "workspace:*" }
 }
