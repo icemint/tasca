@@ -1,0 +1,26 @@
+# Applies to the worker build (deploy/worker.Dockerfile, context: repo root).
+# The website/app builds use their own subdir contexts and are unaffected.
+# Keep packages/execution/vendor (the emdash submodule) — it is required.
+**/node_modules
+.git
+.github
+.claude
+website
+app
+design-system
+docs
+**/*.test.ts
+**/dist
+**/.DS_Store
+*.bundle
+# Never bake secrets / local credentials into the image (COPY . . context).
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.keystore
+**/*.jks
+**/*.p12
+**/credentials*.json
+**/service-account*.json
+**/*.secret

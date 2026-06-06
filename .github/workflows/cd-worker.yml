@@ -1,0 +1,83 @@
+name: CD (worker)
+
+# Build the Tasca worker image (coordination HTTP server + in-process execution)
+# from deploy/worker.Dockerfile, push it to GHCR under an immutable sha-<short>
+# tag, then point the Coolify worker resource at that tag and redeploy. Serves
+# api.tasca.dev (the Shortcut webhook target + /healthz).
+#
+# The image build runs the full native-rebuild recipe (sqlite3/node-pty/keytar)
+# inside Docker, so — unlike the static website/app builds — there is no pnpm
+# pre-build step on the runner. Runs only when the worker's sources change on
+# main (or manually); never on PRs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - 'deploy/worker.Dockerfile'
+      - '.dockerignore'
+      - 'scripts/coolify-deploy.sh'
+      - '.github/workflows/cd-worker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cd-worker-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/icemint/tasca-worker
+
+jobs:
+  build-and-deploy:
+    name: Build worker → GHCR → Coolify (SHA-pinned)
+    runs-on: ubuntu-24.04
+    env:
+      COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
+      COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      COOLIFY_WORKER_RESOURCE_UUID: ${{ secrets.COOLIFY_WORKER_RESOURCE_UUID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive # @tasca/execution vendors emdash as a submodule
+
+      - name: Compute image tag
+        id: vars
+        run: echo "sha_tag=sha-$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/worker.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_tag }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      # Deploy by the immutable SHA tag (same script the app/site use). Skips
+      # gracefully until COOLIFY_WORKER_RESOURCE_UUID is set — so the image can be
+      # built and pushed to GHCR before the Coolify resource exists, letting the
+      # first resource be created pointing at a real tag.
+      - name: Deploy to Coolify (PATCH image tag → deploy → verify rollout)
+        if: ${{ env.COOLIFY_WORKER_RESOURCE_UUID != '' }}
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
+          COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_WORKER_RESOURCE_UUID }}
+        run: bash scripts/coolify-deploy.sh
