@@ -21,7 +21,7 @@ import { Pool } from 'pg';
 import { TASK_TABLE_DDL } from '@tasca/db';
 import { IDENTITY_SCHEMA_DDL } from '@tasca/identity';
 import { createExecution } from '@tasca/execution';
-import { ShortcutAdapter } from '@tasca/adapters';
+import { ShortcutAdapter, GitHubAdapter } from '@tasca/adapters';
 import type { AdapterEvent, VerifiedEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
@@ -115,7 +115,33 @@ function shortcutVerifier(secret: string, registeredShortcutIds: ReadonlySet<str
   };
 }
 
-/** A verifier that rejects everything — used until SHORTCUT_WEBHOOK_SECRET is set. */
+/**
+ * The webhook verifier wired from the real GitHub adapter. HMAC-SHA-256 verify
+ * over the raw body (X-Hub-Signature-256, sha256= prefix); the idempotency key is
+ * the `X-GitHub-Delivery` HEADER (GitHub puts no dedupe id in the body); parse
+ * maps issues.assigned + issue_comment mentions ∩ registered github agent ids →
+ * AdapterEvents. `registeredGitHubIds` is a boot-time snapshot of the active
+ * github bindings (numeric ids for assignment + lowercased logins for mentions);
+ * a roster change requires a worker restart, like the Shortcut verifier.
+ */
+function githubVerifier(secret: string, registeredGitHubIds: ReadonlySet<string>): WebhookVerifier {
+  const adapter = new GitHubAdapter({ webhookSecret: secret });
+  return {
+    verify(raw: RawWebhook): VerifiedWebhook | null {
+      const v = adapter.verifyWebhook(raw.rawBody, raw.headers);
+      if (!v.ok) return null;
+      // GitHub's per-delivery id is a header, not a body field.
+      const delivery = raw.headers['x-github-delivery'] ?? raw.headers['X-GitHub-Delivery'];
+      if (!delivery) return null;
+      return { platform: 'github', externalEventId: String(delivery), payload: v };
+    },
+    parse(verified: VerifiedWebhook): AdapterEvent[] {
+      return adapter.parseEvent(verified.payload as VerifiedEvent, registeredGitHubIds);
+    },
+  };
+}
+
+/** A verifier that rejects everything — used until a platform's secret is set. */
 function rejectAllVerifier(): WebhookVerifier {
   return {
     verify() {
@@ -159,6 +185,7 @@ async function main(): Promise<void> {
   const databaseUrl = requireEnv('DATABASE_URL');
   const port = numericEnv('PORT') ?? 8080;
   const webhookSecret = process.env.SHORTCUT_WEBHOOK_SECRET ?? '';
+  const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
   const dbFile = process.env.EMDASH_DB_FILE;
   const breakerThreshold = numericEnv('TASCA_BREAKER_THRESHOLD');
   const perProjectLimit = numericEnv('TASCA_PER_PROJECT_LIMIT');
@@ -180,11 +207,29 @@ async function main(): Promise<void> {
   );
   const registeredShortcutIds = new Set(bindingRows.rows.map((r) => r.external_id));
 
+  // GitHub bindings: external_id (numeric user id, for assignment) + external_handle
+  // (login, lowercased, for @-mentions) both go in the registered set parseEvent matches.
+  const githubBindingRows = await pool.query<{ external_id: string; external_handle: string | null }>(
+    `SELECT external_id, external_handle FROM identity_binding WHERE platform = 'github' AND state = 'active'`
+  );
+  const registeredGitHubIds = new Set<string>();
+  for (const r of githubBindingRows.rows) {
+    registeredGitHubIds.add(r.external_id);
+    if (r.external_handle) registeredGitHubIds.add(r.external_handle.toLowerCase());
+  }
+
   const verifier = webhookSecret
     ? shortcutVerifier(webhookSecret, registeredShortcutIds)
     : rejectAllVerifier();
   if (!webhookSecret) {
-    logger.error('SHORTCUT_WEBHOOK_SECRET unset — webhooks will 401 until it is configured');
+    logger.error('SHORTCUT_WEBHOOK_SECRET unset — /webhooks/shortcut will 401 until it is configured');
+  }
+
+  // GitHub verifier is optional: absent secret → the /webhooks/github route 404s
+  // (flags OFF until configured), it does not reject-all on the shortcut path.
+  const ghVerifier = githubSecret ? githubVerifier(githubSecret, registeredGitHubIds) : undefined;
+  if (!githubSecret) {
+    logger.info?.('GITHUB_WEBHOOK_SECRET unset — /webhooks/github disabled');
   }
 
   const execution = createExecution(dbFile ? { dbFile } : {});
@@ -210,6 +255,7 @@ async function main(): Promise<void> {
     content: eventContentSource,
     agentIds,
     logger,
+    ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
   });
@@ -220,6 +266,8 @@ async function main(): Promise<void> {
       port,
       agents: agentIds.length,
       shortcutBindings: registeredShortcutIds.size,
+      githubBindings: githubBindingRows.rows.length,
+      github: ghVerifier ? 'verifying' : 'disabled (no secret)',
       webhooks: webhookSecret ? 'verifying' : 'rejecting (no secret)',
     });
   });

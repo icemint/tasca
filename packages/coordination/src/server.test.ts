@@ -111,7 +111,8 @@ function makeServerDeps(
   store: CoordinationStore,
   verifier: WebhookVerifier,
   run: (w: () => Promise<void>) => void,
-  logger?: Logger
+  logger?: Logger,
+  githubVerifier?: WebhookVerifier
 ): CoordinationServerDeps {
   return {
     store,
@@ -124,6 +125,7 @@ function makeServerDeps(
     verifier,
     runAsync: run,
     ...(logger ? { logger } : {}),
+    ...(githubVerifier ? { githubVerifier } : {}),
   };
 }
 
@@ -271,5 +273,54 @@ describe('coordination HTTP entry (node:http handler)', () => {
     const res = fakeRes();
     await handle(fakeReq('GET', '/nope', ''), res.res);
     expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /webhooks/github → 404 when no github verifier is configured', async () => {
+    const store = new CountingStore();
+    const handle = createRequestHandler(makeServerDeps(store, verifierFor('e1'), (w) => void w()));
+    const res = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/github', '{}'), res.res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /webhooks/github → 202 + orchestrates when a github verifier is wired', async () => {
+    const store = new CountingStore();
+    const work: Array<() => Promise<void>> = [];
+    const ghEvent: AdapterEvent = {
+      type: 'task.assigned', platform: 'github', externalStoryId: 'icemint/demo#42', agentExternalId: '5550001',
+    };
+    const ghVerifier: WebhookVerifier = {
+      verify: (raw) => (raw.headers['x-bad'] === '1'
+        ? null
+        : { platform: 'github', externalEventId: 'gh-delivery-1', payload: {} }),
+      parse: () => [ghEvent],
+    };
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('sc-1'), (w) => work.push(w), undefined, ghVerifier)
+    );
+
+    const r = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/github', '{"x":1}'), r.res);
+    expect(r.statusCode).toBe(202);
+    expect(work).toHaveLength(1);
+    for (const w of work) await w();
+    await flush();
+    expect(store.createdTasks).toBe(1);
+    expect(store.ledgerStatus('github', 'gh-delivery-1')).toBe('processed');
+  });
+
+  it('POST /webhooks/github → 401 on a bad signature', async () => {
+    const store = new CountingStore();
+    const ghVerifier: WebhookVerifier = {
+      verify: (raw) => (raw.headers['x-bad'] === '1' ? null : { platform: 'github', externalEventId: 'g', payload: {} }),
+      parse: () => [],
+    };
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('sc-1'), (w) => void w(), undefined, ghVerifier)
+    );
+    const res = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/github', '{}', { 'x-bad': '1' }), res.res);
+    expect(res.statusCode).toBe(401);
+    expect(store.createdTasks).toBe(0);
   });
 });
