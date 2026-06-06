@@ -13,6 +13,22 @@ Electron-free execution module that Tasca's coordination layer can drive over a 
 
 ---
 
+## 0. Task-0 feasibility findings — VERDICT: **GO** (verified 2026-06-06)
+
+Task 0 was run as a read-only investigation against the real upstream. **The de-Electron fork is feasible within the 2–3 week cap, with higher confidence than this plan originally assumed.** Corrections to the assumptions below — apply them as you execute:
+
+- **Upstream:** `github.com/generalaction/emdash`, fork point **tag `v0.4.48`** (commit `67ab3a86f7469f4a91200dadf50293b4be3d90d9`), **Apache-2.0 confirmed** (relicense PR #1691 first ships in v0.4.48). Add a `NOTICE` for attribution.
+- **Path correction:** the execution core is in **`src/main/services/`**, NOT `src/main/core/`. Bootstrap = `src/main/app/`; IPC bridge = `src/main/ipc/`; DB = `src/main/db/`. Substitute throughout.
+- **DB-driver correction:** the active driver is **`sqlite3`** (mapbox node-sqlite3, via drizzle sqlite-proxy). **`better-sqlite3` is vestigial** (declared, used nowhere) — drop it. Seam C rebuilds `sqlite3` + `node-pty` + `keytar` against the Node ABI.
+- **Seam B is easier than planned:** **`safeStorage` is never used.** Credentials go through **`keytar`**, already behind a clean `get/set/clear` (`AccountCredentialStore.ts`), and keytar runs under plain Node — so the headless `SecretStore` drops in behind the existing interface trivially.
+- **Seam A is the easiest, not the riskiest:** `ptyManager.ts` (spawn core) has exactly ONE Electron touchpoint (`app.getPath` for a JSON path) and already exposes a callback transport (`startLifecyclePty` → `onData`/`onExit`); all renderer coupling is quarantined in `ptyIpc.ts`. The entire KEEP list (worktree/git/PR/lifecycle/MCP) imports **zero** Electron.
+- **The `EMDASH_DISABLE_PTY` / `EMDASH_DISABLE_NATIVE_DB` / `EMDASH_DB_FILE` flags all exist**, and `postinstall` honors them (+ `EMDASH_SKIP_ELECTRON_REBUILD=1`).
+- **One live-validate item for week 1** (the only GO-WITH-RISK piece): the native-ABI rebuild of `sqlite3`/`node-pty`/`keytar` on macOS arm64 + Linux x64 under system Node — fallback is the wired `EMDASH_DISABLE_NATIVE_DB` path.
+
+The seam tasks below remain correct in shape; the original `src/main/core/` / `better-sqlite3` / `safeStorage` references are superseded by the corrections above.
+
+---
+
 ## 1. Goal & Success Criteria
 
 ### 1.1 Goal (one sentence)
