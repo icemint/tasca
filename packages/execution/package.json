@@ -11,7 +11,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "vendor:build": "node scripts/build-vendor.mjs",
-    "harness": "tsx harness/headless-boot.mjs"
+    "harness": "tsx harness/headless-boot.mjs",
+    "harness:sc17": "tsx harness/sc1-7.mjs"
   },
   "dependencies": {
     "@tasca/contracts": "workspace:*",
