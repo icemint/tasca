@@ -42,6 +42,11 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+      # node-gyp needs distutils, removed from the Python 3.12 stdlib — pin 3.11
+      # (which ships it) so node-pty/sqlite3 compile on the macOS runner.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install emdash deps (Electron rebuild + binary skipped)
         working-directory: emdash
