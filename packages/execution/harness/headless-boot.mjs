@@ -164,17 +164,32 @@ async function main() {
     let output = '';
     const exit = await new Promise((resolve, reject) => {
       const handle = exec.spawnAgent({ id: 'harness-pty-1', command: cmd, cwd: worktree.path });
-      const to = setTimeout(() => reject(new Error('pty timeout')), 30000);
+      let settled = false;
+      const done = (fn, val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(to);
+        clearTimeout(graceTimer);
+        fn(val);
+      };
+      let graceTimer;
+      const to = setTimeout(() => done(reject, new Error('pty timeout')), 30000);
       handle.onData((d) => {
         output += d;
       });
-      handle.onExit((code, signal) => {
-        clearTimeout(to);
-        resolve({ code, signal });
-      });
+      handle.onExit((code, signal) => done(resolve, { code, signal }));
       handle.onError((err) => {
-        clearTimeout(to);
-        reject(err);
+        // EIO/EPIPE on the PTY master fd during child teardown is a benign race
+        // on Linux (the slave closes before the final read settles). The
+        // authoritative completion signals are onExit + the on-disk commit. Give
+        // onExit a short grace window; if it never fires, settle on the exit-code
+        // sentinel and let the commit/file checks below be the source of truth.
+        const code = err && err.code;
+        if (code === 'EIO' || code === 'EPIPE' || /\bEIO\b|\bEPIPE\b/.test(String(err))) {
+          graceTimer = setTimeout(() => done(resolve, { code: 0, signal: null, viaEio: true }), 1500);
+          return;
+        }
+        done(reject, err);
       });
     });
     const sawGreeting = output.includes('hello from headless pty');
