@@ -13,3 +13,14 @@ docs
 **/dist
 **/.DS_Store
 *.bundle
+# Never bake secrets / local credentials into the image (COPY . . context).
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.keystore
+**/*.jks
+**/*.p12
+**/credentials*.json
+**/service-account*.json
+**/*.secret

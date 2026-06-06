@@ -54,6 +54,23 @@ function requireEnv(name: string): string {
   return v;
 }
 
+/**
+ * Parse an optional numeric env var. Unset/empty → undefined (caller applies its
+ * default); set-but-not-a-finite-number → fail fast, rather than letting a NaN
+ * flow into the breaker/gate where `count >= NaN` is silently always false (the
+ * breaker would never trip) or the listen port would throw deep in node:net.
+ */
+function numericEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    logger.error(`env ${name} must be a number`, { value: raw });
+    process.exit(1);
+  }
+  return n;
+}
+
 /** Apply every coordination DDL statement once, in FK-dependency order. */
 async function applySchema(pool: Pool): Promise<void> {
   const statements: readonly string[] = [
@@ -140,15 +157,11 @@ const eventContentSource: TaskContentSource = {
 
 async function main(): Promise<void> {
   const databaseUrl = requireEnv('DATABASE_URL');
-  const port = Number(process.env.PORT ?? 8080);
+  const port = numericEnv('PORT') ?? 8080;
   const webhookSecret = process.env.SHORTCUT_WEBHOOK_SECRET ?? '';
   const dbFile = process.env.EMDASH_DB_FILE;
-  const breakerThreshold = process.env.TASCA_BREAKER_THRESHOLD
-    ? Number(process.env.TASCA_BREAKER_THRESHOLD)
-    : undefined;
-  const perProjectLimit = process.env.TASCA_PER_PROJECT_LIMIT
-    ? Number(process.env.TASCA_PER_PROJECT_LIMIT)
-    : undefined;
+  const breakerThreshold = numericEnv('TASCA_BREAKER_THRESHOLD');
+  const perProjectLimit = numericEnv('TASCA_PER_PROJECT_LIMIT');
 
   const pool = new Pool({ connectionString: databaseUrl });
 
@@ -175,6 +188,19 @@ async function main(): Promise<void> {
   }
 
   const execution = createExecution(dbFile ? { dbFile } : {});
+  // Ready the execution-local store (migrates the SQLite). Guarded, not fatal:
+  // intake + routing don't touch execution, and nothing dispatches until an agent
+  // is registered — so a vendor/native load problem should degrade execution and
+  // be loudly logged, not take /healthz down and block the rollout. A real
+  // dispatch would then surface the failure through the breaker.
+  try {
+    await execution.initDb();
+    logger.info?.('execution store ready');
+  } catch (err) {
+    logger.error('execution store init failed — dispatch will fail until resolved', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const coordination = createCoordination({
     pool,
