@@ -72,6 +72,9 @@ jobs:
         working-directory: packages/execution
         env:
           TASCA_PYTHON_311: python3.11
+          # build-vendor.mjs runs the vendor's pinned pnpm via corepack; suppress
+          # the first-run download prompt so it is non-interactive in CI.
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: node scripts/build-vendor.mjs
 
       - name: Headless boot harness (SC1/SC2/SC3-trivial/SC5/SC6)
@@ -118,6 +121,7 @@ jobs:
         working-directory: packages/execution
         env:
           TASCA_PYTHON_311: python3.11
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: node scripts/build-vendor.mjs
       # TODO(creds): swap the trivial command for the provider CLI argv and run
       # the real-PR path (git push + gh pr create) against SPIKE_TARGET_REPO.

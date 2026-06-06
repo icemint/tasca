@@ -41,6 +41,20 @@ function run(cmd, args, opts = {}) {
   execFileSync(cmd, args, { stdio: 'inherit', cwd: VENDOR, ...opts });
 }
 
+// The vendor pins its own pnpm (engines.pnpm + packageManager). The repo root
+// uses a different pnpm; the globally-installed pnpm may not satisfy the
+// vendor's engines constraint. Drive the vendor's pnpm through corepack so its
+// pinned version is honored regardless of the ambient pnpm.
+function vendorPnpm() {
+  const pm = JSON.parse(fs.readFileSync(path.join(VENDOR, 'package.json'), 'utf8')).packageManager;
+  // pm looks like "pnpm@10.28.2"; corepack runs the exact pinned version.
+  return pm ? ['corepack', [pm.split('@')[0] + '@' + pm.split('@')[1]]] : ['pnpm', []];
+}
+const [PNPM_BIN, PNPM_PREFIX] = vendorPnpm();
+function runVendorPnpm(args, opts = {}) {
+  run(PNPM_BIN, [...PNPM_PREFIX, ...args], opts);
+}
+
 function findPython311() {
   if (process.env.TASCA_PYTHON_311) return process.env.TASCA_PYTHON_311;
   if (process.env.PYTHON) return process.env.PYTHON;
@@ -63,7 +77,7 @@ function findPython311() {
 //    --ignore-scripts, node-pty/keytar install-scripts run under the default
 //    Python (3.12+ removed distutils) and the install fails (spike §4.1).
 if (process.env.TASCA_SKIP_VENDOR_INSTALL !== '1') {
-  run('pnpm', ['install', '--ignore-scripts'], {
+  runVendorPnpm(['install', '--ignore-scripts'], {
     env: {
       ...process.env,
       EMDASH_SKIP_ELECTRON_REBUILD: '1',
@@ -98,7 +112,7 @@ for (const mod of ['node-pty', 'keytar']) {
 }
 
 // 4. build the main process to CommonJS -> dist/main
-run('pnpm', ['run', 'build:main']);
+runVendorPnpm(['run', 'build:main']);
 
 // sanity: the three native modules load + dist/main exists
 const distMain = path.join(VENDOR, 'dist', 'main');
