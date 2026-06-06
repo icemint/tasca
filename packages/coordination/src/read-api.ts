@@ -60,11 +60,16 @@ export interface ReadApiDeps {
   identity: IdentityReader;
   /**
    * Verify the request's session. When provided, a missing/invalid session → 401.
-   * When omitted, the Auth track is not yet wired: allow in non-prod, refuse in prod.
+   * When omitted, the read API has no way to authenticate — see allowUnauthenticated.
    */
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
-  /** True in production — gates the no-verifier fallback. Defaults to NODE_ENV check. */
-  isProduction?: boolean;
+  /**
+   * Escape hatch to serve read endpoints WITHOUT a session verifier. Defaults to
+   * false → fail CLOSED (503) when no verifySession is wired. This is deliberately
+   * NOT keyed on NODE_ENV: a deploy that forgets to set NODE_ENV must still refuse,
+   * not silently fail open. Only ever set true for local dev/tests.
+   */
+  allowUnauthenticated?: boolean;
   logger?: Logger;
 }
 
@@ -219,15 +224,13 @@ export async function readApiHandler(
       sendJson(res, 401, { authenticated: false });
       return true;
     }
-  } else {
-    const isProd = deps.isProduction ?? process.env.NODE_ENV === 'production';
-    if (isProd) {
-      // No session verifier wired in production → fail closed, never serve data.
-      sendJson(res, 503, { error: 'auth not configured' });
-      return true;
-    }
-    // non-prod: allow (lets the UI render against the read API before Auth merges)
+  } else if (!deps.allowUnauthenticated) {
+    // No session verifier AND not an explicit dev opt-in → fail closed, never
+    // serve data. Default-safe regardless of NODE_ENV.
+    sendJson(res, 503, { error: 'auth not configured' });
+    return true;
   }
+  // else: explicit allowUnauthenticated (local dev/tests) → serve without a session.
 
   try {
     await dispatch(matched, url, res, deps);

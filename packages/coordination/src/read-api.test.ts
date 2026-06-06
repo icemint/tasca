@@ -150,7 +150,9 @@ function fakeRes(): CapturedRes {
 }
 
 function deps(store: FakeStore, identity: FakeIdentity, over: Partial<ReadApiDeps> = {}): ReadApiDeps {
-  return { store, identity, isProduction: false, ...over };
+  // Endpoint tests run with the unauthenticated opt-in so they exercise the
+  // handlers directly; auth-gating tests override verifySession / allowUnauthenticated.
+  return { store, identity, allowUnauthenticated: true, ...over };
 }
 
 const json = (r: CapturedRes) => JSON.parse(r.body);
@@ -299,12 +301,13 @@ describe('read-api handler', () => {
     expect(r.statusCode).toBe(200);
   });
 
-  it('fails closed (503) in production when NO session verifier is wired', async () => {
+  it('fails closed (503) by default when NO session verifier is wired', async () => {
     const store = new FakeStore();
     const id = new FakeIdentity();
     id.agents = [agent('a1', 'Nova')];
     const r = fakeRes();
-    await readApiHandler(fakeReq('GET', '/api/agents'), r.res, deps(store, id, { isProduction: true }));
+    // No verifySession and no allowUnauthenticated opt-in → refuse, regardless of NODE_ENV.
+    await readApiHandler(fakeReq('GET', '/api/agents'), r.res, { store, identity: id });
     expect(r.statusCode).toBe(503);
   });
 });
