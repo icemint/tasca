@@ -1,0 +1,95 @@
+---
+// The authenticated app chrome (app.tasca.dev). Topbar + left rail nav + themed
+// surface, mirroring the design system's .surface-app scaffold (roster.css) and
+// the website Base layout's head/theme handling. Static output; each page slots
+// a client island into <main id="main">.
+import '../styles/tasca.css';
+import '../styles/tokens.css';
+import '../styles/roster.css';
+import '../styles/app-views.css';
+import '../styles/monitoring.css';
+import '../styles/connections.css';
+import '../styles/states.css';
+import '../styles/onboarding.css';
+import '../styles/a11y.css';
+import { MARK, I } from '../lib/icons';
+
+interface Props {
+  title: string;
+  active?: 'roster' | 'monitoring' | 'connections' | 'settings' | 'onboarding';
+}
+const { title, active } = Astro.props;
+
+const nav = [
+  { key: 'roster', href: '/roster', label: 'Roster', icon: I.roster },
+  { key: 'monitoring', href: '/monitoring', label: 'Monitoring', icon: I.monitor },
+  { key: 'connections', href: '/connections', label: 'Connections', icon: I.plug },
+  { key: 'settings', href: '/settings', label: 'Settings', icon: I.gear },
+];
+---
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title} · Tasca</title>
+  <meta name="description" content="Tasca — your AI dev team, named, capable, and working in the tools you already use." />
+  <meta name="robots" content="noindex" />
+  <script is:inline>
+    (function () { try { document.documentElement.setAttribute('data-theme', localStorage.getItem('tasca-theme') || 'dark'); } catch (e) {} })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="theme-color" content="#090D14" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="surface-app">
+    <header class="app-topbar">
+      <a class="onb-brand" href="/roster" aria-label="Tasca">
+        <span class="onb-mark" set:html={MARK} /><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+      <div class="topbar-right">
+        <span class="theme-seg" role="group" aria-label="Theme">
+          <button data-t="dark" type="button" aria-label="Dark theme">Dark</button>
+          <button data-t="light" type="button" aria-label="Light theme">Light</button>
+        </span>
+        <span class="icon-btn" id="topbar-user" aria-hidden="true" set:html={I.kebab} />
+      </div>
+    </header>
+    <div class="app-body">
+      <nav class="app-rail" aria-label="Sections">
+        {nav.map((n) => (
+          <a class={`rail-item${active === n.key ? ' is-on' : ''}`} href={n.href} aria-label={n.label} aria-current={active === n.key ? 'page' : undefined} title={n.label} set:html={n.icon} />
+        ))}
+      </nav>
+      <div class="app-main">
+        <main id="main" class="main-scroll">
+          <slot />
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function syncTheme(t: string) {
+      document.documentElement.setAttribute('data-theme', t);
+      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+    }
+    let t = 'dark';
+    try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}
+    syncTheme(t);
+    document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) =>
+      b.addEventListener('click', () => {
+        const v = b.dataset.t!;
+        try { localStorage.setItem('tasca-theme', v); } catch (e) {}
+        syncTheme(v);
+      })
+    );
+  </script>
+</body>
+</html>

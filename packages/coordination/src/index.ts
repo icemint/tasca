@@ -33,7 +33,19 @@ export {
   type CreateTaskInput,
   type RecordWebhookResult,
   type Queryable,
+  type TaskSummary,
+  type RoutingDecisionRecord,
+  type PullRequestRecord,
+  type ConnectionSummary,
 } from './store';
+
+// The read-only app API (GET /api/agents, /api/tasks, …).
+export {
+  readApiHandler,
+  type ReadApiDeps,
+  type IdentityReader,
+  type SessionInfo,
+} from './read-api';
 
 // The thin HTTP entry.
 export {

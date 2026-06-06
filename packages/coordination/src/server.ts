@@ -19,8 +19,15 @@ import type { AdapterEvent } from '@tasca/contracts';
 import type { CoordinationStore } from './store';
 import type { WebhookVerifier, Logger } from './ports';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
+import { readApiHandler, type ReadApiDeps } from './read-api';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
+  /**
+   * The read-only API the app consumes (GET /api/agents, /api/tasks, …). Wired at
+   * the composition root; absent → those paths fall through to 404 (the read API
+   * is additive and does not affect the webhook/healthz paths).
+   */
+  readApi?: ReadApiDeps;
   /** The Shortcut webhook verifier (POST /webhooks/shortcut). */
   verifier: WebhookVerifier;
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
@@ -182,10 +189,13 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     }
 
     // Auth routes (only when wired). The handler returns true if it owned the
-    // request; a false return falls through to the 404 below.
+    // request; a false return falls through to the read API / 404 below.
     if (deps.authHandler && (await deps.authHandler(req, res))) {
       return;
     }
+
+    // Read API (only when wired). Handles GET /api/* read endpoints.
+    if (deps.readApi && (await readApiHandler(req, res, deps.readApi))) return;
 
     res.writeHead(404).end('not found');
   };

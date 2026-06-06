@@ -92,6 +92,12 @@ class FakeStore implements CoordinationStore {
   async recordPullRequest(input: { taskId: string; url: string }) {
     this.pullRequests.push(input);
   }
+  // read-side (unused by the orchestration tests)
+  async listTasks() { return []; }
+  async getRoutingDecisionForTask() { return null; }
+  async listRoutingDecisions() { return []; }
+  async listPullRequestsForTask() { return []; }
+  async listConnections() { return []; }
 }
 
 /** A claim port that wins iff the task is still routable at the expected version. */

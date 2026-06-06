@@ -1,0 +1,45 @@
+/* ============================================================================
+   TASCA · System states  (skeletons, empty states) + global theme switcher
+   Load after app.css.
+   ============================================================================ */
+
+/* ── Skeleton shimmer ──────────────────────────────────────────────────────── */
+.skel { position: relative; overflow: hidden; background: var(--surface-2); border-radius: var(--radius-sm); }
+.skel::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 7%, transparent), transparent);
+  transform: translateX(-100%); animation: skel-sweep 1.3s ease-in-out infinite;
+}
+@keyframes skel-sweep { 100% { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce){ .skel::after { animation: none; } }
+
+.skel-line { height: 10px; border-radius: 4px; }
+.skel-line.sm { height: 8px; }
+.skel-chip { height: 18px; width: 52px; border-radius: var(--radius-tag); }
+.skel-av { width: 24px; height: 24px; border-radius: 6px; }
+
+/* skeleton kanban card mirrors .kc footprint */
+.skel-kc { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 11px 12px; margin-bottom: 10px; }
+.skel-kc .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.skel-kc .foot { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
+
+/* ── Empty states ──────────────────────────────────────────────────────────── */
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  padding: 40px 24px; gap: 14px; }
+.empty.compact { padding: 28px 16px; gap: 11px; }
+.empty .e-ico { width: 52px; height: 52px; border-radius: var(--radius-lg); display: grid; place-items: center;
+  border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg-4); }
+.empty .e-ico svg { width: 24px; height: 24px; }
+.empty .e-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--fg-2); letter-spacing: -0.01em; }
+.empty .e-text { font-size: 13.5px; color: var(--fg-4); max-width: 280px; line-height: 1.55; }
+.empty .e-actions { margin-top: 4px; display: flex; gap: 9px; }
+
+/* full-pane empty (lists, search) */
+.empty-pane { min-height: 320px; }
+
+/* ── Global theme switcher (segmented, persistent) ─────────────────────────── */
+.theme-switch { display: inline-flex; gap: 2px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px; }
+.theme-switch button { width: 30px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--fg-4); transition: color var(--dur), background var(--dur); }
+.theme-switch button svg { width: 15px; height: 15px; }
+.theme-switch button[aria-pressed="true"] { color: var(--fg); background: var(--surface-3); }
+.theme-switch button:hover { color: var(--fg-2); }
