@@ -53,8 +53,18 @@ export interface MakeSecretStoreOptions {
 }
 
 export function makeSecretStore({ filePath }: MakeSecretStoreOptions = {}): SecretStore {
-  const file = filePath || path.join(os.tmpdir(), 'tasca-secrets.json');
+  // A per-user 0700 directory — NOT the shared, world-traversable, periodically
+  // cleared os.tmpdir(). (Env-first precedence means CI never touches this file.)
+  const file = filePath || path.join(os.homedir(), '.tasca', 'execution-secrets.json');
   let backendName: SecretBackend = 'env+file';
+
+  // Create the parent dir 0700 and write a file 0600, tightening perms even if it
+  // already exists with a looser mode (the {mode} option only applies on create).
+  function writeSecure(p: string, data: string | Buffer): void {
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(p, data, { mode: 0o600 });
+    fs.chmodSync(p, 0o600);
+  }
   // null = not probed; false = unavailable; object = the keytar api.
   let keytar: KeytarApi | false | null = null;
 
@@ -88,8 +98,7 @@ export function makeSecretStore({ filePath }: MakeSecretStoreOptions = {}): Secr
       salt = fs.readFileSync(saltPath);
     } else {
       salt = crypto.randomBytes(32);
-      fs.mkdirSync(path.dirname(saltPath), { recursive: true });
-      fs.writeFileSync(saltPath, salt, { mode: 0o600 });
+      writeSecure(saltPath, salt);
     }
     return crypto.scryptSync(os.userInfo().username + os.hostname(), salt, 32);
   }
@@ -126,8 +135,7 @@ export function makeSecretStore({ filePath }: MakeSecretStoreOptions = {}): Secr
         data: data.toString('base64'),
       };
     }
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(enc), { mode: 0o600 });
+    writeSecure(file, JSON.stringify(enc));
   }
 
   return {

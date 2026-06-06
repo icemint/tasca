@@ -23,12 +23,28 @@ const execFileAsync = promisify(execFile);
 
 const PR_URL_RE = /https?:\/\/\S+/;
 
+// Branch/remote names are derived from task labels (port.ts) — i.e. influenced
+// input. execFile already defeats shell injection, but git/gh still parse argv:
+// a value starting with '-' would be read as an OPTION (--exec=, --receive-pack=).
+// Reject anything that isn't a plain ref and never let it start with '-'.
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+function assertSafeRef(kind: string, v: string): void {
+  if (!SAFE_REF.test(v) || v.includes('..')) {
+    throw new Error(`open-pr: unsafe ${kind} ${JSON.stringify(v)}`);
+  }
+}
+
 export async function openPr(input: OpenPrInput): Promise<OpenPrResult> {
   const { cwd, branch, title } = input;
   const remote = input.remote ?? 'origin';
 
-  // 1. Push the branch and set upstream.
-  await execFileAsync('git', ['push', '--set-upstream', remote, branch], { cwd });
+  assertSafeRef('branch', branch);
+  assertSafeRef('remote', remote);
+  if (input.base) assertSafeRef('base', input.base);
+
+  // 1. Push the branch and set upstream. `--` terminates option parsing so the
+  //    validated remote/branch can never be treated as flags (belt-and-suspenders).
+  await execFileAsync('git', ['push', '--set-upstream', '--', remote, branch], { cwd });
 
   // 2. gh pr create. Use a temp body file so multiline Markdown is preserved
   //    exactly (the vendored handler does the same).

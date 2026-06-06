@@ -184,9 +184,13 @@ async function main() {
         // authoritative completion signals are onExit + the on-disk commit. Give
         // onExit a short grace window; if it never fires, settle on the exit-code
         // sentinel and let the commit/file checks below be the source of truth.
+        // Gate strictly on the structured error code — NOT a substring of the
+        // stringified error (which could match a real spawn failure that merely
+        // mentions EIO/EPIPE). Don't fabricate an exit code; settle with a viaEio
+        // sentinel and let the required on-disk commit below be the authority.
         const code = err && err.code;
-        if (code === 'EIO' || code === 'EPIPE' || /\bEIO\b|\bEPIPE\b/.test(String(err))) {
-          graceTimer = setTimeout(() => done(resolve, { code: 0, signal: null, viaEio: true }), 1500);
+        if (code === 'EIO' || code === 'EPIPE') {
+          graceTimer = setTimeout(() => done(resolve, { code: null, signal: null, viaEio: true }), 1500);
           return;
         }
         done(reject, err);
@@ -202,7 +206,10 @@ async function main() {
     } catch {
       // ignore
     }
-    if (sawGreeting && fileWritten && committed && exit.code === 0) {
+    // The commit is required regardless; the real exit code must be 0, OR — only
+    // on the genuine EIO-race path — the verified commit stands in for it.
+    const exitOk = exit.code === 0 || exit.viaEio === true;
+    if (sawGreeting && fileWritten && committed && exitOk) {
       pass(
         'SC3',
         `PTY ran in worktree; stdout streamed, spike.txt committed ("${commitSubject}"), exit ${exit.code}`
