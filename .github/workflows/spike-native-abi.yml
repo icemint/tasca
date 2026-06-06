@@ -1,0 +1,59 @@
+name: Spike — Emdash native-ABI validate
+
+# Week-1, GO-WITH-RISK gate for the de-Electron spike (docs/Tasca-Spike-Emdash-De-Electron-v1.0.md §0).
+# Question: do Emdash's native modules (sqlite3 + node-pty + keytar) rebuild and LOAD under plain
+# system Node — headless, no Electron ABI — on both target platforms? This is the one item the
+# feasibility read could not validate live. Clones generalaction/emdash@v0.4.48 fresh (NOT vendored —
+# we validate before committing deep), skips the Electron rebuild + binary, rebuilds against Node 22,
+# and asserts each module require()s. Pass on both = risk cleared → proceed to vendor + de-Electronize.
+on:
+  workflow_dispatch:
+  push:
+    branches: [spike/emdash-de-electron]
+    paths:
+      - '.github/workflows/spike-native-abi.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: native-ABI (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      EMDASH_SKIP_ELECTRON_REBUILD: '1'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      CI: 'true'
+    steps:
+      - name: Linux keychain dependency (keytar → libsecret)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+
+      - name: Clone emdash @ v0.4.48
+        run: git clone --depth 1 --branch v0.4.48 https://github.com/generalaction/emdash.git emdash
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install emdash deps (Electron rebuild + binary skipped)
+        working-directory: emdash
+        run: pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
+
+      - name: Rebuild native modules against system Node ABI
+        working-directory: emdash
+        run: pnpm rebuild sqlite3 node-pty keytar
+
+      - name: Assert native modules load under plain Node (headless ABI)
+        working-directory: emdash
+        run: |
+          node -e "require('node-pty'); console.log('OK node-pty')"
+          node -e "require('sqlite3'); console.log('OK sqlite3')"
+          node -e "require('keytar'); console.log('OK keytar')"
