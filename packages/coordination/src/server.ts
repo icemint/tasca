@@ -62,6 +62,15 @@ function headerMap(req: IncomingMessage): Record<string, string | undefined> {
  */
 export function createRequestHandler(deps: CoordinationServerDeps) {
   const logger = deps.logger ?? console;
+  // Log without ever throwing: a misbehaving injected logger must not turn an
+  // error path back into an unhandled rejection.
+  const safeLog = (message: string, context: Record<string, unknown>) => {
+    try {
+      logger.error(message, context);
+    } catch {
+      /* a logger that throws is not allowed to escalate */
+    }
+  };
   // Default scheduler: run after the ack, but attach a last-resort `.catch` so a
   // rejection is logged rather than escaping as an unhandledRejection. The work
   // closure below already handles its own errors; this is defense in depth.
@@ -70,7 +79,7 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     ((work) =>
       queueMicrotask(() => {
         void work().catch((err) =>
-          logger.error('coordination: post-ack work rejected', { err: String(err) })
+          safeLog('coordination: post-ack work rejected', { err: String(err) })
         );
       }));
 
@@ -130,7 +139,7 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
           }
           await deps.store.markWebhookProcessed(ledgerKey);
         } catch (err) {
-          logger.error('coordination: orchestration failed after ack', {
+          safeLog('coordination: orchestration failed after ack', {
             ...ledgerKey,
             err: err instanceof Error ? err.message : String(err),
           });

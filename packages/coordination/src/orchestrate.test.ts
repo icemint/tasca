@@ -360,6 +360,47 @@ describe('orchestrateTaskAssigned — failure path → auto-recover → breaker 
     expect(outcome.kind).toBe('failed');
     expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('routable');
   });
+
+  it('a PRE-claim failure (content fetch throws) also feeds the breaker — not just execution failures', async () => {
+    // Regression: the breaker must cover the whole forward path. A persistent
+    // pre-claim failure (broken content source / throwing classifier) must be
+    // counted and escalate, not strand the task at routable forever.
+    const store = new FakeStore();
+    const exec = new FakeExecution();
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution: exec, status: new FakeStatus(), audit: new FakeAudit() }),
+      content: { async fetch() { throw new Error('content source down'); } },
+    };
+    const outcome = await orchestrateTaskAssigned(EVENT, deps);
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind !== 'failed') return;
+    expect(outcome.failureCount).toBe(1);
+    // Counted + reset for retry, and we never reached dispatch or recorded a decision.
+    const task = store.tasks.get(outcome.taskId)!;
+    expect(task.status).toBe('routable');
+    expect(exec.spawnCalls).toBe(0);
+    expect(store.routingDecisions).toHaveLength(0);
+
+    // A second persistent pre-claim failure trips the breaker → needs_attention.
+    const second = await orchestrateTaskAssigned(EVENT, deps);
+    expect(second.kind).toBe('needs_attention');
+  });
+
+  it('re-delivery of a non-routable task is a no-op (not_routable) — no tier work, no decision, no dispatch', async () => {
+    const store = new FakeStore();
+    // Drive the story to needs_attention (two execution failures).
+    await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: new FakeExecution({ spawnExitCode: 1 }), status: new FakeStatus(), audit: new FakeAudit() }));
+    const escalated = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: new FakeExecution({ spawnExitCode: 1 }), status: new FakeStatus(), audit: new FakeAudit() }));
+    expect(escalated.kind).toBe('needs_attention');
+    const decisionsBefore = store.routingDecisions.length;
+
+    const exec = new FakeExecution();
+    const third = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: exec, status: new FakeStatus(), audit: new FakeAudit() }));
+    expect(third.kind).toBe('not_routable');
+    if (third.kind === 'not_routable') expect(third.status).toBe('needs_attention');
+    expect(store.routingDecisions.length).toBe(decisionsBefore); // no spurious decision
+    expect(exec.spawnCalls).toBe(0);
+  });
 });
 
 describe('orchestrateTaskAssigned — lost claim (race loser)', () => {

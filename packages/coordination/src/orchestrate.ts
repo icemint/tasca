@@ -30,7 +30,7 @@ import {
   type LlmClassifierPort,
 } from '@tasca/routing';
 import type { AdapterEvent } from '@tasca/contracts';
-import type { Task } from '@tasca/domain';
+import type { Task, TaskStatus } from '@tasca/domain';
 import type { ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
 import type { StatusReporter } from './ports';
@@ -83,6 +83,7 @@ export type OrchestrationOutcome =
   | { kind: 'dispatched'; taskId: string; agentId: string; prUrl: string }
   | { kind: 'lost_claim'; taskId: string; agentId: string }
   | { kind: 'no_candidate'; taskId: string }
+  | { kind: 'not_routable'; taskId: string; status: TaskStatus }
   | { kind: 'needs_attention'; taskId: string; failureCount: number }
   | { kind: 'failed'; taskId: string; failureCount: number };
 
@@ -107,65 +108,83 @@ export async function orchestrateTaskAssigned(
     repoRef,
   });
 
-  // §6.5 — estimate tier (heuristics + one budgeted/cached classifier call),
-  // then persist it (inspectable).
-  const content = await deps.content.fetch(event);
-  const estimate = await estimateTier(
-    content,
-    deps.classifier ? { classifier: deps.classifier } : {}
-  );
-  await deps.store.setTierEstimate(task.id, estimate);
-
-  // §6.6 — match capability over eligible agents.
-  const taskForMatch: Task = { ...task, tierEstimate: estimate };
-  const candidates = await deps.directory.listCandidates(taskForMatch);
-  const ranked = matchCapability(estimate, candidates);
-  const winner = ranked.find((m) => m.eligible) ?? null;
-
-  await deps.store.recordRoutingDecision({
-    taskId: task.id,
-    tierEstimate: estimate,
-    candidates: ranked,
-    winnerAgentId: winner?.agentId ?? null,
-  });
-
-  if (!winner) {
-    return { kind: 'no_candidate', taskId: task.id };
+  // Only a `routable` task is drivable. A re-delivery of a story that is already
+  // in-flight (claimed/executing/in_review), resolved (done), or escalated
+  // (needs_attention) must NOT be re-driven — return its current state before
+  // doing any tier estimation or writing a spurious routing_decision. Auto-recover
+  // re-drives go through `resetForRetry`, which puts the task back to `routable`.
+  if (task.status !== 'routable') {
+    return { kind: 'not_routable', taskId: task.id, status: task.status };
   }
 
-  const winningCandidate = candidates.find((c) => c.profile.agentId === winner.agentId)!;
-
-  // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out).
-  const gate = canDispatch(
-    winningCandidate.profile,
-    {
-      perAgentActive: winningCandidate.activeCount,
-      perProjectActive: winningCandidate.activeCount,
-      repoBusy: false,
-    },
-    { perProjectLimit }
-  );
-  if (!gate.ok) {
-    return { kind: 'no_candidate', taskId: task.id };
-  }
-
-  // §6.8 — atomic claim (CAS). The conditional write is the hard exactly-one
-  // guarantee; on loss another worker already owns the task.
-  const claim = await atomicClaim(deps.claim, task.id, winner.agentId, task.version);
-  if (!claim.won) {
-    return { kind: 'lost_claim', taskId: task.id, agentId: winner.agentId };
-  }
-
-  const principalId = await deps.directory.principalIdFor(winner.agentId);
-  await audit(deps, principalId, winner.agentId, event, {
-    action: 'task.claim',
-    target: task.id,
-    payload: { tier: estimate.tier },
-  });
-
-  // §6.9-13 — dispatch → worktree + agent → PR → status-back. A failure anywhere
-  // in here feeds the breaker (§6.14).
+  // The whole forward path is guarded so a failure of ANY phase — routing/content
+  // (pre-claim) as well as execution (post-claim) — feeds the breaker (§6.14).
+  // Without this, a persistent pre-claim failure (e.g. a broken content source or
+  // a throwing classifier) would strand the task at `routable` forever, never
+  // counted and never escalated. `no_candidate`/`lost_claim` are normal outcomes,
+  // not errors, so they `return` and bypass the catch.
+  let winnerAgentId: string | null = null;
+  let principalId: string | null = null;
   try {
+    // §6.5 — estimate tier (heuristics + one budgeted/cached classifier call),
+    // then persist it (inspectable).
+    const content = await deps.content.fetch(event);
+    const estimate = await estimateTier(
+      content,
+      deps.classifier ? { classifier: deps.classifier } : {}
+    );
+    await deps.store.setTierEstimate(task.id, estimate);
+
+    // §6.6 — match capability over eligible agents.
+    const taskForMatch: Task = { ...task, tierEstimate: estimate };
+    const candidates = await deps.directory.listCandidates(taskForMatch);
+    const ranked = matchCapability(estimate, candidates);
+    const winner = ranked.find((m) => m.eligible) ?? null;
+
+    await deps.store.recordRoutingDecision({
+      taskId: task.id,
+      tierEstimate: estimate,
+      candidates: ranked,
+      winnerAgentId: winner?.agentId ?? null,
+    });
+
+    if (!winner) {
+      return { kind: 'no_candidate', taskId: task.id };
+    }
+
+    const winningCandidate = candidates.find((c) => c.profile.agentId === winner.agentId)!;
+
+    // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out).
+    const gate = canDispatch(
+      winningCandidate.profile,
+      {
+        perAgentActive: winningCandidate.activeCount,
+        perProjectActive: winningCandidate.activeCount,
+        repoBusy: false,
+      },
+      { perProjectLimit }
+    );
+    if (!gate.ok) {
+      return { kind: 'no_candidate', taskId: task.id };
+    }
+
+    // §6.8 — atomic claim (CAS). The conditional write is the hard exactly-one
+    // guarantee; on loss another worker already owns the task.
+    const claim = await atomicClaim(deps.claim, task.id, winner.agentId, task.version);
+    if (!claim.won) {
+      return { kind: 'lost_claim', taskId: task.id, agentId: winner.agentId };
+    }
+
+    // Past the claim: this worker owns the task — record who, for failure audit.
+    winnerAgentId = winner.agentId;
+    principalId = await deps.directory.principalIdFor(winner.agentId);
+    await audit(deps, principalId, winner.agentId, event, {
+      action: 'task.claim',
+      target: task.id,
+      payload: { tier: estimate.tier },
+    });
+
+    // §6.9-13 — dispatch → worktree + agent → PR → status-back.
     await deps.store.setStatus(task.id, 'executing');
 
     const worktree = await deps.execution.reserveWorktree({
@@ -211,11 +230,11 @@ export async function orchestrateTaskAssigned(
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
-    // §6.14 — failure path: counter++ → breaker(n). At/over the threshold the
-    // task trips to needs_attention (human-gated). Below it, the task is RESET to
-    // routable (claim cleared, version bumped) so a re-delivery / re-assignment of
-    // the story re-claims the SAME row and the next failure increments the same
-    // counter — the breaker only trips because the row is re-driven, not replaced.
+    // §6.14 — failure path (any phase): counter++ → breaker(n). At/over the
+    // threshold the task trips to needs_attention (human-gated). Below it, the
+    // task is RESET to routable (claim cleared, version bumped) so a re-delivery /
+    // re-assignment re-claims the SAME row and the next failure increments the
+    // same counter — the breaker trips because the row is re-driven, not replaced.
     const failureCount = await deps.store.incrementFailureCount(task.id);
     const outcome = breaker(failureCount, breakerThreshold);
 
@@ -225,7 +244,10 @@ export async function orchestrateTaskAssigned(
       await deps.store.resetForRetry(task.id);
     }
 
-    await audit(deps, principalId, winner.agentId, event, {
+    // Best-effort audit: a pre-claim failure has no claimed agent/principal, so
+    // `audit` is skipped (principalId null); a post-claim failure attributes to
+    // the owning agent. The server boundary logs every failure regardless.
+    await audit(deps, principalId, winnerAgentId ?? '(unassigned)', event, {
       action: 'task.failed',
       target: task.id,
       payload: {

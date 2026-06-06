@@ -82,7 +82,12 @@ CREATE TABLE IF NOT EXISTS webhook_event (
   UNIQUE (platform, external_event_id)
 );
 ALTER TABLE webhook_event ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'received';
-ALTER TABLE webhook_event ADD COLUMN IF NOT EXISTS processed_at timestamptz;`;
+ALTER TABLE webhook_event ADD COLUMN IF NOT EXISTS processed_at timestamptz;
+-- The status CHECK lives in the CREATE for a fresh DB; add it on the upgrade path
+-- too so a table created before the ledger column still enforces the enum.
+DO $$ BEGIN
+  ALTER TABLE webhook_event ADD CONSTRAINT webhook_event_status_chk CHECK (status IN ('received','processed'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;`;
 
 /**
  * The persisted routing decision — the routing inspector's data (design brief
