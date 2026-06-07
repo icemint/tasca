@@ -2,7 +2,7 @@
 // opaque sessions. The browser reaches these routes same-origin at
 // app.tasca.dev/api/auth/* (nginx proxies /api/ to the worker) — no CORS.
 //
-// Boundary: imports ONLY @tasca/domain (+ pg + zod) and node stdlib. The worker
+// Boundary: imports ONLY pg + zod and node stdlib. The worker
 // (@tasca/coordination) is the single composition root that wires the handler.
 
 export {
@@ -13,7 +13,7 @@ export {
   AUTH_SCHEMA_DDL,
 } from './schema';
 
-export { PgAuthRepository } from './auth-repo';
+export { PgAuthRepository, SESSION_ABSOLUTE_MAX_SEC } from './auth-repo';
 export type {
   Queryable,
   UpsertUserInput,

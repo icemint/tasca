@@ -100,6 +100,10 @@ function getHeader(headers: Record<string, string | undefined>, name: string): s
  */
 function constantTimeHexEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
+  // Case-insensitivity is a property of the hex→byte DECODE (Buffer.from(..,'hex')
+  // is case-insensitive) plus timingSafeEqual on the resulting bytes — NOT of the
+  // length guard above. A future refactor must not "optimize" this into a raw
+  // string compare: that would be case-sensitive and non-constant-time.
   let bufA: Buffer;
   let bufB: Buffer;
   try {
@@ -262,6 +266,27 @@ export class GitHubAdapter implements PlatformAdapter {
       return [];
     }
     return events;
+  }
+
+  /**
+   * Convenience wrapper: parse the verified envelope AND self-dedupe in one call,
+   * reading the actor `sender.login` ONCE off the same payload so the caller does
+   * not have to re-extract it. Equivalent to
+   * `dedupeBySelf(parseEvent(verified, agentExternalIds), <sender.login>)`.
+   * `parseEvent` / `dedupeBySelf` remain the public primitives.
+   */
+  parseAndDedupe(verified: VerifiedEvent, agentExternalIds: ReadonlySet<string>): AdapterEvent[] {
+    const events = this.parseEvent(verified, agentExternalIds);
+    let actorLogin: string | undefined;
+    try {
+      const raw = JSON.parse(verified.rawBody);
+      const parsed = GitHubWebhookSchema.safeParse(raw);
+      if (parsed.success) actorLogin = parsed.data.sender?.login;
+    } catch {
+      // A non-JSON / malformed body yields no events from parseEvent above; the
+      // actor stays undefined and dedupeBySelf is a no-op on the empty list.
+    }
+    return this.dedupeBySelf(events, actorLogin);
   }
 
   /**

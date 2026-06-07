@@ -84,7 +84,8 @@ export async function beginAuth(provider: Provider, deps: FlowDeps): Promise<Beg
   url.searchParams.set('code_challenge_method', 'S256');
   if (provider === 'google') {
     url.searchParams.set('nonce', nonce);
-    // Always return a refreshable consent so a revoked grant re-prompts cleanly.
+    // online access: Google issues NO refresh token (we only need a one-shot
+    // identity read at login, never offline/background access on the user's behalf).
     url.searchParams.set('access_type', 'online');
   }
 

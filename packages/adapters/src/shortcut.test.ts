@@ -300,6 +300,30 @@ describe('ShortcutAdapter.dedupeBySelf', () => {
   });
 });
 
+describe('ShortcutAdapter.parseAndDedupe', () => {
+  it('drops an envelope whose actor member_id is one of our personas', () => {
+    // The same owner-add that parseEvent would emit, but the actor is OUR persona
+    // (a round-tripped write) → parseAndDedupe reads member_id off the payload and
+    // drops it.
+    const body = JSON.stringify(samplePayload({ member_id: SELF_MEMBER }));
+    const a = adapter({ selfMemberIds: new Set([SELF_MEMBER]) });
+    expect(a.parseAndDedupe({ ok: true, rawBody: body }, REGISTERED)).toEqual([]);
+  });
+
+  it('returns the normal events when the actor is an external member', () => {
+    const body = JSON.stringify(samplePayload({ member_id: ACTOR }));
+    const a = adapter({ selfMemberIds: new Set([SELF_MEMBER]) });
+    expect(a.parseAndDedupe({ ok: true, rawBody: body }, REGISTERED)).toEqual([
+      {
+        type: 'task.assigned',
+        platform: 'shortcut',
+        externalStoryId: '5001',
+        agentExternalId: ELVIS,
+      },
+    ]);
+  });
+});
+
 describe('ShortcutWebhookV1Schema (Zod boundary guard)', () => {
   it('accepts the published sample payload', () => {
     expect(ShortcutWebhookV1Schema.safeParse(samplePayload()).success).toBe(true);

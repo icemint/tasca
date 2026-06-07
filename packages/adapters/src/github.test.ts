@@ -242,6 +242,31 @@ describe('GitHubAdapter.dedupeBySelf', () => {
   });
 });
 
+describe('GitHubAdapter.parseAndDedupe', () => {
+  it('drops an envelope whose actor sender.login is one of our agents', () => {
+    // An @-mention parseEvent would emit, but the commenter is OUR agent (a
+    // round-tripped write) → parseAndDedupe reads sender.login off the payload and
+    // drops it.
+    const body = JSON.stringify(commentPayload({ sender: { id: 1, login: ELVIS_LOGIN } }));
+    const a = adapter({ selfLogins: new Set([ELVIS_LOGIN]) });
+    expect(a.parseAndDedupe({ ok: true, rawBody: body }, REGISTERED)).toEqual([]);
+  });
+
+  it('returns the normal events when the actor is an external human', () => {
+    const body = JSON.stringify(commentPayload());
+    const a = adapter({ selfLogins: new Set([ELVIS_LOGIN]) });
+    expect(a.parseAndDedupe({ ok: true, rawBody: body }, REGISTERED)).toEqual([
+      {
+        type: 'task.assigned',
+        platform: 'github',
+        externalStoryId: 'icemint/demo#42',
+        agentExternalId: ELVIS_LOGIN,
+        repoHint: 'icemint/demo',
+      },
+    ]);
+  });
+});
+
 describe('GitHubAdapter constructor (secret guard)', () => {
   it('refuses to construct with an empty webhook secret', () => {
     expect(() => new GitHubAdapter({ webhookSecret: '' })).toThrow(/webhookSecret/);
