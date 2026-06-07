@@ -14,6 +14,47 @@ const REASONING_VERBS = [
   'migrate',
 ];
 
+// Known code/config file extensions. A bare `.<ext>` only counts as a file
+// mention when `<ext>` is in this set — this excludes prose abbreviations like
+// `e.g.` (g), `i.e.` (e) and version strings like `v1.2` (2), which used to
+// inflate the scope hint by +1 tier on ordinary English. Residual accepted:
+// `node.js` (ext `js`) still counts — this is a path-separator-or-known-ext
+// heuristic that favors precision over the prose cases, not a path validator.
+const FILE_EXTENSIONS = [
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'mjs',
+  'cjs',
+  'json',
+  'py',
+  'go',
+  'rs',
+  'java',
+  'rb',
+  'php',
+  'c',
+  'cc',
+  'cpp',
+  'h',
+  'hpp',
+  'cs',
+  'swift',
+  'kt',
+  'css',
+  'scss',
+  'html',
+  'sql',
+  'sh',
+  'yaml',
+  'yml',
+  'toml',
+  'md',
+];
+// e.g. `\b[\w./-]+\.(ts|tsx|...)\b` — a filename-ish token ending in a known ext.
+const FILE_MENTION_RE = new RegExp(`\\b[\\w./-]+\\.(?:${FILE_EXTENSIONS.join('|')})\\b`, 'g');
+
 export interface TaskInput {
   title: string;
   body: string;
@@ -25,7 +66,7 @@ export function heuristics(task: TaskInput): TierFeatures {
   const text = `${task.title}\n${task.body}`.toLowerCase();
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const hasReasoningVerb = REASONING_VERBS.some((v) => new RegExp(`\\b${v}`).test(text));
-  const fileMentions = (text.match(/[\w./-]+\.[a-z]{1,5}\b/g) ?? []).length;
+  const fileMentions = (text.match(FILE_MENTION_RE) ?? []).length;
   const scopeHint: TierFeatures['scopeHint'] =
     fileMentions === 0 ? 'unknown' : fileMentions <= 1 ? 'single-file' : 'multi-file';
   return { wordCount, hasReasoningVerb, scopeHint, labelTier: labelToTier(task.labels ?? []) };

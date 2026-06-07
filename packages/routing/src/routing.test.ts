@@ -36,6 +36,63 @@ describe('tier estimation', () => {
     expect(est.classifierUsed).toBe(true);
   });
 
+  // A counting fake lets us assert the classifier-skip boundary precisely: the
+  // prior.confidence >= threshold skip is an exact `>=`, so a prior AT the
+  // threshold must skip and a prior just BELOW it must call.
+  function countingClassifier(result: { tier: Tier; confidence: number }) {
+    let calls = 0;
+    const port: LlmClassifierPort = {
+      classify: async () => {
+        calls += 1;
+        return result;
+      },
+    };
+    return {
+      port,
+      get calls() {
+        return calls;
+      },
+    };
+  }
+
+  it('skips the classifier when the prior confidence is EXACTLY the threshold', async () => {
+    // A low-signal-but-not-tiny task yields the mid prior confidence (0.55).
+    // Setting the threshold to that exact value must skip (>= is inclusive).
+    const c = countingClassifier({ tier: 'ultra', confidence: 0.99 });
+    const est = await estimateTier(
+      { title: 'do', body: 'a thing here please now today' },
+      { classifier: c.port, classifierConfidenceThreshold: 0.55 }
+    );
+    expect(c.calls).toBe(0);
+    expect(est.classifierUsed).toBe(false);
+    expect(est.confidence).toBe(0.55); // the prior carried through, not the classifier's
+  });
+
+  it('calls the classifier when the prior confidence is just BELOW the threshold', async () => {
+    // Same mid prior (0.55); a threshold a hair above it crosses the boundary.
+    const c = countingClassifier({ tier: 'hard', confidence: 0.82 });
+    const est = await estimateTier(
+      { title: 'do', body: 'a thing here please now today' },
+      { classifier: c.port, classifierConfidenceThreshold: 0.56 }
+    );
+    expect(c.calls).toBe(1);
+    expect(est.classifierUsed).toBe(true);
+    expect(est.tier).toBe('hard'); // the valid classifier result is used
+    expect(est.confidence).toBe(0.82);
+  });
+
+  it('classifies file mentions: prose → unknown, real paths → multi-file, one file → single-file', () => {
+    // Prose with abbreviations + a version string — none are real file extensions.
+    const prose = heuristics({ title: 'e.g. fix the bug, i.e. the v1.2 regression', body: '' });
+    expect(prose.scopeHint).toBe('unknown');
+
+    const multi = heuristics({ title: 'edit src/foo.ts and config.yaml', body: '' });
+    expect(multi.scopeHint).toBe('multi-file');
+
+    const single = heuristics({ title: 'tweak README.md', body: '' });
+    expect(single.scopeHint).toBe('single-file');
+  });
+
   it('extracts reasoning + scope features', () => {
     const f = heuristics({ title: 'Refactor the auth guard in src/auth/guard.ts and middleware.ts', body: '' });
     expect(f.hasReasoningVerb).toBe(true);
@@ -105,6 +162,37 @@ describe('capability matching', () => {
   it('marks a busy agent ineligible', () => {
     const m = matchCapability(est, [{ profile: profile({ concurrencyLimit: 1 }), state: 'idle', activeCount: 1 }]);
     expect(m[0]!.eligible).toBe(false);
+  });
+
+  it('returns [] for an empty candidate set (no crash)', () => {
+    expect(matchCapability(est, [])).toEqual([]);
+  });
+
+  it('tie-breaks equal scores deterministically by input order (stable sort)', () => {
+    // Two identical eligible candidates score the same; the sort is stable, so
+    // the first-listed candidate stays first across repeated calls.
+    const candidates = [
+      { profile: profile({ agentId: 'first' }), state: 'idle' as const, activeCount: 0 },
+      { profile: profile({ agentId: 'second' }), state: 'idle' as const, activeCount: 0 },
+    ];
+    const m1 = matchCapability(est, candidates);
+    const m2 = matchCapability(est, candidates);
+    expect(m1[0]!.score).toBe(m1[1]!.score);
+    expect(m1.map((x) => x.agentId)).toEqual(['first', 'second']);
+    expect(m2.map((x) => x.agentId)).toEqual(['first', 'second']);
+  });
+
+  it('returns ranked entries for an all-ineligible set (every entry eligible:false, score 0)', () => {
+    // All over-tier → all ineligible. They still come back ranked (all score 0,
+    // input order preserved), not dropped or crashed.
+    const m = matchCapability({ ...est, tier: 'ultra' }, [
+      { profile: profile({ agentId: 'a', maxTier: 'hard' }), state: 'idle', activeCount: 0 },
+      { profile: profile({ agentId: 'b', maxTier: 'medium' }), state: 'idle', activeCount: 0 },
+    ]);
+    expect(m).toHaveLength(2);
+    expect(m.every((x) => x.eligible === false)).toBe(true);
+    expect(m.every((x) => x.score === 0)).toBe(true);
+    expect(m.map((x) => x.agentId)).toEqual(['a', 'b']);
   });
 });
 
@@ -199,5 +287,27 @@ describe('concurrency gate', () => {
   it('blocks on same-repo serialization, allows otherwise', () => {
     expect(canDispatch(p, { perAgentActive: 0, perProjectActive: 0, repoBusy: true }, { perProjectLimit: 10 }).ok).toBe(false);
     expect(canDispatch(p, { perAgentActive: 0, perProjectActive: 0, repoBusy: false }, { perProjectLimit: 10 }).ok).toBe(true);
+  });
+
+  it('covers all four exit paths with the right reason', () => {
+    // 1. per-agent limit hit (perAgentActive >= profile.concurrencyLimit = 4)
+    expect(
+      canDispatch(p, { perAgentActive: 4, perProjectActive: 0, repoBusy: false }, { perProjectLimit: 10 })
+    ).toEqual({ ok: false, reason: 'agent concurrency limit' });
+
+    // 2. per-project limit hit (checked after the agent limit passes)
+    expect(
+      canDispatch(p, { perAgentActive: 0, perProjectActive: 10, repoBusy: false }, { perProjectLimit: 10 })
+    ).toEqual({ ok: false, reason: 'project concurrency limit' });
+
+    // 3. repo busy (checked last, after both limits pass)
+    expect(
+      canDispatch(p, { perAgentActive: 0, perProjectActive: 0, repoBusy: true }, { perProjectLimit: 10 })
+    ).toEqual({ ok: false, reason: 'same-repo serialization' });
+
+    // 4. ok path — no reason
+    expect(
+      canDispatch(p, { perAgentActive: 0, perProjectActive: 0, repoBusy: false }, { perProjectLimit: 10 })
+    ).toEqual({ ok: true });
   });
 });
