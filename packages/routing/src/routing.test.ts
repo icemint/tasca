@@ -91,6 +91,21 @@ describe('tier estimation', () => {
 
     const single = heuristics({ title: 'tweak README.md', body: '' });
     expect(single.scopeHint).toBe('single-file');
+
+    // Surrounding punctuation must not hide a real path.
+    expect(heuristics({ title: 'see (src/a.ts), and b.py.', body: '' }).scopeHint).toBe('multi-file');
+
+    // Extended extension set (infra/config) counts too.
+    expect(heuristics({ title: 'update main.tf and schema.graphql', body: '' }).scopeHint).toBe('multi-file');
+  });
+
+  it('file-mention scan is linear on adversarial input (no ReDoS)', () => {
+    // A long path-like token with no valid extension would blow up a backtracking
+    // regex; per-token anchored matching keeps it bounded. Must finish ~instantly.
+    const big = `${'a/'.repeat(100000)}b`;
+    const start = Date.now();
+    expect(heuristics({ title: big, body: '' }).scopeHint).toBe('unknown');
+    expect(Date.now() - start).toBeLessThan(500);
   });
 
   it('extracts reasoning + scope features', () => {

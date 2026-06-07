@@ -21,39 +21,26 @@ const REASONING_VERBS = [
 // `node.js` (ext `js`) still counts — this is a path-separator-or-known-ext
 // heuristic that favors precision over the prose cases, not a path validator.
 const FILE_EXTENSIONS = [
-  'ts',
-  'tsx',
-  'js',
-  'jsx',
-  'mjs',
-  'cjs',
-  'json',
-  'py',
-  'go',
-  'rs',
-  'java',
-  'rb',
-  'php',
-  'c',
-  'cc',
-  'cpp',
-  'h',
-  'hpp',
-  'cs',
-  'swift',
-  'kt',
-  'css',
-  'scss',
-  'html',
-  'sql',
-  'sh',
-  'yaml',
-  'yml',
-  'toml',
-  'md',
+  // languages
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'go', 'rs', 'java', 'rb', 'php',
+  'c', 'cc', 'cpp', 'cxx', 'h', 'hpp', 'cs', 'swift', 'kt', 'kts', 'scala', 'ex',
+  'exs', 'erl', 'clj', 'lua', 'dart', 'mm', 'pl', 'groovy', 'vue', 'svelte', 'astro',
+  // web / styles / markup
+  'css', 'scss', 'sass', 'less', 'html', 'htm', 'xml', 'svg',
+  // config / data / infra
+  'json', 'yaml', 'yml', 'toml', 'ini', 'env', 'conf', 'cfg', 'properties',
+  'gradle', 'tf', 'proto', 'graphql', 'gql', 'lock', 'dockerfile',
+  // scripts / docs
+  'sh', 'bash', 'zsh', 'ps1', 'bat', 'sql', 'md', 'mdx', 'rst', 'txt',
 ];
-// e.g. `\b[\w./-]+\.(ts|tsx|...)\b` — a filename-ish token ending in a known ext.
-const FILE_MENTION_RE = new RegExp(`\\b[\\w./-]+\\.(?:${FILE_EXTENSIONS.join('|')})\\b`, 'g');
+// A single filename-ish token ending in a known extension: anchored, with the
+// path structure `name(/or.name)*` so there is NO unbounded quantifier overlapping
+// the trailing `.ext` — this avoids the quadratic backtracking the naive
+// `[\w./-]+\.(ext)` suffers on long path-like input. Tested PER whitespace token
+// (see heuristics) so any backtracking is bounded to one short token — ReDoS-safe
+// on untrusted webhook text. (Single-letter exts like `c`/`h` are kept; the prose
+// cases `e.g.`/`i.e.`/`v1.2` are still excluded — `g`/`e`/`2` aren't in the set.)
+const FILE_MENTION_RE = new RegExp(`^[\\w-]+(?:[./][\\w-]+)*\\.(?:${FILE_EXTENSIONS.join('|')})$`);
 
 export interface TaskInput {
   title: string;
@@ -66,7 +53,13 @@ export function heuristics(task: TaskInput): TierFeatures {
   const text = `${task.title}\n${task.body}`.toLowerCase();
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const hasReasoningVerb = REASONING_VERBS.some((v) => new RegExp(`\\b${v}`).test(text));
-  const fileMentions = (text.match(FILE_MENTION_RE) ?? []).length;
+  // Count file mentions per whitespace token (strip surrounding punctuation so
+  // `(src/foo.ts),` still matches). Testing the anchored regex against one short
+  // token at a time keeps it linear — no quadratic backtracking over long text.
+  const fileMentions = text.split(/\s+/).reduce((n, raw) => {
+    const tok = raw.replace(/^[^\w]+|[^\w]+$/g, '');
+    return tok && FILE_MENTION_RE.test(tok) ? n + 1 : n;
+  }, 0);
   const scopeHint: TierFeatures['scopeHint'] =
     fileMentions === 0 ? 'unknown' : fileMentions <= 1 ? 'single-file' : 'multi-file';
   return { wordCount, hasReasoningVerb, scopeHint, labelTier: labelToTier(task.labels ?? []) };
