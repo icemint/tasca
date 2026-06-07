@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
+import { TASK_STATUSES } from '@tasca/domain';
 import { PgClaimRepository, TASK_TABLE_DDL } from './index';
 
 // The real concurrency proof. Runs only when DATABASE_URL points at a Postgres;
@@ -127,6 +128,16 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
   });
 
   it('storage rejects an illegal status (task_status_chk)', async () => {
+    // Self-sufficient: on a fresh DB the CHECK comes from TASK_TABLE_DDL, but on a
+    // dirty persistent DB an older `task` predating the CHECK would let CREATE
+    // TABLE IF NOT EXISTS skip it. Ensure the constraint idempotently so the test
+    // asserts the CHECK's behavior regardless of how the table was created.
+    const statusIn = TASK_STATUSES.map((s) => `'${s}'`).join(', ');
+    await pool.query(
+      `DO $$ BEGIN
+         ALTER TABLE task ADD CONSTRAINT task_status_chk CHECK (status IN (${statusIn}));
+       EXCEPTION WHEN duplicate_object THEN NULL; END $$;`
+    );
     await expect(
       pool.query(
         `INSERT INTO task (id, external_story_id, status, version) VALUES ('task-cas-badstatus','s','bogus',0)`

@@ -32,7 +32,9 @@ export class PgClaimRepository implements ClaimPort {
     // Loss: the conditional UPDATE matched no row. Re-read the row (a fast PK
     // lookup) so the caller can tell WHY — another worker holds it (lost race),
     // the expectedVersion was stale, or the task doesn't exist — and re-issue a
-    // retry with the right version if appropriate.
+    // retry with the right version if appropriate. This is a best-effort SNAPSHOT
+    // (a separate statement from the CAS), so currentStatus/currentVersion are a
+    // diagnostic hint, not a guarantee — fine for deciding retry-vs-terminal.
     const cur = await this.db.query<{ status: TaskStatus; version: number }>(
       `SELECT status, version FROM task WHERE id = $1`,
       [taskId]

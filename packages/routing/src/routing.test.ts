@@ -159,6 +159,29 @@ describe('atomicClaim over an in-memory CAS port', () => {
     );
     expect(results.filter((r) => r.won).length).toBe(1);
   });
+
+  it('passes the enriched loss diagnostics (found/currentStatus/currentVersion) through', async () => {
+    // A port that reports WHY the CAS missed. atomicClaim must surface those
+    // fields so a caller can tell a retryable loss from a terminal one.
+    const lostRace: ClaimPort = {
+      async tryClaim(): Promise<ClaimOutcome> {
+        return { won: false, newVersion: null, found: true, currentStatus: 'claimed', currentVersion: 3 };
+      },
+    };
+    expect(await atomicClaim(lostRace, 't', 'a', 0)).toMatchObject({
+      won: false,
+      found: true,
+      currentStatus: 'claimed',
+      currentVersion: 3,
+    });
+
+    const missing: ClaimPort = {
+      async tryClaim(): Promise<ClaimOutcome> {
+        return { won: false, newVersion: null, found: false, currentStatus: null, currentVersion: null };
+      },
+    };
+    expect(await atomicClaim(missing, 't', 'a', 0)).toMatchObject({ won: false, found: false, currentStatus: null });
+  });
 });
 
 describe('concurrency gate', () => {
