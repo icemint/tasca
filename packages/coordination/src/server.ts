@@ -99,6 +99,16 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       /* a logger that throws is not allowed to escalate */
     }
   };
+  // Info-level sibling of safeLog. Pre-ack logging must never throw: a misbehaving
+  // injected logger would otherwise reject handleWebhook before the 202, the outer
+  // handler would 500, and GitHub would redeliver — a redelivery storm from a log.
+  const safeInfo = (message: string, context: Record<string, unknown>) => {
+    try {
+      logger.info?.(message, context);
+    } catch {
+      /* a logger that throws is not allowed to escalate */
+    }
+  };
   // Default scheduler: run after the ack, but attach a last-resort `.catch` so a
   // rejection is logged rather than escaping as an unhandledRejection. The work
   // closure below already handles its own errors; this is defense in depth.
@@ -186,7 +196,7 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Intake receipt: makes a verified-but-zero-event delivery visible in worker
     // logs (otherwise only outcomes-per-event are logged, so a 0-event delivery is
     // silent and indistinguishable from a dropped one).
-    logger.info?.('coordination: webhook received', {
+    safeInfo('coordination: webhook received', {
       platform: verified.platform,
       externalEventId: verified.externalEventId,
       events: events.length,

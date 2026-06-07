@@ -296,6 +296,9 @@ async function main(): Promise<void> {
     // local path. The provisioner mints an installation token (via appClient + the
     // install→owner mapping in store) and clones/fetches into reposDir so
     // reserveWorktree has a real local repo. Only wired with App env present.
+    // The clone's origin holds a (short-lived) installation token in .git/config —
+    // the provisioner creates reposDir mode 0700, but in production set
+    // TASCA_REPOS_DIR to a dedicated private volume, not the shared tmp root.
     const reposDir = process.env.TASCA_REPOS_DIR ?? path.join(os.tmpdir(), 'tasca-repos');
     provisioner = new GitAppRepoProvisioner({ appClient, store, reposDir });
     logger.info?.('repo provisioning enabled', { reposDir });
