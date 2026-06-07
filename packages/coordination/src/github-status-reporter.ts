@@ -12,7 +12,7 @@
 //
 // Swallow-and-log is deliberate (resolved design Q5): a status-back failure when
 // the PR is ALREADY open must not propagate. Propagating would drive orchestrate's
-// breaker → resetForRetry → re-drive → a DUPLICATE customer PR. The PR is the
+// breaker → failure reset → re-drive → a DUPLICATE customer PR. The PR is the
 // durable outcome; a missed comment is a soft failure to log, not to retry here.
 //
 // `routingStatusReporter` dispatches on `update.platform`: 'github' → this

@@ -114,7 +114,7 @@ export async function orchestrateTaskAssigned(
   // in-flight (claimed/executing/in_review), resolved (done), or escalated
   // (needs_attention) must NOT be re-driven — return its current state before
   // doing any tier estimation or writing a spurious routing_decision. Auto-recover
-  // re-drives go through `resetForRetry`, which puts the task back to `routable`.
+  // re-drives go through the failure path, which resets the task to `routable`.
   if (task.status !== 'routable') {
     return { kind: 'not_routable', taskId: task.id, status: task.status };
   }
@@ -216,7 +216,7 @@ export async function orchestrateTaskAssigned(
 
     // §6.11 — open the PR, then record it. recordPullRequest is the durable proof
     // the deliverable exists; everything after it is best-effort finalize that must
-    // NOT throw (a throw here would drive resetForRetry → re-drive → duplicate PR).
+    // NOT throw (a throw here would drive the failure reset → re-drive → duplicate PR).
     //
     // The PR head is a DETERMINISTIC branch derived from the story, NOT the
     // worktree's local branch (which carries a random per-attempt suffix). So if a
@@ -310,7 +310,7 @@ function runAgentToCompletion(
 /**
  * Finalize a dispatched task: status-back, mark in_review, and audit — all AFTER
  * the PR is recorded. Every step is best-effort and CANNOT throw: the PR is the
- * deliverable, and propagating a finalize failure would drive resetForRetry →
+ * deliverable, and propagating a finalize failure would drive the failure reset →
  * re-drive → a second agent run and a duplicate PR. A failed step is logged; a
  * left-behind status (e.g. still 'executing') is cosmetic and reconciles on a
  * later delivery, never a duplicated customer PR.
