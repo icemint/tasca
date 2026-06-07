@@ -506,7 +506,7 @@ describe('orchestrateTaskAssigned — duplicate-PR guard (#198)', () => {
 
   it('re-drive after a recordPullRequest failure reuses the deterministic head — no second PR', async () => {
     // The residual window: openPr succeeds (PR on GitHub) but recordPullRequest
-    // fails before the row lands → catch → resetForRetry → routable. On re-delivery
+    // fails before the row lands → catch → failure reset → routable. On re-delivery
     // the pre-dispatch guard sees no recorded PR, so it re-dispatches: a DIFFERENT
     // local worktree branch, but the SAME deterministic head → openPr is recognized
     // as the existing PR rather than opening a second one on the customer repo.
@@ -532,7 +532,7 @@ describe('orchestrateTaskAssigned — duplicate-PR guard (#198)', () => {
 
   it('a finalize-step failure after the PR is recorded does NOT re-drive (no duplicate PR)', async () => {
     // status-back (a finalize step) throws AFTER recordPullRequest. The PR is the
-    // deliverable — a finalize failure must be swallowed, not drive resetForRetry,
+    // deliverable — a finalize failure must be swallowed, not drive the failure reset,
     // which would re-run the agent and open a second PR.
     const store = new FakeStore();
     const execution = new FakeExecution();
