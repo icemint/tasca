@@ -71,4 +71,27 @@ describe('openPr', () => {
     const exec = fakeExec({});
     await expect(openPr({ ...input, branch: '--exec=evil' }, exec)).rejects.toThrow(/unsafe/);
   });
+
+  it('pushes the local branch to a deterministic headBranch and opens the PR from it', async () => {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const exec: ExecFn = async (file, args) => {
+      calls.push({ file, args });
+      if (file === 'gh' && args[1] === 'create') return { stdout: `${PR1}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const res = await openPr({ ...input, branch: 'tasca/local-2', headBranch: 'tasca/icemint-demo-42' }, exec);
+    expect(res).toEqual({ url: PR1 });
+    const push = calls.find((c) => c.file === 'git' && c.args[0] === 'push')!;
+    // local:head refspec, forced, options terminated by `--`
+    expect(push.args).toContain('--force');
+    expect(push.args).toContain('tasca/local-2:tasca/icemint-demo-42');
+    const create = calls.find((c) => c.file === 'gh' && c.args[1] === 'create')!;
+    const headIdx = create.args.indexOf('--head');
+    expect(create.args[headIdx + 1]).toBe('tasca/icemint-demo-42'); // PR head = deterministic, not the local branch
+  });
+
+  it('rejects an unsafe headBranch', async () => {
+    const exec = fakeExec({});
+    await expect(openPr({ ...input, headBranch: '--evil' }, exec)).rejects.toThrow(/unsafe/);
+  });
 });

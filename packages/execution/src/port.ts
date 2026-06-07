@@ -61,8 +61,16 @@ export interface SpawnAgentInput {
 export interface OpenPrInput {
   /** Worktree (or repo) directory the push/PR runs from. */
   cwd: string;
-  /** Branch to push and open the PR from. */
+  /** Local branch (in `cwd`) whose commits are pushed. */
   branch: string;
+  /**
+   * Deterministic remote head branch to push to + open the PR from. When set, the
+   * local `branch` is pushed to this ref (`branch:headBranch`) so the PR head is
+   * STABLE across re-drives — the worktree's local branch carries a random suffix
+   * per attempt, which would otherwise let a re-drive open a SECOND PR. Defaults
+   * to `branch` (legacy behavior) when omitted.
+   */
+  headBranch?: string;
   /** PR title. */
   title: string;
   /** PR body (Markdown). */

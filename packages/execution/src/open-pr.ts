@@ -44,18 +44,25 @@ function assertSafeRef(kind: string, v: string): void {
 export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): Promise<OpenPrResult> {
   const { cwd, branch, title } = input;
   const remote = input.remote ?? 'origin';
+  // The PR head is the deterministic headBranch when given, else the local branch.
+  const head = input.headBranch ?? branch;
 
   assertSafeRef('branch', branch);
+  assertSafeRef('head', head);
   assertSafeRef('remote', remote);
   if (input.base) assertSafeRef('base', input.base);
 
-  // 1. Push the branch and set upstream. `--` terminates option parsing so the
-  //    validated remote/branch can never be treated as flags (belt-and-suspenders).
-  await exec('git', ['push', '--set-upstream', '--', remote, branch], { cwd });
+  // 1. Push the local branch to the (possibly deterministic) head ref. `--force`
+  //    so a re-drive's diverged commits update the SAME head (and thus the same
+  //    PR) rather than being rejected or opening a second PR. `--` terminates
+  //    option parsing so the validated refs can never be treated as flags. The
+  //    refspec `branch:head` is built from two separately-validated refs.
+  const refspec = head === branch ? branch : `${branch}:${head}`;
+  await exec('git', ['push', '--force', '--set-upstream', '--', remote, refspec], { cwd });
 
   // 2. gh pr create. Use a temp body file so multiline Markdown is preserved
   //    exactly (the vendored handler does the same).
-  const ghArgs = ['pr', 'create', '--title', title, '--head', branch];
+  const ghArgs = ['pr', 'create', '--title', title, '--head', head];
   if (input.base) {
     ghArgs.push('--base', input.base);
   }
@@ -84,7 +91,7 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
       // the task) or risking a duplicate. Re-throw anything that isn't that case.
       const msg = errText(err);
       if (!/already exists/i.test(msg)) throw err;
-      const existing = await existingPrUrl(exec, cwd, branch);
+      const existing = await existingPrUrl(exec, cwd, head);
       if (existing) return { url: existing };
       // "already exists" but we couldn't read it back — surface the original error.
       throw err;

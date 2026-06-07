@@ -217,9 +217,16 @@ export async function orchestrateTaskAssigned(
     // §6.11 — open the PR, then record it. recordPullRequest is the durable proof
     // the deliverable exists; everything after it is best-effort finalize that must
     // NOT throw (a throw here would drive resetForRetry → re-drive → duplicate PR).
+    //
+    // The PR head is a DETERMINISTIC branch derived from the story, NOT the
+    // worktree's local branch (which carries a random per-attempt suffix). So if a
+    // re-drive ever reaches openPr again (e.g. recordPullRequest failed to commit
+    // before the row landed), it pushes to the SAME head and `gh pr create` returns
+    // the existing PR instead of opening a second one on the customer repo.
     const pr = await deps.execution.openPr({
       cwd: worktree.path,
       branch: worktree.branch,
+      headBranch: deterministicHeadBranch(event.externalStoryId),
       title: `Tasca: ${event.externalStoryId}`,
     });
     await deps.store.recordPullRequest({ taskId: task.id, url: pr.url });
@@ -261,6 +268,21 @@ export async function orchestrateTaskAssigned(
     }
     return { kind: 'failed', taskId: task.id, failureCount };
   }
+}
+
+/**
+ * A stable PR head branch for a story, identical across re-drives so a repeated
+ * `openPr` reuses (and is recognized against) the same head — `tasca/<sanitized
+ * external story id>`. Sanitized to a valid git ref (the GitHub story id is
+ * `owner/repo#number`, which isn't a legal ref as-is). Starts with a letter so it
+ * satisfies the open-pr SAFE_REF guard.
+ */
+function deterministicHeadBranch(externalStoryId: string): string {
+  const slug = externalStoryId
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 200);
+  return `tasca/${slug || 'task'}`;
 }
 
 /**
