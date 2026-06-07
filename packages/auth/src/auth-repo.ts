@@ -79,12 +79,12 @@ export class PgAuthRepository {
    * identity row.
    *
    * Race-safe on first login: two concurrent first logins of the same
-   * (provider, provider_user_id) both SELECT empty, both INSERT an app_user, then
-   * both race to INSERT the identity. The identity INSERT uses
-   * `ON CONFLICT (provider, provider_user_id) DO NOTHING`; the loser sees no
-   * RETURNING row, deletes the orphan app_user it just created, and falls back to
-   * the existing identity's user — so neither caller errors and no duplicate
-   * app_user survives.
+   * (provider, provider_user_id) carry the same email, so they collide on the
+   * app_user `lower(email)` unique index. The app_user INSERT uses
+   * `ON CONFLICT (lower(email)) DO NOTHING`; the loser creates no row, then
+   * resolves the winner via the identity and adopts it — neither caller errors and
+   * no orphan app_user is created. An email already owned by a DIFFERENT provider
+   * account is refused (no silent cross-provider linking) with a clear error.
    */
   async upsertUserFromProvider(input: UpsertUserInput): Promise<AppUserRecord> {
     const ownsTx = isPool(this.db);
@@ -106,34 +106,47 @@ export class PgAuthRepository {
         // stale between logins, and bump last_login_at.
         user = await this.refreshUser(client, existing.rows[0].id, input);
       } else {
+        // No identity yet → first login. The REAL race collision is the app_user
+        // `lower(email)` unique index (a same-account race has the same email), so
+        // ON CONFLICT must guard THAT — guarding only auth_identity let the loser's
+        // app_user INSERT throw 23505 before the identity insert ran (login 500).
         const userId = `usr_${randomUUID()}`;
         const created = await client.query<AppUserRow>(
           `INSERT INTO app_user (id, email, email_verified, display_name, avatar_url, last_login_at)
            VALUES ($1,$2,$3,$4,$5, now())
+           ON CONFLICT (lower(email)) DO NOTHING
            RETURNING id, email, email_verified, display_name, avatar_url`,
           [userId, input.email, input.emailVerified, input.displayName, input.avatarUrl]
         );
-        const won = await client.query(
-          `INSERT INTO auth_identity (id, user_id, provider, provider_user_id, provider_email)
-           VALUES ($1,$2,$3,$4,$5)
-           ON CONFLICT (provider, provider_user_id) DO NOTHING
-           RETURNING id`,
-          [`aid_${randomUUID()}`, userId, input.provider, input.providerUserId, input.email]
-        );
-        if (won.rows[0]) {
-          user = created.rows[0]!;
+        if (created.rows[0]) {
+          // We created the app_user (email was free). Link the identity. In a
+          // same-account race the email would have collided above, so this insert
+          // can't conflict for the same account; ON CONFLICT is belt-and-suspenders.
+          await client.query(
+            `INSERT INTO auth_identity (id, user_id, provider, provider_user_id, provider_email)
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT (provider, provider_user_id) DO NOTHING`,
+            [`aid_${randomUUID()}`, created.rows[0].id, input.provider, input.providerUserId, input.email]
+          );
+          user = created.rows[0];
         } else {
-          // Lost the first-login race: another tx already created the identity.
-          // Drop the orphan app_user we just made and adopt the winner's user.
-          await client.query(`DELETE FROM app_user WHERE id = $1`, [userId]);
-          const winner = await client.query<AppUserRow>(
+          // The email already exists (no orphan was created — ON CONFLICT DO NOTHING).
+          // Either the same-account first-login race winner committed just ahead of
+          // us, or a DIFFERENT provider account already owns this verified email.
+          // Resolve via the identity: adopt the winner if it's the same account;
+          // refuse otherwise (we do NOT silently link accounts across providers).
+          const owner = await client.query<AppUserRow>(
             `SELECT u.id, u.email, u.email_verified, u.display_name, u.avatar_url
                FROM auth_identity i
                JOIN app_user u ON u.id = i.user_id
               WHERE i.provider = $1 AND i.provider_user_id = $2`,
             [input.provider, input.providerUserId]
           );
-          user = await this.refreshUser(client, winner.rows[0]!.id, input);
+          if (owner.rows[0]) {
+            user = await this.refreshUser(client, owner.rows[0].id, input);
+          } else {
+            throw new Error('auth: email already associated with a different account');
+          }
         }
       }
 

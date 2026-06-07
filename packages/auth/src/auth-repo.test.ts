@@ -78,9 +78,10 @@ run('PgAuthRepository (Postgres) — user upsert, state replay, session lifecycl
   });
 
   it('two concurrent first logins of the same account converge on one user (no unique violation)', async () => {
-    // Both calls race: each SELECTs empty, each INSERTs an app_user, then both
-    // race the identity INSERT. The loser's ON CONFLICT DO NOTHING + orphan
-    // cleanup must make BOTH resolve to the same user with no duplicate rows.
+    // Both calls race: each SELECTs empty, then both INSERT app_user with the same
+    // email. The loser's `ON CONFLICT (lower(email)) DO NOTHING` creates no row and
+    // resolves the winner via the identity — BOTH return the same user, no error,
+    // no duplicate rows.
     const [a, b] = await Promise.all([
       repo.upsertUserFromProvider(sampleUser),
       repo.upsertUserFromProvider(sampleUser),
@@ -92,13 +93,16 @@ run('PgAuthRepository (Postgres) — user upsert, state replay, session lifecycl
     expect(ids.rows[0]!.c).toBe(1);
   });
 
-  it('enforces one account per email regardless of case', async () => {
+  it('refuses a different provider account sharing an email (no silent cross-provider link)', async () => {
     await repo.upsertUserFromProvider(sampleUser);
-    // A different provider account with the same email (different case) must
-    // collide on the lower(email) unique index.
+    // A DIFFERENT provider account with the same email hits the app_user
+    // lower(email) ON CONFLICT, finds no matching identity, and is refused with a
+    // CLEAR error — not a raw unique-violation, and not a silent account merge.
     await expect(
-      repo.upsertUserFromProvider({ ...sampleUser, provider: 'google', providerUserId: 'goog-1', email: 'dev@example.com' })
-    ).rejects.toThrow();
+      repo.upsertUserFromProvider({ ...sampleUser, provider: 'google', providerUserId: 'goog-1', email: 'DEV@example.com' })
+    ).rejects.toThrow(/already associated with a different account/);
+    const users = await pool.query<{ c: number }>('SELECT count(*)::int AS c FROM app_user');
+    expect(users.rows[0]!.c).toBe(1); // no second/orphan user created
   });
 
   it('consumeOAuthState returns the row once then null (replay-safe)', async () => {
