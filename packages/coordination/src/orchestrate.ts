@@ -24,7 +24,6 @@ import {
   matchCapability,
   canDispatch,
   atomicClaim,
-  breaker,
   type MatchCandidate,
   type TaskInput,
   type ClaimPort,
@@ -115,7 +114,7 @@ export async function orchestrateTaskAssigned(
   // in-flight (claimed/executing/in_review), resolved (done), or escalated
   // (needs_attention) must NOT be re-driven — return its current state before
   // doing any tier estimation or writing a spurious routing_decision. Auto-recover
-  // re-drives go through `resetForRetry`, which puts the task back to `routable`.
+  // re-drives go through the failure path, which resets the task to `routable`.
   if (task.status !== 'routable') {
     return { kind: 'not_routable', taskId: task.id, status: task.status };
   }
@@ -217,7 +216,7 @@ export async function orchestrateTaskAssigned(
 
     // §6.11 — open the PR, then record it. recordPullRequest is the durable proof
     // the deliverable exists; everything after it is best-effort finalize that must
-    // NOT throw (a throw here would drive resetForRetry → re-drive → duplicate PR).
+    // NOT throw (a throw here would drive the failure reset → re-drive → duplicate PR).
     //
     // The PR head is a DETERMINISTIC branch derived from the story, NOT the
     // worktree's local branch (which carries a random per-attempt suffix). So if a
@@ -237,19 +236,18 @@ export async function orchestrateTaskAssigned(
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
-    // §6.14 — failure path (any phase): counter++ → breaker(n). At/over the
-    // threshold the task trips to needs_attention (human-gated). Below it, the
-    // task is RESET to routable (claim cleared, version bumped) so a re-delivery /
-    // re-assignment re-claims the SAME row and the next failure increments the
-    // same counter — the breaker trips because the row is re-driven, not replaced.
-    const failureCount = await deps.store.incrementFailureCount(task.id);
-    const outcome = breaker(failureCount, breakerThreshold);
-
-    if (outcome === 'needs_attention') {
-      await deps.store.setStatus(task.id, 'needs_attention');
-    } else {
-      await deps.store.resetForRetry(task.id);
-    }
+    // §6.14 — failure path (any phase): record the failure and transition in ONE
+    // atomic UPDATE. At/over the threshold the task trips to needs_attention
+    // (human-gated); below it the SAME row is reset to routable (claim cleared,
+    // version bumped) so a re-delivery / re-assignment re-claims it and the next
+    // failure increments the same counter — the breaker trips because the row is
+    // re-driven, not replaced. Folding the increment + transition into one write
+    // removes the crash window that could strand the task between them.
+    const { failureCount, tripped } = await deps.store.recordFailureAndTransition(
+      task.id,
+      breakerThreshold
+    );
+    const outcome = tripped ? 'needs_attention' : 'retry';
 
     // Best-effort audit: a pre-claim failure has no claimed agent/principal, so
     // `audit` is skipped (principalId null); a post-claim failure attributes to
@@ -264,7 +262,7 @@ export async function orchestrateTaskAssigned(
       },
     });
 
-    if (outcome === 'needs_attention') {
+    if (tripped) {
       return { kind: 'needs_attention', taskId: task.id, failureCount };
     }
     return { kind: 'failed', taskId: task.id, failureCount };
@@ -312,7 +310,7 @@ function runAgentToCompletion(
 /**
  * Finalize a dispatched task: status-back, mark in_review, and audit — all AFTER
  * the PR is recorded. Every step is best-effort and CANNOT throw: the PR is the
- * deliverable, and propagating a finalize failure would drive resetForRetry →
+ * deliverable, and propagating a finalize failure would drive the failure reset →
  * re-drive → a second agent run and a duplicate PR. A failed step is logged; a
  * left-behind status (e.g. still 'executing') is cosmetic and reconciles on a
  * later delivery, never a duplicated customer PR.

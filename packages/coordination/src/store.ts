@@ -119,16 +119,19 @@ export interface CoordinationStore {
   setStatus(taskId: string, status: TaskStatus): Promise<void>;
 
   /**
-   * Return a task to a re-claimable state after a failed attempt below the
-   * breaker threshold: status `routable`, `claimed_by` cleared, version bumped so
-   * the next CAS uses a fresh expected version. Without this the failed task would
-   * be stranded (the CAS only claims `routable` rows) and the breaker's retry
-   * outcome would be unreachable.
+   * Record one failed attempt and transition the task in a SINGLE atomic UPDATE
+   * (failure path, §6.14). Increments failure_count and, in the same write,
+   * either trips the breaker (→ `needs_attention`, claim retained for the human)
+   * or resets the task to a re-claimable state (→ `routable`, `claimed_by`
+   * cleared, version bumped so the next CAS uses a fresh expected version). Doing
+   * both in one statement removes the crash window between the increment and the
+   * transition that could otherwise strand a task (count bumped, status never
+   * reset). Returns the new failure_count and whether the breaker tripped.
    */
-  resetForRetry(taskId: string): Promise<void>;
-
-  /** Increment and return the task's failure_count (failure path). */
-  incrementFailureCount(taskId: string): Promise<number>;
+  recordFailureAndTransition(
+    taskId: string,
+    breakerThreshold: number
+  ): Promise<{ failureCount: number; tripped: boolean }>;
 
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
   recordRoutingDecision(input: {
@@ -257,7 +260,7 @@ export class PgCoordinationStore implements CoordinationStore {
       `INSERT INTO task (id, external_story_id, platform, status, version, failure_count, repo_ref)
        VALUES ($1,$2,$3,'routable',0,0,$4)
        ON CONFLICT (platform, external_story_id)
-         DO UPDATE SET external_story_id = EXCLUDED.external_story_id
+         DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
        RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate`,
       [randomUUID(), input.externalStoryId, input.platform, input.repoRef ?? null]
     );
@@ -288,21 +291,29 @@ export class PgCoordinationStore implements CoordinationStore {
     );
   }
 
-  async resetForRetry(taskId: string): Promise<void> {
-    await this.db.query(
-      `UPDATE task SET status = 'routable', claimed_by = NULL, version = version + 1, updated_at = now()
-        WHERE id = $1`,
-      [taskId]
+  async recordFailureAndTransition(
+    taskId: string,
+    breakerThreshold: number
+  ): Promise<{ failureCount: number; tripped: boolean }> {
+    // One atomic UPDATE: bump the counter and pick the resulting status in the
+    // same statement. The `failure_count + 1 >= threshold` test mirrors the
+    // breaker() in @tasca/routing (the source of the threshold semantics) — at or
+    // over the threshold the task trips to `needs_attention` (claim retained for
+    // the human); below it the task is reset to `routable` with `claimed_by`
+    // cleared so the next CAS re-claims the SAME row at a fresh version.
+    const res = await this.db.query<{ failure_count: number; status: string }>(
+      `UPDATE task
+          SET failure_count = failure_count + 1,
+              status     = CASE WHEN failure_count + 1 >= $2 THEN 'needs_attention' ELSE 'routable' END,
+              claimed_by = CASE WHEN failure_count + 1 >= $2 THEN claimed_by ELSE NULL END,
+              version    = version + 1,
+              updated_at = now()
+        WHERE id = $1
+       RETURNING failure_count, status`,
+      [taskId, breakerThreshold]
     );
-  }
-
-  async incrementFailureCount(taskId: string): Promise<number> {
-    const res = await this.db.query<{ failure_count: number }>(
-      `UPDATE task SET failure_count = failure_count + 1, updated_at = now()
-        WHERE id = $1 RETURNING failure_count`,
-      [taskId]
-    );
-    return res.rows[0]!.failure_count;
+    const row = res.rows[0]!;
+    return { failureCount: row.failure_count, tripped: row.status === 'needs_attention' };
   }
 
   async recordRoutingDecision(input: {

@@ -192,7 +192,16 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     runAsync(async () => {
       try {
         for (const event of events) {
-          await orchestrateTaskAssigned(event, deps);
+          const outcome = await orchestrateTaskAssigned(event, deps);
+          // Surface every NON-throwing terminal (no_candidate / lost_claim /
+          // not_routable / failed / needs_attention / dispatched) at the boundary;
+          // without this only the throw path below is observable.
+          logger.info?.('coordination: orchestration outcome', {
+            platform: event.platform,
+            externalEventId: verified.externalEventId,
+            kind: outcome.kind,
+            taskId: outcome.taskId,
+          });
         }
         await deps.store.markWebhookProcessed(ledgerKey);
       } catch (err) {
