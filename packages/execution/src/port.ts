@@ -5,9 +5,9 @@
 // implementation in `factory.ts` bridges to the vendored modules at runtime.
 //
 // This module is self-contained — the contract types here are defined locally.
-// The package must NOT import routing/adapters/coordination (it may only import
-// @tasca/domain / @tasca/contracts per the Stage-1 scaffold §1.3 boundary, but
-// currently needs neither).
+// The package must NOT import routing/adapters/coordination (the Stage-1 scaffold
+// §1.3 boundary permits only @tasca/domain / @tasca/contracts, but it needs
+// neither and declares no @tasca/* dependency).
 
 /**
  * Typed failure for the execution surface. Carries a coarse `kind` so the

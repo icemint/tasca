@@ -2,9 +2,9 @@
 //
 // A soft-fork overlay over the vendored Emdash execution core (git submodule at
 // vendor/emdash, pinned to v0.4.48). Exposes a clean ExecutionPort and a
-// createExecution() factory. Self-contained: it imports no other @tasca/*
-// package today (it may only import @tasca/domain / @tasca/contracts per the
-// Stage-1 scaffold §1.3 boundary, but currently needs neither).
+// createExecution() factory. Self-contained: it declares no @tasca/* runtime
+// dependency and imports none (the Stage-1 scaffold §1.3 boundary permits only
+// @tasca/domain / @tasca/contracts, but it needs neither).
 
 export { ExecutionError } from './port.js';
 export type {

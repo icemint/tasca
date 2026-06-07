@@ -215,6 +215,12 @@ export async function orchestrateTaskAssigned(
     const existingPrs = await deps.store.listPullRequestsForTask(task.id);
     if (existingPrs.length > 0) {
       const prUrl = existingPrs[0]!.url;
+      // The row was just re-claimed (claimed). Mirror the normal path's
+      // claimed→executing move before finalizing — finalize advances
+      // executing→in_review, and the write-path guard rejects claimed→in_review,
+      // which would otherwise (silently, via finalize's best-effort wrapper) strand
+      // the task in `claimed` with an open PR.
+      await deps.store.setStatus(task.id, 'executing');
       await finalizeDispatch(deps, task.id, event, winner.agentId, principalId, prUrl);
       return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl };
     }

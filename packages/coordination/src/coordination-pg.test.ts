@@ -326,4 +326,126 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     const tasks = await pool.query('SELECT count(*)::int AS c FROM task WHERE external_story_id=$1', [EVENT.externalStoryId]);
     expect(tasks.rows[0].c).toBe(1);
   });
+
+  it('existing-PR re-finalize advances claimed→executing→in_review (not stranded in claimed)', async () => {
+    // A prior attempt recorded a PR but the task is re-drivable (routable). The
+    // re-claim lands the row in `claimed`; the existing-PR branch must finalize it
+    // all the way to in_review. Regression guard: once setStatus enforces
+    // transitions, finalize's setStatus('in_review') is illegal from `claimed`, so
+    // without the branch's explicit claimed→executing move the task strands in
+    // `claimed`. openPr THROWS to also prove dispatch is skipped (no second PR).
+    const noDispatchExec: ExecutionPort = {
+      ...okExecution,
+      async openPr(): Promise<OpenPrResult> {
+        throw new Error('openPr must not be called on the existing-PR path');
+      },
+    };
+    const task = await store.getOrCreateTask({
+      externalStoryId: EVENT.externalStoryId,
+      platform: EVENT.platform,
+    });
+    await store.recordPullRequest({ taskId: task.id, url: 'https://github.com/icemint/tasca/pull/99' });
+
+    const base = { store, claim: new PgClaimRepository(pool), status, directory: directory(), audit: auditSink, content };
+    const outcome = await orchestrateTaskAssigned(EVENT, { ...base, execution: noDispatchExec });
+
+    expect(outcome.kind).toBe('dispatched');
+    const after = await store.getTask(task.id);
+    expect(after?.status).toBe('in_review'); // reached in_review, not stranded in claimed
+    const prs = await pool.query('SELECT count(*)::int AS c FROM pull_request WHERE task_id=$1', [task.id]);
+    expect(prs.rows[0].c).toBe(1); // dispatch skipped — no second PR opened
+  });
+});
+
+// setStatus enforces the domain transition rules (TASK_TRANSITIONS) atomically at
+// the write boundary. Own schema so unqualified TRUNCATE/DDL can't race the suites
+// above (same pattern as the main block).
+run('coordination (Postgres) — setStatus transition guard', () => {
+  const SCHEMA = 'coordination_setstatus_test';
+  let pool: Pool;
+  let store: PgCoordinationStore;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
+    store = new PgCoordinationStore(pool);
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  beforeEach(async () => {
+    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+  });
+
+  // A fresh task starts `routable`. The CAS claim (routable→claimed) rides the
+  // ClaimPort, so here we set up `claimed` directly to exercise the setStatus edges
+  // the dispatch loop actually drives (claimed→executing→in_review).
+  async function newClaimedTask(): Promise<string> {
+    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#1', platform: 'github' });
+    await pool.query('UPDATE task SET status = $2 WHERE id = $1', [task.id, 'claimed']);
+    return task.id;
+  }
+
+  it('allows the legal dispatch edges claimed→executing→in_review', async () => {
+    const id = await newClaimedTask();
+    await store.setStatus(id, 'executing');
+    await store.setStatus(id, 'in_review');
+    const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
+    expect(r.rows[0]!.status).toBe('in_review');
+  });
+
+  it('rejects an illegal transition (routable→in_review) and leaves the row unchanged', async () => {
+    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#2', platform: 'github' });
+    await expect(store.setStatus(task.id, 'in_review')).rejects.toThrow(
+      /illegal transition routable -> in_review/
+    );
+    const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [task.id]);
+    expect(r.rows[0]!.status).toBe('routable'); // unchanged
+  });
+
+  it('allows the routable self-loop (pre-claim failure reset) but not a generic identity', async () => {
+    // routable→routable IS a TASK_TRANSITIONS self-loop (the §6.14 reset), so it
+    // succeeds — driven by the map, not a blanket identity allowance.
+    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#3', platform: 'github' });
+    const before = await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [task.id]);
+    await store.setStatus(task.id, 'routable');
+    const after = await pool.query<{ status: string; version: number }>(
+      'SELECT status, version FROM task WHERE id=$1',
+      [task.id]
+    );
+    expect(after.rows[0]!.status).toBe('routable');
+    expect(after.rows[0]!.version).toBe(before.rows[0]!.version + 1);
+  });
+
+  it('treats `done` as terminal: a done task rejects every onward transition incl. itself', async () => {
+    const id = await newClaimedTask();
+    await store.setStatus(id, 'executing');
+    await store.setStatus(id, 'in_review');
+    await store.setStatus(id, 'done'); // in_review→done is the one legal edge into done
+    // done has no outgoing edges and no self-loop → nothing onward is permitted.
+    await expect(store.setStatus(id, 'routable')).rejects.toThrow(/illegal transition done -> routable/);
+    await expect(store.setStatus(id, 'done')).rejects.toThrow(/illegal transition done -> done/);
+    const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
+    expect(r.rows[0]!.status).toBe('done'); // frozen
+  });
+
+  it('rejects skipping a step (executing→done) and leaves the row unchanged', async () => {
+    const id = await newClaimedTask();
+    await store.setStatus(id, 'executing');
+    await expect(store.setStatus(id, 'done')).rejects.toThrow(/illegal transition executing -> done/);
+    const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
+    expect(r.rows[0]!.status).toBe('executing');
+  });
+
+  it('throws "not found" for a missing task', async () => {
+    await expect(
+      store.setStatus('00000000-0000-0000-0000-000000000000', 'executing')
+    ).rejects.toThrow(/not found/);
+  });
 });

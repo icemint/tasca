@@ -6,8 +6,9 @@ pool, PTY-spawn of an agent command, run lifecycle, PR creation, and a local
 SQLite/Drizzle store — all running under plain `node`, no Electron runtime.
 
 It exposes a clean **`ExecutionPort`** and a `createExecution()` factory. Per the
-Stage-1 package boundary, it depends only on `@tasca/domain` / `@tasca/contracts`
-and must **not** import routing / adapters / coordination.
+Stage-1 package boundary it may import only `@tasca/domain` / `@tasca/contracts`
+and must **not** import routing / adapters / coordination — but it currently needs
+neither and declares no `@tasca/*` runtime dependency.
 
 ## Overlay shape (zero upstream edits)
 

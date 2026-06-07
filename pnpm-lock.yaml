@@ -102,10 +102,6 @@ importers:
   packages/domain: {}
 
   packages/execution:
-    dependencies:
-      '@tasca/contracts':
-        specifier: workspace:*
-        version: link:../contracts
     devDependencies:
       tsx:
         specifier: ^4.19.2
