@@ -24,7 +24,6 @@ import {
   matchCapability,
   canDispatch,
   atomicClaim,
-  breaker,
   type MatchCandidate,
   type TaskInput,
   type ClaimPort,
@@ -237,19 +236,18 @@ export async function orchestrateTaskAssigned(
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
-    // §6.14 — failure path (any phase): counter++ → breaker(n). At/over the
-    // threshold the task trips to needs_attention (human-gated). Below it, the
-    // task is RESET to routable (claim cleared, version bumped) so a re-delivery /
-    // re-assignment re-claims the SAME row and the next failure increments the
-    // same counter — the breaker trips because the row is re-driven, not replaced.
-    const failureCount = await deps.store.incrementFailureCount(task.id);
-    const outcome = breaker(failureCount, breakerThreshold);
-
-    if (outcome === 'needs_attention') {
-      await deps.store.setStatus(task.id, 'needs_attention');
-    } else {
-      await deps.store.resetForRetry(task.id);
-    }
+    // §6.14 — failure path (any phase): record the failure and transition in ONE
+    // atomic UPDATE. At/over the threshold the task trips to needs_attention
+    // (human-gated); below it the SAME row is reset to routable (claim cleared,
+    // version bumped) so a re-delivery / re-assignment re-claims it and the next
+    // failure increments the same counter — the breaker trips because the row is
+    // re-driven, not replaced. Folding the increment + transition into one write
+    // removes the crash window that could strand the task between them.
+    const { failureCount, tripped } = await deps.store.recordFailureAndTransition(
+      task.id,
+      breakerThreshold
+    );
+    const outcome = tripped ? 'needs_attention' : 'retry';
 
     // Best-effort audit: a pre-claim failure has no claimed agent/principal, so
     // `audit` is skipped (principalId null); a post-claim failure attributes to
@@ -264,7 +262,7 @@ export async function orchestrateTaskAssigned(
       },
     });
 
-    if (outcome === 'needs_attention') {
+    if (tripped) {
       return { kind: 'needs_attention', taskId: task.id, failureCount };
     }
     return { kind: 'failed', taskId: task.id, failureCount };

@@ -64,8 +64,9 @@ class CountingStore implements CoordinationStore {
   async getTask() { return null; }
   async setTierEstimate(_id: string, _e: TierEstimate) {}
   async setStatus(_id: string, _s: TaskStatus) {}
-  async resetForRetry(_id: string) {}
-  async incrementFailureCount() { return 1; }
+  async recordFailureAndTransition(_id: string, threshold: number) {
+    return { failureCount: 1, tripped: 1 >= threshold };
+  }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
   async upsertGitHubInstallation() {}
@@ -375,6 +376,53 @@ describe('coordination HTTP entry (node:http handler)', () => {
     const res = fakeRes();
     await handle(fakeReq('GET', '/some/other/path', ''), res.res);
     expect(res.statusCode).toBe(404);
+  });
+
+  it('default scheduler (no runAsync injected): a rejected post-ack run still 202s, is logged, and never escapes as unhandledRejection', async () => {
+    // Exercises the DEFAULT queueMicrotask scheduler + its last-resort `.catch`.
+    // The store throws inside the post-ack work; the request must still ack 202,
+    // the failure must be logged via the injected logger, and no unhandledRejection
+    // may escape the process.
+    const store = new CountingStore();
+    store.failCreateOnce = true; // getOrCreateTask throws inside the post-ack work
+    const errors: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const logger: Logger = { error: (msg, ctx) => errors.push({ msg, ...(ctx ? { ctx } : {}) }) };
+
+    let unhandled: unknown;
+    const onUnhandled = (reason: unknown) => {
+      unhandled = reason;
+    };
+    process.once('unhandledRejection', onUnhandled);
+    try {
+      // No runAsync passed → the default scheduler is used.
+      const handle = createRequestHandler({
+        store,
+        claim: { async tryClaim() { return { won: false, newVersion: null }; } },
+        execution: noopExecution,
+        status: noopStatus,
+        directory: emptyDirectory,
+        audit: noopAudit,
+        content: noopContent,
+        verifier: verifierFor('evt-default-sched'),
+        logger,
+      });
+      const r = fakeRes();
+      await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-default-sched"}'), r.res);
+      expect(r.statusCode).toBe(202); // ack is independent of the post-ack work
+
+      // Let the queued microtask (and its `.catch`) run to completion.
+      await flush();
+      await flush();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+
+    expect(unhandled).toBeUndefined(); // the rejection was caught, not leaked
+    // The failure was observed at the boundary, with the throwing run logged.
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(errors.some((e) => e.msg.includes('orchestration failed after ack'))).toBe(true);
+    // The orchestration never completed, so the ledger stayed `received`.
+    expect(store.ledgerStatus('shortcut', 'evt-default-sched')).toBe('received');
   });
 
   it('POST /webhooks/github → 401 on a bad signature', async () => {

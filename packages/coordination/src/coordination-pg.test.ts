@@ -271,6 +271,31 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(tasks.rows[0].c).toBe(1);
   });
 
+  it('recordFailureAndTransition: one atomic UPDATE resets below threshold, trips at threshold', async () => {
+    // Seed a claimed task so we can prove the reset clears claimed_by below the
+    // threshold and retains it on the trip — all in a single statement.
+    const task = await store.getOrCreateTask({ externalStoryId: 'sc-atomic', platform: 'shortcut', repoRef: '/r' });
+    await pool.query(`UPDATE task SET status='claimed', claimed_by=$2 WHERE id=$1`, [task.id, agentId]);
+
+    // Below threshold (N=2): one failure → routable, claim cleared, count = 1.
+    const first = await store.recordFailureAndTransition(task.id, 2);
+    expect(first).toEqual({ failureCount: 1, tripped: false });
+    const afterFirst = await store.getTask(task.id);
+    expect(afterFirst?.status).toBe('routable');
+    expect(afterFirst?.claimedBy).toBeNull();
+    expect(afterFirst?.failureCount).toBe(1);
+
+    // Re-claim, then a second failure reaches the threshold → needs_attention,
+    // claim RETAINED for the human, count = 2.
+    await pool.query(`UPDATE task SET status='claimed', claimed_by=$2 WHERE id=$1`, [task.id, agentId]);
+    const second = await store.recordFailureAndTransition(task.id, 2);
+    expect(second).toEqual({ failureCount: 2, tripped: true });
+    const afterSecond = await store.getTask(task.id);
+    expect(afterSecond?.status).toBe('needs_attention');
+    expect(afterSecond?.claimedBy).toBe(agentId);
+    expect(afterSecond?.failureCount).toBe(2);
+  });
+
   it('auto-recover: a failed attempt resets the SAME task to routable and re-wins the CAS (real Postgres)', async () => {
     // The headline §6.14 fix. First delivery fails in execution (spawn exit 1) →
     // task reset to routable, claim cleared, failure_count 1. Re-delivering the

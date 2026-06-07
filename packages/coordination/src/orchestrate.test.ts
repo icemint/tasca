@@ -75,16 +75,19 @@ class FakeStore implements CoordinationStore {
     t.status = status;
     t.version += 1;
   }
-  async resetForRetry(taskId: string) {
-    const t = this.tasks.get(taskId)!;
-    t.status = 'routable';
-    t.claimedBy = null;
-    t.version += 1;
-  }
-  async incrementFailureCount(taskId: string) {
+  async recordFailureAndTransition(taskId: string, breakerThreshold: number) {
+    // Mirror the atomic SQL: increment, then trip-or-reset by threshold.
     const t = this.tasks.get(taskId)!;
     t.failureCount += 1;
-    return t.failureCount;
+    const tripped = t.failureCount >= breakerThreshold;
+    if (tripped) {
+      t.status = 'needs_attention';
+    } else {
+      t.status = 'routable';
+      t.claimedBy = null;
+    }
+    t.version += 1;
+    return { failureCount: t.failureCount, tripped };
   }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() {
