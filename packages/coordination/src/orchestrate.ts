@@ -64,6 +64,16 @@ export interface TaskContentSource {
   fetch(event: AdapterEvent): Promise<TaskInput>;
 }
 
+/**
+ * Ensures a local checkout of a repo (identified by an `owner/repo` ref) exists
+ * with an authenticated `origin`, returning its filesystem path so reserveWorktree
+ * can take a worktree from it. Throws on failure (no installation, clone error) —
+ * the forward-path catch treats that like any dispatch failure (feeds the breaker).
+ */
+export interface RepoProvisioner {
+  ensureLocalRepo(repoRef: string): Promise<string>;
+}
+
 export interface OrchestrationDeps {
   store: CoordinationStore;
   claim: ClaimPort;
@@ -73,6 +83,9 @@ export interface OrchestrationDeps {
   audit: AuditSink;
   content: TaskContentSource;
   classifier?: LlmClassifierPort;
+  /** Resolves a GitHub `owner/repo` slug to a local clone path before dispatch.
+   *  Absent → repoRef is used as-is (Stage-1 single-checkout / test behavior). */
+  provisioner?: RepoProvisioner;
   /** Breaker threshold; defaults to 2 (scaffold §3.2). */
   breakerThreshold?: number;
   /** Per-project concurrency limit for the dispatch gate. */
@@ -209,8 +222,16 @@ export async function orchestrateTaskAssigned(
     // §6.9-13 — dispatch → worktree + agent → PR → status-back.
     await deps.store.setStatus(task.id, 'executing');
 
+    // Provision a local checkout for the worktree. A GitHub event's repoHint is an
+    // `owner/repo` slug, not a local path; the provisioner clones/fetches it (auth'd)
+    // and returns the path. No provisioner (or no repoRef) → use repoRef as-is.
+    const repoPath = repoRef
+      ? deps.provisioner
+        ? await deps.provisioner.ensureLocalRepo(repoRef)
+        : repoRef
+      : '.';
     const worktree = await deps.execution.reserveWorktree({
-      repoPath: repoRef ?? '.',
+      repoPath,
       taskLabel: event.externalStoryId,
       projectId: event.externalStoryId,
     });

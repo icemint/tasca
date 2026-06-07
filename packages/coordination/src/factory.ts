@@ -13,7 +13,7 @@ import type { Task } from '@tasca/domain';
 import type { LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
-import type { AgentDirectory, AuditSink, TaskContentSource } from './orchestrate';
+import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
 import type { SessionInfo } from './read-api';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -36,6 +36,8 @@ export interface CreateCoordinationDeps {
   authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   content: TaskContentSource;
   classifier?: LlmClassifierPort;
+  /** Optional repo provisioner (clone-on-dispatch); absent → repoRef used as-is. */
+  provisioner?: RepoProvisioner;
   breakerThreshold?: number;
   perProjectLimit?: number;
   /** Structured logger for post-ack failures; defaults to `console` in the server. */
@@ -140,6 +142,7 @@ export function createCoordination(
       : {}),
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
+    ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
     ...(input.logger !== undefined ? { logger: input.logger } : {}),

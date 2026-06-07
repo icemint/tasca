@@ -21,7 +21,7 @@ import type {
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
 import type { CoordinationStore } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
-import type { AgentDirectory, AuditSink, TaskContentSource } from './orchestrate';
+import type { AgentDirectory, AuditSink, RepoProvisioner, TaskContentSource } from './orchestrate';
 import type { MatchCandidate } from '@tasca/routing';
 
 // ── In-memory fakes ───────────────────────────────────────────────────────────
@@ -149,6 +149,8 @@ class FakeExecution implements ExecutionPort {
   spawnCalls = 0;
   prCalls = 0;
   reserveCalls = 0;
+  /** Records each reserveWorktree input so a test can assert the resolved repoPath. */
+  reserveInputs: ReserveWorktreeInput[] = [];
   /** Distinct PRs actually opened (keyed by head) — a duplicate would bump this past 1. */
   distinctPrs = 0;
   private readonly openedHeads = new Map<string, string>();
@@ -158,6 +160,7 @@ class FakeExecution implements ExecutionPort {
     // Mirror the vendored WorktreeService: a fresh, RANDOM-suffixed local branch
     // per attempt (so the PR head must come from the deterministic headBranch).
     this.reserveCalls += 1;
+    this.reserveInputs.push(input);
     return {
       path: `/tmp/wt/${input.taskLabel}-${this.reserveCalls}`,
       branch: `tasca/local-${this.reserveCalls}`,
@@ -552,5 +555,83 @@ describe('orchestrateTaskAssigned — duplicate-PR guard (#198)', () => {
     expect(task.status).not.toBe('routable'); // not reset → won't be re-driven
     expect(execution.prCalls).toBe(1); // exactly one PR opened
     expect(store.pullRequests).toHaveLength(1);
+  });
+});
+
+describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
+  // A github event's repoHint is an `owner/repo` slug, not a local path.
+  const GITHUB_EVENT: AdapterEvent = {
+    type: 'task.assigned',
+    platform: 'github',
+    externalStoryId: 'gh-story-1',
+    agentExternalId: 'sc-agent-elvis',
+    repoHint: 'acme/widgets',
+  };
+
+  it('provisions the slug to a local path, which reserveWorktree then uses', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const seen: string[] = [];
+    const provisioner: RepoProvisioner = {
+      async ensureLocalRepo(repoRef) {
+        seen.push(repoRef);
+        return '/local/checkout';
+      },
+    };
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+      provisioner,
+    };
+
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, deps);
+
+    expect(outcome.kind).toBe('dispatched');
+    // (a) the provisioner saw the raw slug
+    expect(seen).toEqual(['acme/widgets']);
+    // (b) reserveWorktree got the provisioned local path, not the slug
+    expect(execution.reserveInputs).toEqual([
+      { repoPath: '/local/checkout', taskLabel: 'gh-story-1', projectId: 'gh-story-1' },
+    ]);
+  });
+
+  it('a provisioning failure feeds the breaker (failed → needs_attention)', async () => {
+    const store = new FakeStore();
+    const failing: RepoProvisioner = {
+      async ensureLocalRepo() {
+        throw new Error('no GitHub App installation for owner acme');
+      },
+    };
+    const deps = () => ({
+      ...makeDeps({ store, execution: new FakeExecution(), status: new FakeStatus(), audit: new FakeAudit() }),
+      provisioner: failing,
+    });
+
+    const first = await orchestrateTaskAssigned(GITHUB_EVENT, deps());
+    expect(first.kind).toBe('failed');
+    if (first.kind !== 'failed') return;
+    expect(first.failureCount).toBe(1);
+    expect(store.tasks.get(first.taskId)!.status).toBe('routable'); // reset for retry
+
+    const second = await orchestrateTaskAssigned(GITHUB_EVENT, deps());
+    expect(second.kind).toBe('needs_attention');
+  });
+
+  it('no provisioner + an event WITHOUT repoHint → repoPath defaults to "."', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const noRepoEvent: AdapterEvent = {
+      type: 'task.assigned',
+      platform: 'shortcut',
+      externalStoryId: 'sc-no-repo',
+      agentExternalId: 'sc-agent-elvis',
+    };
+
+    const outcome = await orchestrateTaskAssigned(
+      noRepoEvent,
+      makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() })
+    );
+
+    expect(outcome.kind).toBe('dispatched');
+    expect(execution.reserveInputs[0]!.repoPath).toBe('.');
   });
 });

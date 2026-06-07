@@ -183,6 +183,15 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       externalEventId: verified.externalEventId,
     };
 
+    // Intake receipt: makes a verified-but-zero-event delivery visible in worker
+    // logs (otherwise only outcomes-per-event are logged, so a 0-event delivery is
+    // silent and indistinguishable from a dropped one).
+    logger.info?.('coordination: webhook received', {
+      platform: verified.platform,
+      externalEventId: verified.externalEventId,
+      events: events.length,
+    });
+
     // Fast-ack: 202 now, orchestrate after the response. The work is detached
     // from the response, so it owns its errors: on success the ledger row is
     // flipped to `processed`; on failure it is logged WITH context and left
