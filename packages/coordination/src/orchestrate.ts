@@ -174,6 +174,14 @@ export async function orchestrateTaskAssigned(
     // guarantee; on loss another worker already owns the task.
     const claim = await atomicClaim(deps.claim, task.id, winner.agentId, task.version);
     if (!claim.won) {
+      // Surface WHY the CAS missed (lost race vs stale version vs gone) for ops.
+      deps.logger?.info?.('coordination: claim lost', {
+        taskId: task.id,
+        agentId: winner.agentId,
+        found: claim.found,
+        currentStatus: claim.currentStatus ?? null,
+        currentVersion: claim.currentVersion ?? null,
+      });
       return { kind: 'lost_claim', taskId: task.id, agentId: winner.agentId };
     }
 

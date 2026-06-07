@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import type { ClaimPort, ClaimOutcome } from '@tasca/domain';
+import type { ClaimPort, ClaimOutcome, TaskStatus } from '@tasca/domain';
 
 /** A pool or a single checked-out connection — both expose `.query`. */
 export type Queryable = Pool | PoolClient;
@@ -26,8 +26,26 @@ export class PgClaimRepository implements ClaimPort {
       [taskId, agentId, expectedVersion]
     );
     if (res.rowCount === 1) {
-      return { won: true, newVersion: res.rows[0]!.version };
+      const v = res.rows[0]!.version;
+      return { won: true, newVersion: v, found: true, currentStatus: 'claimed', currentVersion: v };
     }
-    return { won: false, newVersion: null };
+    // Loss: the conditional UPDATE matched no row. Re-read the row (a fast PK
+    // lookup) so the caller can tell WHY — another worker holds it (lost race),
+    // the expectedVersion was stale, or the task doesn't exist — and re-issue a
+    // retry with the right version if appropriate.
+    const cur = await this.db.query<{ status: TaskStatus; version: number }>(
+      `SELECT status, version FROM task WHERE id = $1`,
+      [taskId]
+    );
+    if (cur.rowCount === 0) {
+      return { won: false, newVersion: null, found: false, currentStatus: null, currentVersion: null };
+    }
+    return {
+      won: false,
+      newVersion: null,
+      found: true,
+      currentStatus: cur.rows[0]!.status,
+      currentVersion: cur.rows[0]!.version,
+    };
   }
 }

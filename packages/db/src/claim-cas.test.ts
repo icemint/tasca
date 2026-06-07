@@ -90,7 +90,7 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
     }
   });
 
-  it('a stale-version claim after a win loses', async () => {
+  it('a stale-version claim after a win loses, and surfaces the current row state', async () => {
     const repo = new PgClaimRepository(pool);
     const taskId = 'task-cas-stale';
     await pool.query('DELETE FROM task WHERE id=$1', [taskId]);
@@ -101,6 +101,36 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
     const first = await repo.tryClaim(taskId, 'a', 0);
     const stale = await repo.tryClaim(taskId, 'b', 0);
     expect(first.won).toBe(true);
-    expect(stale.won).toBe(false);
+    // A winning claim describes the post-claim row.
+    expect(first).toMatchObject({ won: true, newVersion: 1, found: true, currentStatus: 'claimed', currentVersion: 1 });
+    // The stale loser learns WHY: the row is now claimed at version 1 (not a
+    // retryable routable state) — enough to decide terminal vs retry.
+    expect(stale).toMatchObject({ won: false, newVersion: null, found: true, currentStatus: 'claimed', currentVersion: 1 });
+  });
+
+  it('distinguishes a lost-race loss (row claimed) from a missing task', async () => {
+    const repo = new PgClaimRepository(pool);
+    // Missing task → found:false (terminal: never retryable).
+    const missing = await repo.tryClaim('task-cas-does-not-exist', 'a', 0);
+    expect(missing).toMatchObject({ won: false, found: false, currentStatus: null, currentVersion: null });
+
+    // A loser in the race learns the row is claimed at v1 (lost-race, terminal here).
+    const taskId = 'task-cas-loser-state';
+    await pool.query('DELETE FROM task WHERE id=$1', [taskId]);
+    await pool.query(
+      `INSERT INTO task (id, external_story_id, status, version) VALUES ($1,'s3','routable',0)`,
+      [taskId]
+    );
+    await repo.tryClaim(taskId, 'winner', 0);
+    const loser = await repo.tryClaim(taskId, 'loser', 0);
+    expect(loser).toMatchObject({ won: false, found: true, currentStatus: 'claimed', currentVersion: 1 });
+  });
+
+  it('storage rejects an illegal status (task_status_chk)', async () => {
+    await expect(
+      pool.query(
+        `INSERT INTO task (id, external_story_id, status, version) VALUES ('task-cas-badstatus','s','bogus',0)`
+      )
+    ).rejects.toThrow(/task_status_chk|violates check constraint/);
   });
 });

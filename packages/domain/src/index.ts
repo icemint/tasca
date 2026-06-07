@@ -183,15 +183,33 @@ export interface AuditEvent {
 }
 
 // ── Claim (CAS) ─────────────────────────────────────────────────────────────
+// On a LOSS the conditional UPDATE affects 0 rows for three distinct reasons —
+// another worker claimed it (lost race), the expectedVersion was stale, or the
+// task doesn't exist. `won:false` alone can't tell a retryable loss from a
+// terminal one, so the outcome also surfaces the row's CURRENT state (`found` +
+// `currentStatus` + `currentVersion`) — enough to build a correct re-query/retry
+// loop. On a WIN these describe the post-claim row.
 export interface ClaimResult {
   won: boolean;
   /** New version after a winning claim (was expectedVersion + 1). */
   newVersion: number | null;
+  /** False when no task row exists for the id. */
+  found?: boolean;
+  /** The row's current status (on loss: why the CAS missed; on win: 'claimed'). */
+  currentStatus?: TaskStatus | null;
+  /** The row's current version (lets a retry re-issue with the right expectedVersion). */
+  currentVersion?: number | null;
 }
 
 export interface ClaimOutcome {
   won: boolean;
   newVersion: number | null;
+  /** False when no task row exists for the id. */
+  found?: boolean;
+  /** The row's current status (on loss: why the CAS missed; on win: 'claimed'). */
+  currentStatus?: TaskStatus | null;
+  /** The row's current version (lets a retry re-issue with the right expectedVersion). */
+  currentVersion?: number | null;
 }
 
 // ── Ports ───────────────────────────────────────────────────────────────────
