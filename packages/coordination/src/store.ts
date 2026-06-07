@@ -9,7 +9,6 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import {
   TASK_TRANSITIONS,
-  isValidTransition,
   type CapabilityMatch,
   type Task,
   type TaskStatus,
@@ -309,12 +308,12 @@ export class PgCoordinationStore implements CoordinationStore {
 
   async setStatus(taskId: string, status: TaskStatus): Promise<void> {
     // Enforce the domain transition rules at the write boundary: the row only moves
-    // to `status` if its current status legally precedes it (TASK_TRANSITIONS),
-    // checked IN the UPDATE so there's no read-then-write race. The identity entry
-    // (`status` itself) makes re-affirming the same status — an idempotent re-drive,
-    // e.g. finalize re-running setStatus('in_review') — a no-op rather than a
-    // spurious illegal transition.
-    const allowedFrom = [...VALID_PREDECESSORS[status], status];
+    // to `status` when its current status legally precedes it (TASK_TRANSITIONS),
+    // checked IN the UPDATE so there's no read-then-write race. No identity special
+    // case — a status only re-affirms itself when TASK_TRANSITIONS gives it a
+    // self-loop (e.g. routable's pre-claim failure reset), which the inverse map
+    // already carries; terminal `done` therefore cannot be re-written.
+    const allowedFrom = VALID_PREDECESSORS[status];
     const res = await this.db.query(
       `UPDATE task SET status = $2, version = version + 1, updated_at = now()
          WHERE id = $1 AND status = ANY($3::text[])`,
@@ -322,7 +321,10 @@ export class PgCoordinationStore implements CoordinationStore {
     );
     if (res.rowCount === 0) {
       // Nothing moved: the task is gone, or its current status doesn't legally
-      // precede `status`. Read it back for a precise error.
+      // precede `status`. Read it back for a precise error. (The read is a separate
+      // snapshot — a concurrent writer could have changed the row between the UPDATE
+      // and here; we don't try to distinguish that, since the on-disk state is
+      // correct either way and the message reports the status we observed.)
       const cur = await this.db.query<{ status: TaskStatus }>(
         `SELECT status FROM task WHERE id = $1`,
         [taskId]
@@ -330,12 +332,7 @@ export class PgCoordinationStore implements CoordinationStore {
       if (cur.rowCount === 0) {
         throw new Error(`setStatus: task ${taskId} not found`);
       }
-      const from = cur.rows[0]!.status;
-      // isValidTransition(from, status) is normally false here (that's why the
-      // guarded UPDATE matched nothing); a true result means the row was changed
-      // concurrently between the UPDATE and this read.
-      const suffix = isValidTransition(from, status) ? ' (concurrent update)' : '';
-      throw new Error(`setStatus: illegal transition ${from} -> ${status}${suffix}`);
+      throw new Error(`setStatus: illegal transition ${cur.rows[0]!.status} -> ${status}`);
     }
   }
 
