@@ -16,7 +16,7 @@ import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
 import type { SessionInfo } from './read-api';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 /**
  * Concrete dependencies the host supplies at the composition root. The Postgres
@@ -33,7 +33,7 @@ export interface CreateCoordinationDeps {
   /** Optional GitHub install-event handler (records account→installation); absent → not called. */
   githubInstallationHandler?: (rawBody: string) => Promise<void>;
   /** Optional auth handler (GET/POST /api/auth/*); absent → those paths 404. */
-  authHandler?: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<boolean>;
+  authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   content: TaskContentSource;
   classifier?: LlmClassifierPort;
   breakerThreshold?: number;
