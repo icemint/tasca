@@ -314,23 +314,98 @@ describe('GitHubAdapter.registerWebhook (REST v3, injected fetch)', () => {
   });
 });
 
+describe('GitHubAdapter.postIssueStatus (write-back via the App, injected fetch)', () => {
+  /** A stub App client that records its requests and returns a canned token. */
+  function stubAppClient() {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+    let throwStatus = false;
+    return {
+      calls,
+      failNext() {
+        throwStatus = true;
+      },
+      client: {
+        async getInstallationToken(_installationId: string) {
+          return { token: 'ghs_inst', expiresAt: Date.now() + 3_600_000 };
+        },
+        async request(_token: string, method: string, path: string, body?: unknown) {
+          calls.push({ method, path, body });
+          if (throwStatus) throw new Error('github POST failed: 422 Unprocessable');
+          return null;
+        },
+      } as unknown as NonNullable<ConstructorParameters<typeof GitHubAdapter>[0]['appClient']>,
+    };
+  }
+
+  it('POSTs a comment to /repos/{owner}/{repo}/issues/{n}/comments with the body', async () => {
+    const stub = stubAppClient();
+    const a = new GitHubAdapter({ webhookSecret: SECRET, appClient: stub.client });
+    await a.postIssueStatus({
+      owner: 'icemint',
+      repo: 'demo',
+      issueNumber: 42,
+      installationId: '77',
+      commentBody: 'PR opened\nhttps://github.com/icemint/demo/pull/5',
+    });
+    expect(stub.calls).toEqual([
+      {
+        method: 'POST',
+        path: '/repos/icemint/demo/issues/42/comments',
+        body: { body: 'PR opened\nhttps://github.com/icemint/demo/pull/5' },
+      },
+    ]);
+  });
+
+  it('also PATCHes the issue to state:closed when closeIssue is set', async () => {
+    const stub = stubAppClient();
+    const a = new GitHubAdapter({ webhookSecret: SECRET, appClient: stub.client });
+    await a.postIssueStatus({
+      owner: 'icemint',
+      repo: 'demo',
+      issueNumber: 42,
+      installationId: '77',
+      commentBody: 'done',
+      closeIssue: true,
+    });
+    expect(stub.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /repos/icemint/demo/issues/42/comments',
+      'PATCH /repos/icemint/demo/issues/42',
+    ]);
+    expect(stub.calls[1]!.body).toEqual({ state: 'closed' });
+  });
+
+  it('propagates a non-2xx error from the underlying request', async () => {
+    const stub = stubAppClient();
+    stub.failNext();
+    const a = new GitHubAdapter({ webhookSecret: SECRET, appClient: stub.client });
+    await expect(
+      a.postIssueStatus({
+        owner: 'o',
+        repo: 'r',
+        issueNumber: 1,
+        installationId: '77',
+        commentBody: 'x',
+      })
+    ).rejects.toThrow(/422/);
+  });
+
+  it('throws when the App is not configured', async () => {
+    await expect(
+      adapter().postIssueStatus({
+        owner: 'o',
+        repo: 'r',
+        issueNumber: 1,
+        installationId: '77',
+        commentBody: 'x',
+      })
+    ).rejects.toThrow(/App not configured/);
+  });
+});
+
 describe('GitHubAdapter gated halves (stubbed)', () => {
   it('provisionIdentity throws the gated error citing the brief', async () => {
     await expect(adapter().provisionIdentity('agent_elvis', {})).rejects.toThrow(
-      /gated: GitHub App write-back not yet built/
+      /gated: GitHub identity provisioning not yet built/
     );
-  });
-
-  it('postStatus throws the gated error citing the brief', async () => {
-    const binding = {
-      id: 'b1',
-      agentId: 'agent_elvis',
-      platform: 'github' as const,
-      externalId: ELVIS_ID,
-      externalHandle: ELVIS_LOGIN,
-      credentialRef: 'secret://x',
-      state: 'active' as const,
-    };
-    await expect(adapter().postStatus(binding, { comment: 'hi' })).rejects.toThrow(/gated/);
   });
 });

@@ -215,6 +215,7 @@ export async function orchestrateTaskAssigned(
 
     // §6.12 — status-back as the agent: comment + state → in_review + PR link.
     await deps.status.postStatus({
+      platform: event.platform,
       externalStoryId: event.externalStoryId,
       agentId: winner.agentId,
       state: 'in_review',

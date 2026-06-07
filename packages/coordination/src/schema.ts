@@ -55,10 +55,14 @@ CREATE TABLE IF NOT EXISTS platform_connection (
   platform           text NOT NULL CHECK (platform IN ('shortcut','github','linear')),
   workspace_id       text NOT NULL,
   webhook_secret_ref text,
+  installation_id    text,
   health             text NOT NULL DEFAULT 'healthy' CHECK (health IN ('healthy','degraded','revoked')),
   created_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE (platform, workspace_id)
-);`;
+);
+-- The GitHub App installation id the write-back acts under (one per workspace).
+-- Added on the upgrade path too so a table created before write-back gains it.
+ALTER TABLE platform_connection ADD COLUMN IF NOT EXISTS installation_id text;`;
 
 /**
  * Raw inbound webhook log keyed by the platform's event id — the idempotency

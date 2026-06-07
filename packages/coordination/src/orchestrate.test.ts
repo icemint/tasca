@@ -86,6 +86,10 @@ class FakeStore implements CoordinationStore {
     t.failureCount += 1;
     return t.failureCount;
   }
+  async upsertGitHubInstallation() {}
+  async getInstallationIdForOwner() {
+    return null;
+  }
   async recordRoutingDecision(input: { taskId: string; winnerAgentId: string | null }) {
     this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
   }
@@ -265,6 +269,7 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     // status-back as Elvis: comment + state + PR link
     expect(status.updates).toHaveLength(1);
     expect(status.updates[0]).toMatchObject({
+      platform: 'shortcut',
       agentId: ELVIS,
       externalStoryId: 'sc-story-1',
       state: 'in_review',
@@ -276,6 +281,22 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     expect(actions).toContain('task.claim');
     expect(actions).toContain('pr.create');
     expect(actions).toContain('status.post');
+  });
+
+  it('threads the event platform onto the status update (github)', async () => {
+    const githubEvent: AdapterEvent = {
+      type: 'task.assigned',
+      platform: 'github',
+      externalStoryId: 'icemint/demo#42',
+      agentExternalId: '5550001',
+      repoHint: 'icemint/demo',
+    };
+    const outcome = await orchestrateTaskAssigned(
+      githubEvent,
+      makeDeps({ store, execution, status, audit })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    expect(status.updates[0]!.platform).toBe('github');
   });
 
   it('empty roster → no_candidate, no dispatch, decision still persisted', async () => {

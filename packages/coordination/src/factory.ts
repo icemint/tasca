@@ -30,6 +30,8 @@ export interface CreateCoordinationDeps {
   verifier: WebhookVerifier;
   /** Optional GitHub webhook verifier (POST /webhooks/github); absent → 404. */
   githubVerifier?: WebhookVerifier;
+  /** Optional GitHub install-event handler (records account→installation); absent → not called. */
+  githubInstallationHandler?: (rawBody: string) => Promise<void>;
   /** Optional auth handler (GET/POST /api/auth/*); absent → those paths 404. */
   authHandler?: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<boolean>;
   content: TaskContentSource;
@@ -133,6 +135,9 @@ export function createCoordination(
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
     ...(input.githubVerifier !== undefined ? { githubVerifier: input.githubVerifier } : {}),
+    ...(input.githubInstallationHandler !== undefined
+      ? { githubInstallationHandler: input.githubInstallationHandler }
+      : {}),
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),

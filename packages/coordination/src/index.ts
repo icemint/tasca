@@ -61,6 +61,17 @@ export {
   type CreateCoordinationDeps,
 } from './factory';
 
+// GitHub write-back: the routing status reporter + the GitHub reporter.
+export {
+  GitHubStatusReporter,
+  routingStatusReporter,
+  parseGitHubStoryId,
+  type GitHubStatusReporterDeps,
+  type GitHubWriteBack,
+  type GitHubIdentityReader,
+  type StatusAuditSink,
+} from './github-status-reporter';
+
 // The coordination-store DDL (scaffold §7).
 export {
   COORDINATION_SCHEMA_DDL,

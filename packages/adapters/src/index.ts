@@ -11,4 +11,10 @@ export { ShortcutAdapter } from './shortcut';
 export type { ShortcutAdapterConfig } from './shortcut';
 
 export { GitHubAdapter } from './github';
-export type { GitHubAdapterConfig } from './github';
+export type { GitHubAdapterConfig, PostIssueStatusInput } from './github';
+
+export { GitHubAppClient } from './github-app-client';
+export type {
+  GitHubAppClientConfig,
+  InstallationToken,
+} from './github-app-client';
