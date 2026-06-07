@@ -285,6 +285,26 @@ describe('coordination HTTP entry (node:http handler)', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('drops a malformed adapter event via AdapterEventSchema — never orchestrated', async () => {
+    // A verifier that emits a schema-invalid event (empty externalStoryId). The
+    // server must validate at the boundary and drop it before getOrCreateTask.
+    const store = new CountingStore();
+    const work: Array<() => Promise<void>> = [];
+    const badVerifier: WebhookVerifier = {
+      verify: () => ({ platform: 'shortcut', externalEventId: 'evt-bad', payload: {} }),
+      parse: () => [
+        { type: 'task.assigned', platform: 'shortcut', externalStoryId: '', agentExternalId: 'a' } as AdapterEvent,
+      ],
+    };
+    const handle = createRequestHandler(makeServerDeps(store, badVerifier, (w) => work.push(w)));
+    const r = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-bad"}'), r.res);
+    expect(r.statusCode).toBe(202); // accepted (fast-ack), but the event is dropped
+    for (const w of work) await w();
+    await flush();
+    expect(store.createdTasks).toBe(0); // malformed → never reached getOrCreateTask
+  });
+
   it('POST /webhooks/github → 404 when no github verifier is configured', async () => {
     const store = new CountingStore();
     const handle = createRequestHandler(makeServerDeps(store, verifierFor('e1'), (w) => void w()));
