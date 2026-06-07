@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { ALLOWLIST, extractTascaImports, findViolations, scanRepo } from './check-boundaries';
+import { ALLOWLIST, extractTascaImports, findUngovernedPackages, findViolations, scanRepo } from './check-boundaries';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -20,6 +20,10 @@ describe('extractTascaImports', () => {
     expect(found).toEqual(['contracts', 'db', 'domain', 'routing']);
     expect(found).not.toContain('coordination'); // comment mention not counted
     expect(found).not.toContain('adapters');
+  });
+
+  it('also catches require() (cjs interop)', () => {
+    expect(extractTascaImports(`const x = require('@tasca/identity');`)).toEqual(['identity']);
   });
 });
 
@@ -57,5 +61,11 @@ describe('the real repository', () => {
     const violations = findViolations(scanRepo(REPO_ROOT));
     // Print them if any, so a regression is actionable from the test output.
     expect(violations.map((v) => `${v.file}: @tasca/${v.imported}`)).toEqual([]);
+  });
+
+  it('governs every package (each packages/*/src is in ALLOWLIST)', () => {
+    // Fails when a new package is added without declaring its boundary — closing
+    // the silently-ungoverned false-negative.
+    expect(findUngovernedPackages(REPO_ROOT)).toEqual([]);
   });
 });

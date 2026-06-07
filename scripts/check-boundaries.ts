@@ -7,8 +7,9 @@
 // `@tasca/*` package outside that package's allowlist, independent of package.json
 // (so adding the dep doesn't silently permit the import).
 //
-// Zero runtime deps by design (CLAUDE.md §14): a focused ~80-line node script over
-// a heavyweight dependency-graph tool. Run: `tsx scripts/check-boundaries.ts`.
+// Zero runtime deps by design (per the engineering guidelines §14 — prefer stdlib
+// over a new dependency): a focused node script over a heavyweight dependency-graph
+// tool. Run: `tsx scripts/check-boundaries.ts`.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -57,8 +58,9 @@ function stripComments(src: string): string {
 export function extractTascaImports(src: string): string[] {
   const out = new Set<string>();
   const code = stripComments(src);
-  // `from '@tasca/x'` (static import/export) and `import('@tasca/x')` (dynamic).
-  const re = /(?:from|import)\s*\(?\s*['"]@tasca\/([a-z][a-z-]*)['"]/g;
+  // `from '@tasca/x'` (static import/export), `import('@tasca/x')` (dynamic), and
+  // `require('@tasca/x')` (cjs interop) — all create a real dependency edge.
+  const re = /(?:from|import|require)\s*\(?\s*['"]@tasca\/([a-z][a-z-]*)['"]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(code)) !== null) out.add(m[1]!);
   return [...out];
@@ -82,9 +84,35 @@ function listTsFiles(dir: string): string[] {
     if (entry === 'node_modules' || entry === 'vendor' || entry === 'dist') continue;
     const full = path.join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...listTsFiles(full));
-    else if (entry.endsWith('.ts')) out.push(full);
+    else if (/\.(ts|tsx|mts|cts)$/.test(entry)) out.push(full);
   }
   return out;
+}
+
+/**
+ * Package dirs under <root>/packages that have a `src/` but are NOT in ALLOWLIST.
+ * A package with no declared boundary would otherwise be silently ungoverned (the
+ * enforcer only scans ALLOWLIST keys), so the CLI fails on any — adding a package
+ * forces declaring its allowlist.
+ */
+export function findUngovernedPackages(root: string): string[] {
+  const pkgsDir = path.join(root, 'packages');
+  let entries: string[];
+  try {
+    entries = readdirSync(pkgsDir);
+  } catch {
+    return [];
+  }
+  return entries.filter((name) => {
+    const srcDir = path.join(pkgsDir, name, 'src');
+    let hasSrc = false;
+    try {
+      hasSrc = statSync(srcDir).isDirectory();
+    } catch {
+      hasSrc = false;
+    }
+    return hasSrc && !(name in ALLOWLIST);
+  });
 }
 
 /** Scan every governed package under <root>/packages and collect import refs. */
@@ -111,17 +139,23 @@ export function scanRepo(root: string): ImportRef[] {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function main(): void {
+  const ungoverned = findUngovernedPackages(REPO_ROOT);
   const violations = findViolations(scanRepo(REPO_ROOT));
-  if (violations.length === 0) {
+  if (ungoverned.length === 0 && violations.length === 0) {
     console.log('boundary check: OK (no illegal @tasca/* imports)');
     return;
   }
-  console.error(`boundary check: ${violations.length} illegal import(s):`);
+  for (const name of ungoverned) {
+    console.error(
+      `  packages/${name}: no boundary allowlist — add '${name}' to ALLOWLIST in scripts/check-boundaries.ts`
+    );
+  }
   for (const v of violations) {
     console.error(
       `  ${v.file}: @tasca/${v.pkg} may not import @tasca/${v.imported} (allowed: ${v.allowed.map((a) => `@tasca/${a}`).join(', ') || 'none'})`
     );
   }
+  console.error(`boundary check: ${ungoverned.length} ungoverned package(s), ${violations.length} illegal import(s)`);
   process.exit(1);
 }
 
