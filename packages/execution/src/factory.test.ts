@@ -131,6 +131,25 @@ describe('createExecution — PTY reaping', () => {
     expect(b.handle.kill).toHaveBeenCalledTimes(1);
   });
 
+  it('a stale handle re-spawned under the same id does not orphan the replacement', async () => {
+    // Spawn id 'x' (handle A), then re-spawn 'x' (handle B replaces A in the map).
+    // A's LATE onExit must NOT deregister B — close() must still reap B.
+    const a = fakePty();
+    const b = fakePty();
+    const ptys = [a.handle, b.handle];
+    let i = 0;
+    const port = createExecution({
+      servicesOverride: fakeServices({ startLifecyclePty: () => ptys[i++]! }),
+    });
+
+    port.spawnAgent(spawnInput('x')); // → A
+    port.spawnAgent(spawnInput('x')); // → B (replaces A under id 'x')
+    a.fireExit(); // the stale A exits; identity guard means it must NOT remove B
+
+    await port.close();
+    expect(b.handle.kill).toHaveBeenCalledTimes(1); // B still reaped (not orphaned)
+  });
+
   it('killAgent on an unknown id is a no-op', async () => {
     const port = createExecution({ servicesOverride: fakeServices({}) });
     expect(() => port.killAgent('nope')).not.toThrow();

@@ -188,10 +188,15 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
 
       // Register as live (dedupe by id: a re-spawn under the same id replaces the
       // prior entry). Deregister on terminal events so close() won't kill a
-      // finished agent.
+      // finished agent — but ONLY if THIS handle is still the registered one. A
+      // re-spawn replaces the map entry; without the identity check, the OLD
+      // handle's late onExit/onError would delete the replacement and orphan it.
       liveHandles.set(input.id, handle);
-      handle.onExit(() => liveHandles.delete(input.id));
-      handle.onError(() => liveHandles.delete(input.id));
+      const deregisterSelf = (): void => {
+        if (liveHandles.get(input.id) === handle) liveHandles.delete(input.id);
+      };
+      handle.onExit(deregisterSelf);
+      handle.onError(deregisterSelf);
 
       return {
         pid: handle.pid,
