@@ -92,7 +92,13 @@ CREATE TABLE IF NOT EXISTS delegation (
   attribution_label  text NOT NULL
 );`;
 
-/** Append-only audit trail. Every privileged action attributes to principal_id. */
+/**
+ * Append-only audit trail. Every privileged action attributes to principal_id.
+ * Append-only is ENFORCED (not just convention): the UPDATE/DELETE rules below
+ * turn any UPDATE or DELETE into a silent no-op, so rows can only be inserted —
+ * the trail can never be rewritten or erased. (TRUNCATE bypasses rules, so test
+ * cleanup that truncates still works; ordinary DML cannot mutate history.)
+ */
 export const AUDIT_EVENT_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS audit_event (
   id           text PRIMARY KEY,
@@ -105,7 +111,10 @@ CREATE TABLE IF NOT EXISTS audit_event (
   at           timestamptz NOT NULL DEFAULT now()
 );
 -- Audit read path filters by principal_id, ordered by (at, id) — index it.
-CREATE INDEX IF NOT EXISTS audit_event_principal_at_idx ON audit_event (principal_id, at, id);`;
+CREATE INDEX IF NOT EXISTS audit_event_principal_at_idx ON audit_event (principal_id, at, id);
+-- Enforce append-only: UPDATE/DELETE become silent no-ops (TRUNCATE bypasses rules).
+CREATE OR REPLACE RULE audit_event_no_update AS ON UPDATE TO audit_event DO INSTEAD NOTHING;
+CREATE OR REPLACE RULE audit_event_no_delete AS ON DELETE TO audit_event DO INSTEAD NOTHING;`;
 
 /**
  * All identity DDL in dependency order (roles → agent → dependents). Apply this

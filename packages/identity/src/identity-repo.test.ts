@@ -14,6 +14,27 @@ import {
 const url = process.env.DATABASE_URL;
 const run = url ? describe : describe.skip;
 
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+/**
+ * Block until `n` sessions are *waiting* on the exclusive advisory lock `gateKey`.
+ * Single-bigint advisory locks under 2^32 register in pg_locks as
+ * (classid=0, objid=key, objsubid=1). Used to know every worker has reached the
+ * gate before we release them at once (mirrors claim-cas.test.ts).
+ */
+async function waitForWaiters(pool: Pool, gateKey: number, n: number): Promise<void> {
+  for (let i = 0; i < 400; i++) {
+    const r = await pool.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM pg_locks
+        WHERE locktype = 'advisory' AND classid = 0 AND objid = $1 AND objsubid = 1 AND NOT granted`,
+      [gateKey]
+    );
+    if ((r.rows[0]?.c ?? 0) >= n) return;
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for ${n} advisory-lock waiters`);
+}
+
 run('PgIdentityRepository (Postgres) — stable principal + binding lifecycle', () => {
   let pool: Pool;
   let repo: PgIdentityRepository;
@@ -145,5 +166,162 @@ run('PgIdentityRepository (Postgres) — stable principal + binding lifecycle', 
     const actions = events.map((e) => e.action);
     expect(actions).toContain('identity.binding.shortcut.bound');
     expect(actions).toContain('identity.binding.shortcut.credential_rotated');
+  });
+
+  it('rotate writes the new credential_ref AND exactly one audit row atomically', async () => {
+    const { agent, serviceUser } = await makeAgent();
+    await bindShortcutIdentity(repo, {
+      agentId: agent.id,
+      shortcutAgentUserId: 'sc-agent-atomic',
+      credentialRef: 'secret://shortcut/elvis/v1',
+    });
+
+    await rotateShortcutCredential(repo, agent.id, 'secret://shortcut/elvis/v2');
+
+    const binding = await repo.getBinding(agent.id, 'shortcut');
+    expect(binding?.credentialRef).toBe('secret://shortcut/elvis/v2');
+
+    const rotations = (await repo.listAuditEvents(serviceUser.principalId)).filter(
+      (e) => e.action === 'identity.binding.shortcut.credential_rotated'
+    );
+    expect(rotations).toHaveLength(1);
+  });
+
+  it('rotate rolls back the credential_ref when the audit append fails (no partial write)', async () => {
+    const { agent, serviceUser } = await makeAgent();
+    await bindShortcutIdentity(repo, {
+      agentId: agent.id,
+      shortcutAgentUserId: 'sc-agent-rollback',
+      credentialRef: 'secret://shortcut/elvis/v1',
+    });
+
+    // Force the audit step inside the rotation's transaction to throw, exercising
+    // the ROLLBACK path: the binding write must NOT survive, and no audit row may
+    // be written. We spy on appendAuditEvent so the binding UPDATE has already run
+    // when the failure fires (proving it is rolled back, not merely skipped).
+    const failing = new PgIdentityRepository(pool);
+    const realWithTransaction = failing.withTransaction.bind(failing);
+    failing.withTransaction = (fn) =>
+      realWithTransaction((tx) => {
+        tx.appendAuditEvent = () => Promise.reject(new Error('injected audit failure'));
+        return fn(tx);
+      });
+
+    await expect(
+      rotateShortcutCredential(failing, agent.id, 'secret://shortcut/elvis/v2')
+    ).rejects.toThrow('injected audit failure');
+
+    // Credential unchanged (rolled back) …
+    const binding = await repo.getBinding(agent.id, 'shortcut');
+    expect(binding?.credentialRef).toBe('secret://shortcut/elvis/v1');
+    // … and no rotation audit row was written.
+    const rotations = (await repo.listAuditEvents(serviceUser.principalId)).filter(
+      (e) => e.action === 'identity.binding.shortcut.credential_rotated'
+    );
+    expect(rotations).toHaveLength(0);
+  });
+
+  it('concurrent rotations serialize on the locked binding (both succeed, two audit rows)', async () => {
+    const { agent, serviceUser } = await makeAgent();
+    await bindShortcutIdentity(repo, {
+      agentId: agent.id,
+      shortcutAgentUserId: 'sc-agent-race',
+      credentialRef: 'secret://shortcut/elvis/v0',
+    });
+
+    const GATE = 615243; // advisory-lock latch key (distinct from claim-cas)
+    // A pool large enough that both rotations hold their own tx connection plus
+    // the gate holder at once — so they genuinely overlap on the FOR UPDATE row
+    // lock rather than being serialized by pool exhaustion.
+    const racePool = new Pool({ connectionString: url, max: 6 });
+    try {
+      const gate = await racePool.connect();
+      await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
+
+      const refs = ['secret://shortcut/elvis/A', 'secret://shortcut/elvis/B'];
+      const workers = refs.map((ref) =>
+        (async () => {
+          const client = await racePool.connect();
+          try {
+            await client.query('SELECT pg_advisory_lock_shared($1)', [GATE]); // park
+            const txRepo = new PgIdentityRepository(racePool);
+            return await rotateShortcutCredential(txRepo, agent.id, ref);
+          } finally {
+            await client.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+            client.release();
+          }
+        })()
+      );
+
+      await waitForWaiters(racePool, GATE, refs.length); // both parked
+      await gate.query('SELECT pg_advisory_unlock($1)', [GATE]); // release together
+      gate.release();
+
+      const results = await Promise.all(workers); // both must complete without error
+      expect(results).toHaveLength(2);
+
+      // Final credential_ref is one of the two (last committer wins the serialized order).
+      const binding = await repo.getBinding(agent.id, 'shortcut');
+      expect(refs).toContain(binding?.credentialRef);
+
+      // No lost audit: exactly two rotation rows, one per rotation.
+      const rotations = (await repo.listAuditEvents(serviceUser.principalId)).filter(
+        (e) => e.action === 'identity.binding.shortcut.credential_rotated'
+      );
+      expect(rotations).toHaveLength(2);
+    } finally {
+      await racePool.end();
+    }
+  });
+
+  it('audit_event is append-only: UPDATE/DELETE are no-ops, TRUNCATE still clears', async () => {
+    const { agent, serviceUser } = await makeAgent();
+    await repo.appendAuditEvent({
+      principalId: serviceUser.principalId,
+      agentId: agent.id,
+      action: 'pr.create',
+      target: 'PR-9',
+    });
+
+    // UPDATE is rewritten to NOTHING by the rule → row unchanged.
+    await pool.query(`UPDATE audit_event SET action = 'x'`);
+    let events = await repo.listAuditEvents(serviceUser.principalId);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.action).toBe('pr.create');
+
+    // DELETE is rewritten to NOTHING by the rule → row still present.
+    await pool.query(`DELETE FROM audit_event`);
+    events = await repo.listAuditEvents(serviceUser.principalId);
+    expect(events).toHaveLength(1);
+
+    // TRUNCATE bypasses rules → row cleared (this is how test cleanup works).
+    await pool.query(`TRUNCATE audit_event`);
+    events = await repo.listAuditEvents(serviceUser.principalId);
+    expect(events).toHaveLength(0);
+  });
+
+  it('withTransaction reuses a caller-supplied client tx (no nested BEGIN; rolls back with the outer)', async () => {
+    const { agent, serviceUser } = await makeAgent();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // A repo bound to an in-flight client: withTransaction must REUSE this tx
+      // (isPool(client) === false), not try to open a nested one. With the old
+      // connect()-based isPool this misclassified the client as a Pool.
+      const txRepo = new PgIdentityRepository(client);
+      await txRepo.withTransaction((r) =>
+        r.appendAuditEvent({ principalId: serviceUser.principalId, agentId: agent.id, action: 'tx.test' })
+      );
+      // Visible inside the outer tx (same client)...
+      const inTx = await client.query(`SELECT count(*)::int AS c FROM audit_event`);
+      expect(inTx.rows[0]!.c).toBe(1);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+    // ...and gone after the OUTER rollback — proving it joined the caller's tx
+    // rather than committing independently.
+    const after = await repo.listAuditEvents(serviceUser.principalId);
+    expect(after).toHaveLength(0);
   });
 });
