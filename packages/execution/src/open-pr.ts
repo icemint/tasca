@@ -21,6 +21,13 @@ import type { OpenPrInput, OpenPrResult } from './port.js';
 
 const execFileAsync = promisify(execFile);
 
+/** Minimal exec surface, injectable so the idempotency path is unit-testable. */
+export type ExecFn = (
+  file: string,
+  args: string[],
+  opts: { cwd: string }
+) => Promise<{ stdout: string; stderr: string }>;
+
 const PR_URL_RE = /https?:\/\/\S+/;
 
 // Branch/remote names are derived from task labels (port.ts) — i.e. influenced
@@ -34,7 +41,7 @@ function assertSafeRef(kind: string, v: string): void {
   }
 }
 
-export async function openPr(input: OpenPrInput): Promise<OpenPrResult> {
+export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): Promise<OpenPrResult> {
   const { cwd, branch, title } = input;
   const remote = input.remote ?? 'origin';
 
@@ -44,7 +51,7 @@ export async function openPr(input: OpenPrInput): Promise<OpenPrResult> {
 
   // 1. Push the branch and set upstream. `--` terminates option parsing so the
   //    validated remote/branch can never be treated as flags (belt-and-suspenders).
-  await execFileAsync('git', ['push', '--set-upstream', '--', remote, branch], { cwd });
+  await exec('git', ['push', '--set-upstream', '--', remote, branch], { cwd });
 
   // 2. gh pr create. Use a temp body file so multiline Markdown is preserved
   //    exactly (the vendored handler does the same).
@@ -66,8 +73,22 @@ export async function openPr(input: OpenPrInput): Promise<OpenPrResult> {
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync('gh', ghArgs, { cwd });
-    const out = `${stdout ?? ''}\n${stderr ?? ''}`;
+    let out: string;
+    try {
+      const { stdout, stderr } = await exec('gh', ghArgs, { cwd });
+      out = `${stdout ?? ''}\n${stderr ?? ''}`;
+    } catch (err) {
+      // Idempotency: GitHub rejects a second open PR for the same head branch, so
+      // `gh pr create` fails with "already exists" on a re-drive. That is NOT a
+      // failure — return the EXISTING PR rather than throwing (which would churn
+      // the task) or risking a duplicate. Re-throw anything that isn't that case.
+      const msg = errText(err);
+      if (!/already exists/i.test(msg)) throw err;
+      const existing = await existingPrUrl(exec, cwd, branch);
+      if (existing) return { url: existing };
+      // "already exists" but we couldn't read it back — surface the original error.
+      throw err;
+    }
     const match = out.match(PR_URL_RE);
     if (!match) {
       throw new Error(`open-pr: could not parse a PR URL from gh output:\n${out.trim()}`);
@@ -81,5 +102,29 @@ export async function openPr(input: OpenPrInput): Promise<OpenPrResult> {
         // best-effort cleanup
       }
     }
+  }
+}
+
+/** Extract a string message from an execFile rejection (carries stdout/stderr). */
+function errText(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { stderr?: string; stdout?: string; message?: string };
+    return `${e.stderr ?? ''}\n${e.stdout ?? ''}\n${e.message ?? ''}`;
+  }
+  return String(err);
+}
+
+/** Look up the URL of the existing open PR for `branch` (the idempotency fallback). */
+async function existingPrUrl(exec: ExecFn, cwd: string, branch: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec(
+      'gh',
+      ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--jq', '.[0].url // empty'],
+      { cwd }
+    );
+    const url = (stdout ?? '').trim().match(PR_URL_RE);
+    return url ? url[0] : null;
+  } catch {
+    return null;
   }
 }
