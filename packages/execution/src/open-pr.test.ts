@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { openPr, type ExecFn } from './open-pr.js';
+import { ExecutionError } from './port.js';
 
 // Unit tests for the openPr idempotency path — no real git/gh. An injected ExecFn
 // stands in for execFile, dispatching by the command + args.
@@ -93,5 +94,60 @@ describe('openPr', () => {
   it('rejects an unsafe headBranch', async () => {
     const exec = fakeExec({});
     await expect(openPr({ ...input, headBranch: '--evil' }, exec)).rejects.toThrow(/unsafe/);
+  });
+
+  it('wraps a git push failure as ExecutionError kind "push"', async () => {
+    const exec = fakeExec({
+      push: async () => {
+        throw Object.assign(new Error('push failed'), { stderr: 'remote rejected' });
+      },
+    });
+    const err = await openPr(input, exec).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).kind).toBe('push');
+    expect((err as ExecutionError).cause).toBeInstanceOf(Error);
+  });
+
+  it('wraps a non-idempotent gh pr create failure as ExecutionError kind "pr-create"', async () => {
+    const exec = fakeExec({
+      create: async () => {
+        throw Object.assign(new Error('boom'), { stderr: 'GraphQL: permission denied' });
+      },
+    });
+    const err = await openPr(input, exec).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).kind).toBe('pr-create');
+    expect((err as ExecutionError).cause).toBeInstanceOf(Error);
+  });
+
+  it('wraps "already exists" with an unreadable PR as ExecutionError kind "pr-create"', async () => {
+    const exec = fakeExec({
+      create: async () => {
+        throw Object.assign(new Error('exists'), { stderr: 'already exists' });
+      },
+      list: async () => ({ stdout: '\n', stderr: '' }),
+    });
+    const err = await openPr(input, exec).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).kind).toBe('pr-create');
+  });
+
+  it('wraps an unparseable gh output as ExecutionError kind "pr-parse"', async () => {
+    const exec = fakeExec({ create: async () => ({ stdout: 'no url here', stderr: '' }) });
+    const err = await openPr(input, exec).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).kind).toBe('pr-parse');
+  });
+
+  it('still returns the existing PR on "already exists" (idempotency unchanged)', async () => {
+    const exec = fakeExec({
+      create: async () => {
+        throw Object.assign(new Error('failed'), {
+          stderr: 'a pull request for branch "tasca/icemint-demo-42" already exists',
+        });
+      },
+      list: async () => ({ stdout: `${PR1}\n`, stderr: '' }),
+    });
+    expect(await openPr(input, exec)).toEqual({ url: PR1 });
   });
 });

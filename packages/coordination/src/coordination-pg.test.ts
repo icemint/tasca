@@ -44,6 +44,7 @@ const okExecution: ExecutionPort = {
   spawnAgent(): AgentProcessHandle {
     return { pid: 1, onData() {}, onExit(l) { queueMicrotask(() => l(0)); }, onError() {}, kill() {} };
   },
+  killAgent() {},
   async openPr(): Promise<OpenPrResult> {
     return { url: 'https://github.com/icemint/tasca/pull/7' };
   },

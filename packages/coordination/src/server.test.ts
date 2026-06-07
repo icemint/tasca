@@ -85,6 +85,7 @@ const noopExecution: ExecutionPort = {
   spawnAgent(): AgentProcessHandle {
     return { pid: 1, onData() {}, onExit(l) { queueMicrotask(() => l(0)); }, onError() {}, kill() {} };
   },
+  killAgent() {},
   async openPr() { return { url: 'https://example/pr/1' }; },
   async close() {},
 };

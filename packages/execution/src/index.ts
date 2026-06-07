@@ -2,9 +2,11 @@
 //
 // A soft-fork overlay over the vendored Emdash execution core (git submodule at
 // vendor/emdash, pinned to v0.4.48). Exposes a clean ExecutionPort and a
-// createExecution() factory; depends only on @tasca/domain / @tasca/contracts
-// (Stage-1 scaffold §1.3 boundary).
+// createExecution() factory. Self-contained: it imports no other @tasca/*
+// package today (it may only import @tasca/domain / @tasca/contracts per the
+// Stage-1 scaffold §1.3 boundary, but currently needs neither).
 
+export { ExecutionError } from './port.js';
 export type {
   ExecutionPort,
   Worktree,
@@ -13,11 +15,10 @@ export type {
   SpawnAgentInput,
   OpenPrInput,
   OpenPrResult,
-  ExecutionTaskRef,
 } from './port.js';
 
 export { createExecution } from './factory.js';
-export type { CreateExecutionOptions } from './factory.js';
+export type { CreateExecutionOptions, VendorServices } from './factory.js';
 
 export { makeSecretStore } from './secret-store.js';
 export type { SecretStore, SecretBackend, MakeSecretStoreOptions } from './secret-store.js';

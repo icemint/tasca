@@ -15,8 +15,7 @@
     "harness:sc17": "tsx harness/sc1-7.mjs"
   },
   "dependencies": {
-    "@tasca/contracts": "workspace:*",
-    "@tasca/domain": "workspace:*"
+    "@tasca/contracts": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.19.2"
