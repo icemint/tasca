@@ -102,7 +102,9 @@ async function applySchema(pool: Pool): Promise<void> {
 /**
  * The webhook verifier wired from the real Shortcut adapter. HMAC-SHA-256 verify
  * over the raw body; the envelope `id` is the idempotency key; parse maps
- * owner_ids.adds ∩ registered Shortcut agent-user ids → AdapterEvents.
+ * owner_ids.adds ∩ registered Shortcut agent-user ids → AdapterEvents, then drops
+ * our own round-tripped writes (parseAndDedupe: an owner-add whose actor
+ * `member_id` is the added agent itself is the agent acting, not an assignment).
  *
  * `registeredShortcutIds` is a boot-time snapshot of the active shortcut
  * identity bindings. A roster change requires a worker restart to take effect —
@@ -126,7 +128,7 @@ function shortcutVerifier(secret: string, registeredShortcutIds: ReadonlySet<str
       return { platform: 'shortcut', externalEventId: String(id), payload: v };
     },
     parse(verified: VerifiedWebhook): AdapterEvent[] {
-      return adapter.parseEvent(verified.payload as VerifiedEvent, registeredShortcutIds);
+      return adapter.parseAndDedupe(verified.payload as VerifiedEvent, registeredShortcutIds);
     },
   };
 }

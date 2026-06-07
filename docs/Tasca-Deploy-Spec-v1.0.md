@@ -125,6 +125,7 @@ The CAS / coordination store: `task` (the CAS target), identity tables, `routing
 | `ANTHROPIC_API_KEY` | ✅ carry-over | agent model key (mirror of the Actions secret) |
 | `TASCA_AGENT_GH_TOKEN` | 🆕 new (promote `SPIKE_GH_TOKEN` → prod) | the token agents use to push branches + open PRs |
 | `SHORTCUT_WEBHOOK_SECRET` | 🆕 new | HMAC secret to verify the Outgoing Webhook v1 `Payload-Signature` |
+| `SHORTCUT_API_TOKEN` | 🆕 new, optional | Workspace **admin** token — used ONLY by the one-shot `shortcut:register-webhook` command (§7) to create the outgoing webhook. Ungated (distinct from the gated per-agent tokens below); not read by the running worker. |
 | `TASCA_SECRET_STORE_KEY` | 🆕 new | 32-byte key for `@tasca/execution` SecretStore AES-256-GCM fallback (no keytar in-container) |
 | `EMDASH_DB_FILE` | 🆕 new | execution-local SQLite path on the volume, e.g. `/data/execution.sqlite` |
 | `TASCA_WORKTREE_ROOT` | 🆕 new | git worktree root on the volume, e.g. `/data/worktrees` |
@@ -215,7 +216,12 @@ Do these in order. Items 1–2 are likely already done (carry-over).
 4. **worker.** New resource → **Docker Image** → `ghcr.io/icemint/tasca-worker:sha-<any>` (the CD will repoint the tag) → port `8080` → domain `api.tasca.dev` → HTTP healthcheck `/healthz` → attach a persistent volume at `/data` → set the §3.3 env vars (`DATABASE_URL` from step 3, `ANTHROPIC_API_KEY`, `TASCA_AGENT_GH_TOKEN`, `SHORTCUT_WEBHOOK_SECRET`, `TASCA_SECRET_STORE_KEY`, `EMDASH_DB_FILE=/data/execution.sqlite`, `TASCA_WORKTREE_ROOT=/data/worktrees`, `PORT=8080`) → ensure it’s on the `tasca` network with `postgres`.
 5. **(existing) website + app** — no change; they already deploy.
 6. **DNS.** Point `api.tasca.dev` at the Coolify host (A/AAAA or CNAME) so Traefik can issue TLS for the worker.
-7. **Shortcut webhook.** Once the worker is green, register the Outgoing Webhook at `https://api.tasca.dev/webhooks/shortcut` with the secret you put in `SHORTCUT_WEBHOOK_SECRET` (the adapter’s `registerWebhook` can do this, or set it in the Shortcut UI).
+7. **Shortcut webhook.** Once the worker is green, register the Outgoing Webhook at `https://api.tasca.dev/webhooks/shortcut` with the secret you put in `SHORTCUT_WEBHOOK_SECRET`. Run the one-shot command (needs a workspace admin token):
+   ```
+   SHORTCUT_API_TOKEN=<admin-token> SHORTCUT_WEBHOOK_SECRET=<same-secret-as-worker> \
+     pnpm --filter @tasca/coordination shortcut:register-webhook
+   ```
+   It prints the created webhook id (deletable later) and exits non-zero on failure. (Or set the webhook in the Shortcut UI.) The worker self-dedupes its own round-tripped writes via the actor `member_id`.
 
 ---
 
