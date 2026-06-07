@@ -18,6 +18,7 @@
 // Everything I/O is a port; this module is pure composition. Tests inject fakes;
 // the composition root (createCoordination) injects the real Postgres/exec impls.
 
+import { createHash } from 'node:crypto';
 import {
   estimateTier,
   matchCapability,
@@ -33,7 +34,7 @@ import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus } from '@tasca/domain';
 import type { ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
-import type { StatusReporter } from './ports';
+import type { StatusReporter, Logger } from './ports';
 
 /**
  * Supplies the routing candidates (capability profile + live state + active
@@ -77,6 +78,8 @@ export interface OrchestrationDeps {
   breakerThreshold?: number;
   /** Per-project concurrency limit for the dispatch gate. */
   perProjectLimit?: number;
+  /** Structured logger; used to surface best-effort finalize failures (never throws). */
+  logger?: Logger;
 }
 
 export type OrchestrationOutcome =
@@ -184,6 +187,18 @@ export async function orchestrateTaskAssigned(
       payload: { tier: estimate.tier },
     });
 
+    // Idempotency guard: a prior attempt may have opened + recorded a PR, then
+    // failed a later (finalize) step before the loop returned, leaving the task
+    // re-drivable. Re-running the agent + opening a SECOND PR on a real customer
+    // repo is the worst outcome — so if a PR is already recorded, skip dispatch
+    // entirely and re-finalize (best-effort) against the existing PR.
+    const existingPrs = await deps.store.listPullRequestsForTask(task.id);
+    if (existingPrs.length > 0) {
+      const prUrl = existingPrs[0]!.url;
+      await finalizeDispatch(deps, task.id, event, winner.agentId, principalId, prUrl);
+      return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl };
+    }
+
     // §6.9-13 — dispatch → worktree + agent → PR → status-back.
     await deps.store.setStatus(task.id, 'executing');
 
@@ -200,34 +215,25 @@ export async function orchestrateTaskAssigned(
       cwd: worktree.path,
     });
 
-    // §6.11 — open the PR.
+    // §6.11 — open the PR, then record it. recordPullRequest is the durable proof
+    // the deliverable exists; everything after it is best-effort finalize that must
+    // NOT throw (a throw here would drive resetForRetry → re-drive → duplicate PR).
+    //
+    // The PR head is a DETERMINISTIC branch derived from the story, NOT the
+    // worktree's local branch (which carries a random per-attempt suffix). So if a
+    // re-drive ever reaches openPr again (e.g. recordPullRequest failed to commit
+    // before the row landed), it pushes to the SAME head and `gh pr create` returns
+    // the existing PR instead of opening a second one on the customer repo.
     const pr = await deps.execution.openPr({
       cwd: worktree.path,
       branch: worktree.branch,
+      headBranch: deterministicHeadBranch(event.externalStoryId),
       title: `Tasca: ${event.externalStoryId}`,
     });
     await deps.store.recordPullRequest({ taskId: task.id, url: pr.url });
-    await audit(deps, principalId, winner.agentId, event, {
-      action: 'pr.create',
-      target: task.id,
-      payload: { url: pr.url },
-    });
 
-    // §6.12 — status-back as the agent: comment + state → in_review + PR link.
-    await deps.status.postStatus({
-      platform: event.platform,
-      externalStoryId: event.externalStoryId,
-      agentId: winner.agentId,
-      state: 'in_review',
-      comment: 'PR opened',
-      prUrl: pr.url,
-    });
-    await deps.store.setStatus(task.id, 'in_review');
-    await audit(deps, principalId, winner.agentId, event, {
-      action: 'status.post',
-      target: task.id,
-      payload: { state: 'in_review', prUrl: pr.url },
-    });
+    // §6.12 — finalize (audit + status-back + in_review): best-effort, never throws.
+    await finalizeDispatch(deps, task.id, event, winner.agentId, principalId, pr.url);
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
@@ -266,6 +272,25 @@ export async function orchestrateTaskAssigned(
 }
 
 /**
+ * A stable PR head branch for a story, identical across re-drives so a repeated
+ * `openPr` reuses (and is recognized against) the same head — and INJECTIVE so two
+ * different stories never collide onto one head (a collision would make story B
+ * adopt story A's PR and get none of its own). The readable slug is for humans;
+ * the appended short hash of the RAW id guarantees uniqueness even when the slug
+ * is lossy (the GitHub id `owner/repo#number` sanitizes to a legal ref, but
+ * `owner/repo#42` and `owner-repo#42` would otherwise both slug to the same thing).
+ * Starts with a letter so it satisfies the open-pr SAFE_REF guard.
+ */
+function deterministicHeadBranch(externalStoryId: string): string {
+  const slug = externalStoryId
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 180);
+  const hash = createHash('sha256').update(externalStoryId).digest('hex').slice(0, 8);
+  return `tasca/${slug || 'task'}-${hash}`;
+}
+
+/**
  * Spawn the agent over the PTY and resolve when it exits cleanly; reject on a
  * non-zero exit or a transport error. This is what turns the streaming
  * ExecutionPort.spawnAgent into an awaitable run step.
@@ -282,6 +307,58 @@ function runAgentToCompletion(
       else reject(new Error(`agent exited with code ${code}`));
     });
   });
+}
+
+/**
+ * Finalize a dispatched task: status-back, mark in_review, and audit — all AFTER
+ * the PR is recorded. Every step is best-effort and CANNOT throw: the PR is the
+ * deliverable, and propagating a finalize failure would drive resetForRetry →
+ * re-drive → a second agent run and a duplicate PR. A failed step is logged; a
+ * left-behind status (e.g. still 'executing') is cosmetic and reconciles on a
+ * later delivery, never a duplicated customer PR.
+ */
+async function finalizeDispatch(
+  deps: OrchestrationDeps,
+  taskId: string,
+  event: AdapterEvent,
+  agentId: string,
+  principalId: string | null,
+  prUrl: string
+): Promise<void> {
+  const safe = async (step: string, fn: () => Promise<void>): Promise<void> => {
+    try {
+      await fn();
+    } catch (err) {
+      deps.logger?.error('finalize step failed (best-effort; PR already open)', {
+        taskId,
+        step,
+        prUrl,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  await safe('audit.pr.create', () =>
+    audit(deps, principalId, agentId, event, { action: 'pr.create', target: taskId, payload: { url: prUrl } })
+  );
+  await safe('status.post', () =>
+    deps.status.postStatus({
+      platform: event.platform,
+      externalStoryId: event.externalStoryId,
+      agentId,
+      state: 'in_review',
+      comment: 'PR opened',
+      prUrl,
+    })
+  );
+  await safe('set.in_review', () => deps.store.setStatus(taskId, 'in_review'));
+  await safe('audit.status.post', () =>
+    audit(deps, principalId, agentId, event, {
+      action: 'status.post',
+      target: taskId,
+      payload: { state: 'in_review', prUrl },
+    })
+  );
 }
 
 /** Best-effort audit append — skipped (not failed) when no principal resolves. */

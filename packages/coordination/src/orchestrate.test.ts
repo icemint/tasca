@@ -93,14 +93,23 @@ class FakeStore implements CoordinationStore {
   async recordRoutingDecision(input: { taskId: string; winnerAgentId: string | null }) {
     this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
   }
+  failRecordOnce = false;
   async recordPullRequest(input: { taskId: string; url: string }) {
+    if (this.failRecordOnce) {
+      this.failRecordOnce = false;
+      throw new Error('pull_request INSERT failed (connection dropped)');
+    }
     this.pullRequests.push(input);
   }
-  // read-side (unused by the orchestration tests)
+  // read-side
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }
   async listRoutingDecisions() { return []; }
-  async listPullRequestsForTask() { return []; }
+  async listPullRequestsForTask(taskId: string) {
+    return this.pullRequests
+      .filter((p) => p.taskId === taskId)
+      .map((p) => ({ url: p.url, state: 'open' as const, createdAt: '2026-01-01T00:00:00Z' }));
+  }
   async listConnections() { return []; }
 }
 
@@ -136,10 +145,21 @@ function fakeHandle(opts: { exitCode?: number; error?: Error }): AgentProcessHan
 class FakeExecution implements ExecutionPort {
   spawnCalls = 0;
   prCalls = 0;
+  reserveCalls = 0;
+  /** Distinct PRs actually opened (keyed by head) — a duplicate would bump this past 1. */
+  distinctPrs = 0;
+  private readonly openedHeads = new Map<string, string>();
   constructor(private readonly behavior: { spawnExitCode?: number; spawnError?: Error; prError?: Error } = {}) {}
   async initDb() {}
   async reserveWorktree(input: ReserveWorktreeInput): Promise<Worktree> {
-    return { path: `/tmp/wt/${input.taskLabel}`, branch: `tasca/${input.taskLabel}`, repoPath: input.repoPath };
+    // Mirror the vendored WorktreeService: a fresh, RANDOM-suffixed local branch
+    // per attempt (so the PR head must come from the deterministic headBranch).
+    this.reserveCalls += 1;
+    return {
+      path: `/tmp/wt/${input.taskLabel}-${this.reserveCalls}`,
+      branch: `tasca/local-${this.reserveCalls}`,
+      repoPath: input.repoPath,
+    };
   }
   spawnAgent(_input: SpawnAgentInput): AgentProcessHandle {
     this.spawnCalls += 1;
@@ -148,10 +168,18 @@ class FakeExecution implements ExecutionPort {
       ...(this.behavior.spawnError !== undefined ? { error: this.behavior.spawnError } : {}),
     });
   }
-  async openPr(_input: OpenPrInput): Promise<OpenPrResult> {
+  async openPr(input: OpenPrInput): Promise<OpenPrResult> {
     this.prCalls += 1;
     if (this.behavior.prError) throw this.behavior.prError;
-    return { url: 'https://github.com/icemint/tasca/pull/42' };
+    // Model GitHub: one open PR per head branch. A repeated head returns the
+    // existing PR (idempotent); a NEW head opens a new PR.
+    const head = input.headBranch ?? input.branch;
+    const existing = this.openedHeads.get(head);
+    if (existing) return { url: existing };
+    this.distinctPrs += 1;
+    const url = `https://github.com/icemint/tasca/pull/${41 + this.distinctPrs}`;
+    this.openedHeads.set(head, url);
+    return { url };
   }
   async close() {}
 }
@@ -442,5 +470,83 @@ describe('orchestrateTaskAssigned — lost claim (race loser)', () => {
     const outcome = await orchestrateTaskAssigned(EVENT, deps);
     expect(outcome.kind).toBe('lost_claim');
     expect(execution.spawnCalls).toBe(0);
+  });
+});
+
+describe('orchestrateTaskAssigned — duplicate-PR guard (#198)', () => {
+  it('does NOT re-run the agent or open a second PR when a PR is already recorded', async () => {
+    // Simulate a re-drive: the task is routable again (a prior attempt was reset
+    // for retry) but it ALREADY has a recorded PR from that prior attempt.
+    const store = new FakeStore();
+    const seeded = await store.getOrCreateTask({
+      externalStoryId: EVENT.externalStoryId,
+      platform: 'shortcut',
+      repoRef: '/repos/demo',
+    });
+    await store.recordPullRequest({ taskId: seeded.id, url: 'https://github.com/icemint/tasca/pull/7' });
+
+    const execution = new FakeExecution();
+    const status = new FakeStatus();
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit: new FakeAudit() }));
+
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.taskId).toBe(seeded.id);
+    expect(outcome.prUrl).toBe('https://github.com/icemint/tasca/pull/7'); // the EXISTING PR
+    // The guard skipped dispatch: no agent re-run, no second PR.
+    expect(execution.spawnCalls).toBe(0);
+    expect(execution.prCalls).toBe(0);
+    expect(store.pullRequests).toHaveLength(1);
+    // Finalize ran best-effort against the existing PR (status-back attempted once).
+    expect(status.updates).toHaveLength(1);
+  });
+
+  it('re-drive after a recordPullRequest failure reuses the deterministic head — no second PR', async () => {
+    // The residual window: openPr succeeds (PR on GitHub) but recordPullRequest
+    // fails before the row lands → catch → resetForRetry → routable. On re-delivery
+    // the pre-dispatch guard sees no recorded PR, so it re-dispatches: a DIFFERENT
+    // local worktree branch, but the SAME deterministic head → openPr is recognized
+    // as the existing PR rather than opening a second one on the customer repo.
+    const store = new FakeStore();
+    store.failRecordOnce = true;
+    const execution = new FakeExecution();
+
+    const first = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() })
+    );
+    expect(first.kind).toBe('failed'); // recordPullRequest threw → reset for retry
+
+    const second = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() })
+    );
+    expect(second.kind).toBe('dispatched');
+    expect(execution.reserveCalls).toBe(2); // two attempts, different local branches
+    expect(execution.distinctPrs).toBe(1); // but only ONE real PR — the duplicate is prevented
+    expect(store.pullRequests).toHaveLength(1); // recorded on the second attempt
+  });
+
+  it('a finalize-step failure after the PR is recorded does NOT re-drive (no duplicate PR)', async () => {
+    // status-back (a finalize step) throws AFTER recordPullRequest. The PR is the
+    // deliverable — a finalize failure must be swallowed, not drive resetForRetry,
+    // which would re-run the agent and open a second PR.
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const throwingStatus: StatusReporter = {
+      async postStatus() {
+        throw new Error('status-back transport blip');
+      },
+    };
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      { ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }), status: throwingStatus }
+    );
+
+    expect(outcome.kind).toBe('dispatched'); // NOT failed — the PR stands
+    const task = store.tasks.get((outcome as { taskId: string }).taskId)!;
+    expect(task.status).not.toBe('routable'); // not reset → won't be re-driven
+    expect(execution.prCalls).toBe(1); // exactly one PR opened
+    expect(store.pullRequests).toHaveLength(1);
   });
 });
