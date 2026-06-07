@@ -4,7 +4,11 @@
 export const TIERS = ['basic', 'low', 'medium', 'hard', 'ultra'] as const;
 export type Tier = (typeof TIERS)[number];
 
-const TIER_RANK: Record<Tier, number> = { basic: 0, low: 1, medium: 2, hard: 3, ultra: 4 };
+// Derived from TIERS order (the single source of truth) so rank can't drift from
+// the list — adding/reordering a tier updates the rank automatically.
+const TIER_RANK: Record<Tier, number> = Object.fromEntries(
+  TIERS.map((t, i) => [t, i])
+) as Record<Tier, number>;
 
 /** True when `have` is at least as capable as `need` (ultra ≥ hard ≥ … ≥ basic). */
 export function tierAtLeast(have: Tier, need: Tier): boolean {
@@ -30,6 +34,33 @@ export const TASK_STATUSES = [
   'needs_attention',
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * The legal status transitions — the state machine's edges, made explicit so a
+ * transition can be validated instead of any status being writable over any other.
+ * `done` is terminal (the post-merge state; not yet driven by the Stage-1 loop).
+ * Retry resets land on `routable`; the breaker trips to `needs_attention`, from
+ * which a human can re-drive back to `routable`.
+ */
+export const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
+  ingested: ['routable'],
+  // `routable` also carries the PRE-claim failure edges: a throw before the CAS
+  // (content fetch / tier estimate / match) runs the breaker while the task is
+  // still routable → reset stays `routable` (a version-bumping self-loop) below
+  // the threshold, or trips to `needs_attention` (§6.14).
+  routable: ['claimed', 'routable', 'needs_attention'],
+  claimed: ['executing', 'routable', 'needs_attention'],
+  executing: ['in_review', 'routable', 'needs_attention'],
+  in_review: ['done'],
+  done: [],
+  failed: ['routable', 'needs_attention'],
+  needs_attention: ['routable'],
+};
+
+/** True when `to` is a legal next status from `from` (per TASK_TRANSITIONS). */
+export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
+  return TASK_TRANSITIONS[from].includes(to);
+}
 
 export interface Task {
   id: string;
@@ -189,7 +220,7 @@ export interface AuditEvent {
 // terminal one, so the outcome also surfaces the row's CURRENT state (`found` +
 // `currentStatus` + `currentVersion`) — enough to build a correct re-query/retry
 // loop. On a WIN these describe the post-claim row.
-export interface ClaimResult {
+export interface ClaimOutcome {
   won: boolean;
   /** New version after a winning claim (was expectedVersion + 1). */
   newVersion: number | null;
@@ -201,16 +232,12 @@ export interface ClaimResult {
   currentVersion?: number | null;
 }
 
-export interface ClaimOutcome {
-  won: boolean;
-  newVersion: number | null;
-  /** False when no task row exists for the id. */
-  found?: boolean;
-  /** The row's current status (on loss: why the CAS missed; on win: 'claimed'). */
-  currentStatus?: TaskStatus | null;
-  /** The row's current version (lets a retry re-issue with the right expectedVersion). */
-  currentVersion?: number | null;
-}
+/**
+ * The result of `atomicClaim`. Structurally identical to the port's `ClaimOutcome`
+ * (the engine adds no fields) — kept as an alias so the routing layer can name its
+ * return without re-declaring the shape and risking drift.
+ */
+export type ClaimResult = ClaimOutcome;
 
 // ── Ports ───────────────────────────────────────────────────────────────────
 // Defined in domain so the engine (consumer) and db/adapters (implementers) can
