@@ -199,3 +199,57 @@ export const GitHubWebhookSchema = z
   })
   .passthrough();
 export type GitHubWebhook = z.infer<typeof GitHubWebhookSchema>;
+
+// ── GitHub App install events (installation / installation_repositories) ──────
+// When an org installs (or reconfigures) the App, GitHub delivers an
+// `installation` (or `installation_repositories`) event carrying the installation
+// id + the installing account login. That mapping (account → installation id) is
+// what write-back needs to act under the right installation, so we model just
+// those fields here (passthrough tolerates the rest) and expose a parse helper.
+
+/** The installation object: its numeric id + the account it belongs to. */
+export const GitHubInstallationSchema = z
+  .object({
+    id: z.number(),
+    account: z
+      .object({ login: z.string() })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+/** The install-event envelope: top-level `action` + the `installation` object. */
+export const GitHubInstallationEventSchema = z
+  .object({
+    action: z.string(),
+    installation: GitHubInstallationSchema,
+  })
+  .passthrough();
+export type GitHubInstallationEvent = z.infer<typeof GitHubInstallationEventSchema>;
+
+/** The account→installation mapping an install event carries (or null if absent). */
+export interface InstallationMapping {
+  installationId: string;
+  /** The installing account/org login — the `owner` half of `owner/repo`. */
+  accountLogin: string;
+}
+
+/**
+ * Parse a verified GitHub webhook body into the install mapping it carries, or
+ * null when the payload is not an install event with a resolvable account. Pure +
+ * total: a malformed or non-install body returns null (never throws), so the
+ * server can call it unconditionally and act only on a non-null result.
+ */
+export function parseInstallationEvent(rawBody: string): InstallationMapping | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawBody);
+  } catch {
+    return null;
+  }
+  const parsed = GitHubInstallationEventSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const login = parsed.data.installation.account?.login;
+  if (!login) return null;
+  return { installationId: String(parsed.data.installation.id), accountLogin: login };
+}

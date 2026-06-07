@@ -17,6 +17,8 @@ import type { AdapterEvent } from '@tasca/contracts';
  * the concrete impl from the `agentId`.
  */
 export interface StatusUpdate {
+  /** The source platform — routes the update to the right reporter. */
+  platform: 'shortcut' | 'github' | 'linear';
   /** The platform story/issue the update targets (Task.externalStoryId). */
   externalStoryId: string;
   /** The agent whose native identity authors the update. */

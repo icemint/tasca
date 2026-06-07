@@ -8,6 +8,7 @@ import {
   type VerifiedEvent,
 } from '@tasca/contracts';
 import type { IdentityBinding, Platform } from '@tasca/domain';
+import { GitHubAppClient } from './github-app-client';
 
 // @tasca/adapters — the GitHub platform adapter (the second PlatformAdapter,
 // mirroring the Shortcut adapter). GitHub ISSUES are a work SOURCE here: assigning
@@ -28,8 +29,8 @@ import type { IdentityBinding, Platform } from '@tasca/domain';
 // Boundary: imports only @tasca/{domain,contracts} + node builtins.
 // NO new runtime deps — node:crypto / node:fetch only.
 
-const GATED_MESSAGE =
-  'gated: GitHub App write-back not yet built/installed — see docs/Tasca-GitHub-Kickoff-Brief.md (per-customer GitHub App; provisioning + postStatus are Phase 2)';
+const GATED_PROVISION_MESSAGE =
+  'gated: GitHub identity provisioning not yet built — see docs/Tasca-GitHub-Kickoff-Brief.md (per-agent native identity is Phase 2)';
 
 /** The header GitHub signs the raw body into: `sha256=<hex>` (HMAC-SHA-256). */
 const SIGNATURE_HEADER = 'x-hub-signature-256';
@@ -53,6 +54,29 @@ export interface GitHubAdapterConfig {
   apiBase?: string;
   /** fetch override (tests). Defaults to global fetch (node:fetch). */
   fetchImpl?: typeof fetch;
+  /**
+   * The GitHub App client used for write-back (`postIssueStatus`). Pass a
+   * pre-built client, OR `{appId, privateKey}` to have the adapter construct one
+   * (sharing apiBase/fetchImpl). Absent → write-back throws (the App is not
+   * configured); intake (verify/parse) is unaffected.
+   */
+  appClient?: GitHubAppClient;
+  /** App credentials, used to construct a GitHubAppClient when `appClient` is absent. */
+  appId?: string | number;
+  privateKey?: string;
+}
+
+/** A status-back to a GitHub issue: a comment + an optional close, under the App. */
+export interface PostIssueStatusInput {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  /** The installation under which to act (resolved per workspace). */
+  installationId: string;
+  /** The issue-comment body to post (already includes any attribution trailer). */
+  commentBody: string;
+  /** When true, also PATCH the issue to `state: 'closed'` after commenting. */
+  closeIssue?: boolean;
 }
 
 /**
@@ -108,6 +132,8 @@ export class GitHubAdapter implements PlatformAdapter {
   private readonly selfLogins: ReadonlySet<string>;
   private readonly apiBase: string;
   private readonly fetchImpl: typeof fetch;
+  /** App client for write-back; null when the App is not configured. */
+  private readonly appClient: GitHubAppClient | null;
 
   constructor(config: GitHubAdapterConfig) {
     if (!config.webhookSecret) {
@@ -119,6 +145,20 @@ export class GitHubAdapter implements PlatformAdapter {
     this.selfLogins = config.selfLogins ?? new Set();
     this.apiBase = (config.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.fetchImpl = config.fetchImpl ?? fetch;
+    // Write-back client: an explicit client wins; otherwise build one from App
+    // creds (sharing apiBase/fetchImpl) when both are present; else null (gated).
+    if (config.appClient) {
+      this.appClient = config.appClient;
+    } else if (config.appId !== undefined && config.privateKey) {
+      this.appClient = new GitHubAppClient({
+        appId: config.appId,
+        privateKey: config.privateKey,
+        apiBase: this.apiBase,
+        fetchImpl: this.fetchImpl,
+      });
+    } else {
+      this.appClient = null;
+    }
   }
 
   /**
@@ -270,22 +310,45 @@ export class GitHubAdapter implements PlatformAdapter {
   }
 
   /**
+   * Write-back: post a status comment to an issue (and optionally close it) under
+   * the GitHub App installation. Acquires an installation token via the App client
+   * (in-memory cached), then `POST /repos/{owner}/{repo}/issues/{n}/comments` with
+   * `{body}`; when `closeIssue`, also `PATCH /repos/{owner}/{repo}/issues/{n}`
+   * with `{state:'closed'}`. Throws on a non-2xx (the worker reporter decides
+   * whether to swallow or propagate) and when the App is not configured.
+   */
+  async postIssueStatus(input: PostIssueStatusInput): Promise<void> {
+    if (!this.appClient) {
+      throw new Error(
+        'github postIssueStatus: GitHub App not configured (appClient / appId+privateKey required)'
+      );
+    }
+    const { token } = await this.appClient.getInstallationToken(input.installationId);
+    const base = `/repos/${input.owner}/${input.repo}/issues/${input.issueNumber}`;
+    await this.appClient.request(token, 'POST', `${base}/comments`, { body: input.commentBody });
+    if (input.closeIssue) {
+      await this.appClient.request(token, 'PATCH', base, { state: 'closed' });
+    }
+  }
+
+  /**
    * GATED — provision/link the agent's native GitHub identity. Throws until the
-   * GitHub-App-vs-PAT decision is made; do NOT implement here. See
+   * per-agent identity model is built; do NOT implement here. See
    * docs/Tasca-GitHub-Kickoff-Brief.md.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async provisionIdentity(_agentId: string, _workspaceConn: unknown): Promise<IdentityBinding> {
-    throw new Error(GATED_MESSAGE);
+    throw new Error(GATED_PROVISION_MESSAGE);
   }
 
   /**
-   * GATED — status-back (issue comment + state + PR link) under the agent's GitHub
-   * identity. Throws until the App-vs-PAT decision is made; the attribution path
-   * depends on it. See docs/Tasca-GitHub-Kickoff-Brief.md.
+   * The thin PlatformAdapter status seam. Write-back is driven through
+   * `postIssueStatus` (which carries the installation id + owner/repo/issue the
+   * binding-shaped `StatusUpdate` does not), so this overload is unused — it
+   * throws pointing at the real entrypoint rather than the old generic gated note.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async postStatus(_binding: IdentityBinding, _update: StatusUpdate): Promise<void> {
-    throw new Error(GATED_MESSAGE);
+    throw new Error('github postStatus: use postIssueStatus(...) for GitHub write-back');
   }
 }

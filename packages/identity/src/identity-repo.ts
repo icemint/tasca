@@ -332,6 +332,27 @@ export class PgIdentityRepository {
     );
   }
 
+  /**
+   * Read the agent's delegation (human-of-record + attribution label), or null
+   * when none is set. The write-back reporter uses `attributionLabel` as the
+   * operator-configured attribution trailer on the issue comment.
+   */
+  async getDelegation(agentId: string): Promise<Delegation | null> {
+    const res = await this.db.query<DelegationRow>(
+      `SELECT agent_id, on_behalf_of_user_id, attribution_label
+         FROM delegation WHERE agent_id = $1`,
+      [agentId]
+    );
+    const row = res.rows[0];
+    return row
+      ? {
+          agentId: row.agent_id,
+          onBehalfOfUserId: row.on_behalf_of_user_id,
+          attributionLabel: row.attribution_label,
+        }
+      : null;
+  }
+
   // ── Audit ────────────────────────────────────────────────────────────────────
 
   /**
@@ -409,6 +430,12 @@ interface IdentityBindingRow {
   external_handle: string | null;
   credential_ref: string | null;
   state: string;
+}
+
+interface DelegationRow {
+  agent_id: string;
+  on_behalf_of_user_id: string;
+  attribution_label: string;
 }
 
 interface AuditEventRow {

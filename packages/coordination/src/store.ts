@@ -141,6 +141,23 @@ export interface CoordinationStore {
   /** Persist the PR a run opened and link it to the task. */
   recordPullRequest(input: { taskId: string; url: string }): Promise<void>;
 
+  // ── GitHub App installation (write-back installation resolution) ──────────────
+
+  /**
+   * Record (or update) the GitHub App installation for a workspace. The
+   * `workspaceId` is the GitHub account/org login (the `owner` half of an
+   * `owner/repo`); upserts on the platform_connection UNIQUE(platform,workspace_id)
+   * with platform='github'. The install webhook is the source of this mapping.
+   */
+  upsertGitHubInstallation(input: { workspaceId: string; installationId: string }): Promise<void>;
+
+  /**
+   * Resolve the GitHub App installation id for a repo owner (account/org login),
+   * or null when no install is recorded for it. The status reporter splits
+   * `externalStoryId` ("owner/repo#number") to get the owner.
+   */
+  getInstallationIdForOwner(owner: string): Promise<string | null>;
+
   // ── Read-side (the read-only API serves these; query-only, no writes) ───────
 
   /** List task summaries, newest first; optionally filtered by status, capped by limit. */
@@ -312,6 +329,32 @@ export class PgCoordinationStore implements CoordinationStore {
       `INSERT INTO pull_request (id, task_id, url) VALUES ($1,$2,$3)`,
       [randomUUID(), input.taskId, input.url]
     );
+  }
+
+  // ── GitHub App installation ───────────────────────────────────────────────────
+
+  async upsertGitHubInstallation(input: {
+    workspaceId: string;
+    installationId: string;
+  }): Promise<void> {
+    // Upsert on UNIQUE(platform, workspace_id) with platform='github'. The no-op
+    // for everything but installation_id keeps an existing connection's health.
+    await this.db.query(
+      `INSERT INTO platform_connection (id, platform, workspace_id, installation_id)
+       VALUES ($1,'github',$2,$3)
+       ON CONFLICT (platform, workspace_id) DO UPDATE SET
+         installation_id = EXCLUDED.installation_id`,
+      [randomUUID(), input.workspaceId, input.installationId]
+    );
+  }
+
+  async getInstallationIdForOwner(owner: string): Promise<string | null> {
+    const res = await this.db.query<{ installation_id: string | null }>(
+      `SELECT installation_id FROM platform_connection
+        WHERE platform = 'github' AND workspace_id = $1`,
+      [owner]
+    );
+    return res.rows[0]?.installation_id ?? null;
   }
 
   // ── Read-side queries ───────────────────────────────────────────────────────

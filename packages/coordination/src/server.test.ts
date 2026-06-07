@@ -68,6 +68,8 @@ class CountingStore implements CoordinationStore {
   async incrementFailureCount() { return 1; }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
+  async upsertGitHubInstallation() {}
+  async getInstallationIdForOwner() { return null; }
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }

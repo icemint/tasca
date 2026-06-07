@@ -33,6 +33,14 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
   githubVerifier?: WebhookVerifier;
   /**
+   * Handles a GitHub `installation` / `installation_repositories` event off the
+   * verified raw body (records the account→installation mapping for write-back).
+   * Called on the github path only, AFTER a successful verify, BEFORE parse — it
+   * is best-effort and pure-additive: parse stays unaffected (an install event
+   * yields no AdapterEvents). Absent (App write-back unconfigured) → not called.
+   */
+  githubInstallationHandler?: (rawBody: string) => Promise<void>;
+  /**
    * The auth handler (GET/POST /api/auth/*). Consulted before the 404; returns
    * `true` when it owned the request. Absent (OAuth env unset) → /api/auth/*
    * falls through to a 404, keeping the feature flag OFF by default.
@@ -128,6 +136,21 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     if (!verified) {
       res.writeHead(401).end('invalid signature');
       return;
+    }
+
+    // GitHub install events carry the account→installation mapping write-back
+    // needs. Handle it on the verified body BEFORE the idempotency ledger/parse:
+    // it is best-effort (its own failure must not fail the webhook) and an install
+    // event produces no AdapterEvents, so the ledger/parse path is unaffected.
+    if (verified.platform === 'github' && deps.githubInstallationHandler) {
+      const handler = deps.githubInstallationHandler;
+      try {
+        await handler(rawBody);
+      } catch (err) {
+        safeLog('coordination: github install handler failed', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // Idempotency ledger: record this event as `received`. Only an event that

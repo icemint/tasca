@@ -86,7 +86,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, task CASCADE');
+    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
     await pool.query('TRUNCATE audit_event, identity_binding, delegation, capability_profile, service_user, agent, rbac_role CASCADE');
     const created = await identity.createAgent({ name: 'Elvis', model: 'claude-sonnet', vendor: 'claude' });
     agentId = created.agent.id;
@@ -231,6 +231,36 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     // Exactly one ledger row regardless of redelivery count.
     const rows = await pool.query('SELECT count(*)::int AS c FROM webhook_event WHERE external_event_id=$1', ['evt-x']);
     expect(rows.rows[0].c).toBe(1);
+  });
+
+  it('github installation: upsert records the account→installation, lookup resolves it by owner', async () => {
+    expect(await store.getInstallationIdForOwner('icemint')).toBeNull();
+
+    await store.upsertGitHubInstallation({ workspaceId: 'icemint', installationId: '7700' });
+    expect(await store.getInstallationIdForOwner('icemint')).toBe('7700');
+
+    // Re-installing updates the id in place (one connection per owner).
+    await store.upsertGitHubInstallation({ workspaceId: 'icemint', installationId: '8800' });
+    expect(await store.getInstallationIdForOwner('icemint')).toBe('8800');
+    const rows = await pool.query(
+      `SELECT count(*)::int AS c FROM platform_connection WHERE platform='github' AND workspace_id=$1`,
+      ['icemint']
+    );
+    expect(rows.rows[0].c).toBe(1);
+
+    // An owner with no install resolves to null (honest, not a fabricated id).
+    expect(await store.getInstallationIdForOwner('someone-else')).toBeNull();
+  });
+
+  it('getDelegation: returns the attribution label, or null when unset', async () => {
+    expect(await identity.getDelegation(agentId)).toBeNull();
+    await identity.setDelegation({
+      agentId,
+      onBehalfOfUserId: 'user-1',
+      attributionLabel: 'On behalf of the platform team',
+    });
+    const d = await identity.getDelegation(agentId);
+    expect(d?.attributionLabel).toBe('On behalf of the platform team');
   });
 
   it('get-or-create: two deliveries for the same story yield ONE task row', async () => {

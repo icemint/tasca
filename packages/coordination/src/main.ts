@@ -30,10 +30,13 @@ import {
   SESSION_COOKIE,
 } from '@tasca/auth';
 import { createExecution } from '@tasca/execution';
-import { ShortcutAdapter, GitHubAdapter } from '@tasca/adapters';
-import type { AdapterEvent, VerifiedEvent } from '@tasca/contracts';
+import { ShortcutAdapter, GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
+import { PgIdentityRepository } from '@tasca/identity';
+import { parseInstallationEvent, type AdapterEvent, type VerifiedEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
+import { PgCoordinationStore } from './store';
+import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import type {
   StatusReporter,
@@ -196,6 +199,8 @@ async function main(): Promise<void> {
   const port = numericEnv('PORT') ?? 8080;
   const webhookSecret = process.env.SHORTCUT_WEBHOOK_SECRET ?? '';
   const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
+  const githubAppId = process.env.GITHUB_APP_ID ?? '';
+  const githubAppPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY ?? '';
   const dbFile = process.env.EMDASH_DB_FILE;
   const breakerThreshold = numericEnv('TASCA_BREAKER_THRESHOLD');
   const perProjectLimit = numericEnv('TASCA_PER_PROJECT_LIMIT');
@@ -240,6 +245,50 @@ async function main(): Promise<void> {
   const ghVerifier = githubSecret ? githubVerifier(githubSecret, registeredGitHubIds) : undefined;
   if (!githubSecret) {
     logger.info?.('GITHUB_WEBHOOK_SECRET unset — /webhooks/github disabled');
+  }
+
+  // GitHub write-back. Feature flag OFF by default: only when the App id AND the
+  // App private key AND the webhook secret are ALL set do we construct the App
+  // client + an App-configured GitHubAdapter + the GitHub status reporter + the
+  // install handler, and route github status-back to it. Otherwise the existing
+  // gated no-op stays injected (no-op write-back) — github intake still works.
+  const githubWritebackEnabled = Boolean(githubAppId && githubAppPrivateKey && githubSecret);
+  let statusReporter: StatusReporter = gatedStatusReporter;
+  let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
+  if (githubWritebackEnabled) {
+    const store = new PgCoordinationStore(pool);
+    const identity = new PgIdentityRepository(pool);
+    const appClient = new GitHubAppClient({
+      appId: githubAppId,
+      privateKey: githubAppPrivateKey,
+    });
+    const writebackAdapter = new GitHubAdapter({ webhookSecret: githubSecret, appClient });
+    const githubReporter = new GitHubStatusReporter({
+      store,
+      identity: {
+        getBinding: (agentId) => identity.getBinding(agentId, 'github'),
+        getDelegation: (agentId) => identity.getDelegation(agentId),
+      },
+      github: writebackAdapter,
+      logger,
+    });
+    statusReporter = routingStatusReporter({ github: githubReporter, fallback: gatedStatusReporter });
+    // The install webhook records the account→installation mapping write-back resolves.
+    githubInstallationHandler = async (rawBody: string) => {
+      const mapping = parseInstallationEvent(rawBody);
+      if (!mapping) return;
+      await store.upsertGitHubInstallation({
+        workspaceId: mapping.accountLogin,
+        installationId: mapping.installationId,
+      });
+      logger.info?.('github installation recorded', {
+        account: mapping.accountLogin,
+        installationId: mapping.installationId,
+      });
+    };
+    logger.info?.('github write-back enabled (App env present)');
+  } else {
+    logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
   }
 
   // Human OAuth login (GitHub + Google). Feature flag OFF by default: only when
@@ -297,12 +346,13 @@ async function main(): Promise<void> {
   const coordination = createCoordination({
     pool,
     execution,
-    status: gatedStatusReporter,
+    status: statusReporter,
     verifier,
     content: eventContentSource,
     agentIds,
     logger,
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
+    ...(githubInstallationHandler ? { githubInstallationHandler } : {}),
     ...(authHandler ? { authHandler } : {}),
     ...(verifySession ? { verifySession } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
@@ -317,6 +367,7 @@ async function main(): Promise<void> {
       shortcutBindings: registeredShortcutIds.size,
       githubBindings: githubBindingRows.rows.length,
       github: ghVerifier ? 'verifying' : 'disabled (no secret)',
+      githubWriteback: githubWritebackEnabled ? 'enabled' : 'disabled',
       webhooks: webhookSecret ? 'verifying' : 'rejecting (no secret)',
       auth: authHandler ? 'enabled' : 'disabled',
     });
