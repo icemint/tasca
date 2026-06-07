@@ -44,7 +44,11 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
  */
 export const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   ingested: ['routable'],
-  routable: ['claimed'],
+  // `routable` also carries the PRE-claim failure edges: a throw before the CAS
+  // (content fetch / tier estimate / match) runs the breaker while the task is
+  // still routable → reset stays `routable` (a version-bumping self-loop) below
+  // the threshold, or trips to `needs_attention` (§6.14).
+  routable: ['claimed', 'routable', 'needs_attention'],
   claimed: ['executing', 'routable', 'needs_attention'],
   executing: ['in_review', 'routable', 'needs_attention'],
   in_review: ['done'],

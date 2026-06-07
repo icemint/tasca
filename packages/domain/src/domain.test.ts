@@ -32,6 +32,9 @@ describe('task status transitions', () => {
     expect(isValidTransition('executing', 'routable')).toBe(true); // retry reset
     expect(isValidTransition('claimed', 'needs_attention')).toBe(true); // breaker trip
     expect(isValidTransition('needs_attention', 'routable')).toBe(true); // manual re-drive
+    // pre-claim failure path (a throw before the CAS, task still routable):
+    expect(isValidTransition('routable', 'needs_attention')).toBe(true); // pre-claim breaker trip
+    expect(isValidTransition('routable', 'routable')).toBe(true); // pre-claim retry reset (version bump)
     // illegal:
     expect(isValidTransition('done', 'routable')).toBe(false); // terminal
     expect(isValidTransition('routable', 'done')).toBe(false); // skips the machine
