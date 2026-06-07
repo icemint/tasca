@@ -54,27 +54,32 @@ export async function bindShortcutIdentity(
     throw new Error(`no service_user for agent ${input.agentId}; create the agent first`);
   }
 
-  const binding = await repo.upsertBinding({
-    agentId: input.agentId,
-    platform: 'shortcut',
-    externalId: input.shortcutAgentUserId,
-    ...(input.handle !== undefined ? { externalHandle: input.handle } : {}),
-    credentialRef: input.credentialRef,
-    state: 'active',
-  });
+  // Binding write + audit append commit together: if the audit insert fails
+  // after the binding write, both roll back — the credential is never changed
+  // without its audit row (the continuous-audit-trail guarantee).
+  return repo.withTransaction(async (tx) => {
+    const binding = await tx.upsertBinding({
+      agentId: input.agentId,
+      platform: 'shortcut',
+      externalId: input.shortcutAgentUserId,
+      ...(input.handle !== undefined ? { externalHandle: input.handle } : {}),
+      credentialRef: input.credentialRef,
+      state: 'active',
+    });
 
-  await repo.appendAuditEvent({
-    principalId: serviceUser.principalId,
-    agentId: input.agentId,
-    action: 'identity.binding.shortcut.bound',
-    target: input.shortcutAgentUserId,
-    platform: 'shortcut',
-    // Record only the binding id — never the credential_ref pointer (it reveals
-    // secret-store locations in the broadly-readable, append-only audit table).
-    payload: { bindingId: binding.id },
-  });
+    await tx.appendAuditEvent({
+      principalId: serviceUser.principalId,
+      agentId: input.agentId,
+      action: 'identity.binding.shortcut.bound',
+      target: input.shortcutAgentUserId,
+      platform: 'shortcut',
+      // Record only the binding id — never the credential_ref pointer (it reveals
+      // secret-store locations in the broadly-readable, append-only audit table).
+      payload: { bindingId: binding.id },
+    });
 
-  return binding;
+    return binding;
+  });
 }
 
 /**
@@ -92,20 +97,32 @@ export async function rotateShortcutCredential(
     throw new Error(`no service_user for agent ${agentId}`);
   }
 
-  const binding = await repo.rotateCredentialRef(agentId, 'shortcut', newCredentialRef, 'active');
-  if (!binding) {
-    throw new Error(`no shortcut binding for agent ${agentId} to rotate`);
-  }
+  // One transaction so the rotation + its audit row commit atomically, and so
+  // concurrent rotations serialize: lock the binding row FIRST (a second
+  // rotation blocks here until the first commits, then proceeds on the updated
+  // row) → rotate → audit. Result: serialized order, one audit row per rotation,
+  // no lost audit and no audit/credential mismatch.
+  return repo.withTransaction(async (tx) => {
+    const locked = await tx.lockBinding(agentId, 'shortcut');
+    if (!locked) {
+      throw new Error(`no shortcut binding for agent ${agentId} to rotate`);
+    }
 
-  await repo.appendAuditEvent({
-    principalId: serviceUser.principalId,
-    agentId,
-    action: 'identity.binding.shortcut.credential_rotated',
-    target: binding.externalId,
-    platform: 'shortcut',
-    // Mark that a rotation happened — never the new credential_ref pointer itself.
-    payload: { bindingId: binding.id, rotated: true },
+    const binding = await tx.rotateCredentialRef(agentId, 'shortcut', newCredentialRef, 'active');
+    if (!binding) {
+      throw new Error(`no shortcut binding for agent ${agentId} to rotate`);
+    }
+
+    await tx.appendAuditEvent({
+      principalId: serviceUser.principalId,
+      agentId,
+      action: 'identity.binding.shortcut.credential_rotated',
+      target: binding.externalId,
+      platform: 'shortcut',
+      // Mark that a rotation happened — never the new credential_ref pointer itself.
+      payload: { bindingId: binding.id, rotated: true },
+    });
+
+    return binding;
   });
-
-  return binding;
 }

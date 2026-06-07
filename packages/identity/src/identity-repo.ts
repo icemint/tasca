@@ -76,6 +76,38 @@ export class PgIdentityRepository {
   constructor(private readonly db: Queryable) {}
 
   /**
+   * Run `fn` inside a single transaction, passing it a repository scoped to the
+   * transaction's connection. Use this to make a multi-write flow atomic — e.g.
+   * a binding write + its audit append must commit together or not at all, so a
+   * credential change can never land without its audit row.
+   *
+   *   - If `this.db` is a Pool, check out a client, BEGIN, run
+   *     `fn(new PgIdentityRepository(client))`, COMMIT (ROLLBACK + rethrow on
+   *     error), and always release the client.
+   *   - If `this.db` is already a PoolClient, we are nested inside a caller's
+   *     transaction: just `return fn(this)` and reuse that transaction (no
+   *     nested BEGIN/COMMIT — the outermost call owns the boundary).
+   */
+  async withTransaction<T>(fn: (repo: PgIdentityRepository) => Promise<T>): Promise<T> {
+    if (!isPool(this.db)) {
+      // Already inside a transaction (PoolClient) — reuse the caller's tx.
+      return fn(this);
+    }
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(new PgIdentityRepository(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Create an agent together with its 1:1 service_user, generating a stable
    * internal `principal_id`. The agent starts with an EMPTY identity-binding set
    * — bindings are attached later per platform (see bindShortcutIdentity()).
@@ -276,6 +308,25 @@ export class PgIdentityRepository {
       [agentId]
     );
     return res.rows.map(mapBinding);
+  }
+
+  /**
+   * Lock the binding row for `(agentId, platform)` with `SELECT … FOR UPDATE`,
+   * returning it (or null if none exists). Only meaningful INSIDE a transaction
+   * (call via `withTransaction`): the row lock is held until the surrounding tx
+   * commits/rolls back, so concurrent rotations serialize on it — the second
+   * rotation blocks until the first commits, then proceeds on the updated row.
+   * Outside a transaction the lock is released immediately and buys nothing.
+   */
+  async lockBinding(agentId: string, platform: Platform): Promise<IdentityBinding | null> {
+    const res = await this.db.query<IdentityBindingRow>(
+      `SELECT id, agent_id, platform, external_id, external_handle, credential_ref, state
+         FROM identity_binding WHERE agent_id = $1 AND platform = $2
+         FOR UPDATE`,
+      [agentId, platform]
+    );
+    const row = res.rows[0];
+    return row ? mapBinding(row) : null;
   }
 
   async getBinding(agentId: string, platform: Platform): Promise<IdentityBinding | null> {
