@@ -324,7 +324,13 @@ export class GitHubAdapter implements PlatformAdapter {
       );
     }
     const { token } = await this.appClient.getInstallationToken(input.installationId);
-    const base = `/repos/${input.owner}/${input.repo}/issues/${input.issueNumber}`;
+    // Encode each path segment: owner/repo originate from the (verified) webhook
+    // payload, but encoding defends against any unexpected char breaking out of
+    // the path (traversal / request smuggling). issueNumber is coerced to a string.
+    const owner = encodeURIComponent(input.owner);
+    const repo = encodeURIComponent(input.repo);
+    const issue = encodeURIComponent(String(input.issueNumber));
+    const base = `/repos/${owner}/${repo}/issues/${issue}`;
     await this.appClient.request(token, 'POST', `${base}/comments`, { body: input.commentBody });
     if (input.closeIssue) {
       await this.appClient.request(token, 'PATCH', base, { state: 'closed' });
