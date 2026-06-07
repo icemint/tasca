@@ -15,7 +15,7 @@
 // platform's webhook delivery isn't held open on a full route+execute cycle.
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
-import type { AdapterEvent } from '@tasca/contracts';
+import { AdapterEventSchema, type AdapterEvent } from '@tasca/contracts';
 import type { CoordinationStore } from './store';
 import type { WebhookVerifier, Logger } from './ports';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
@@ -167,7 +167,17 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       return;
     }
 
-    const events: AdapterEvent[] = verifier.parse(verified);
+    // Validate parsed events through the shared trust-boundary schema before they
+    // drive orchestration. The fields derive from untrusted webhook input, so a
+    // malformed event (e.g. empty externalStoryId/agentExternalId) is dropped +
+    // logged here rather than reaching the loop. This is the adapter→coordination
+    // contract enforcement for AdapterEventSchema.
+    const events: AdapterEvent[] = [];
+    for (const candidate of verifier.parse(verified)) {
+      const parsed = AdapterEventSchema.safeParse(candidate);
+      if (parsed.success) events.push(parsed.data);
+      else safeLog('coordination: dropped malformed adapter event', { platform: verified.platform });
+    }
     const ledgerKey = {
       platform: verified.platform,
       externalEventId: verified.externalEventId,
