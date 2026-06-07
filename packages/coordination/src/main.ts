@@ -32,7 +32,7 @@ import {
   SESSION_COOKIE,
 } from '@tasca/auth';
 import { createExecution } from '@tasca/execution';
-import { ShortcutAdapter, GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
+import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent, type AdapterEvent, type VerifiedEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
@@ -49,6 +49,7 @@ import type {
 } from './ports';
 import type { RepoProvisioner, TaskContentSource } from './orchestrate';
 import { GitAppRepoProvisioner } from './repo-provisioner';
+import { shortcutVerifier } from './shortcut-verifier';
 
 /** Minimal console logger with structured context (JSON line per event). */
 const logger: Logger = {
@@ -97,40 +98,6 @@ async function applySchema(pool: Pool): Promise<void> {
   for (const ddl of statements) {
     await pool.query(ddl);
   }
-}
-
-/**
- * The webhook verifier wired from the real Shortcut adapter. HMAC-SHA-256 verify
- * over the raw body; the envelope `id` is the idempotency key; parse maps
- * owner_ids.adds ∩ registered Shortcut agent-user ids → AdapterEvents, then drops
- * our own round-tripped writes (parseAndDedupe: an owner-add whose actor
- * `member_id` is the added agent itself is the agent acting, not an assignment).
- *
- * `registeredShortcutIds` is a boot-time snapshot of the active shortcut
- * identity bindings. A roster change requires a worker restart to take effect —
- * dynamic reload is a Stage-1 follow-up, deliberately out of scope here.
- */
-function shortcutVerifier(secret: string, registeredShortcutIds: ReadonlySet<string>): WebhookVerifier {
-  const adapter = new ShortcutAdapter({ webhookSecret: secret });
-  return {
-    verify(raw: RawWebhook): VerifiedWebhook | null {
-      const v = adapter.verifyWebhook(raw.rawBody, raw.headers);
-      if (!v.ok) return null;
-      let payload: unknown;
-      try {
-        payload = JSON.parse(raw.rawBody);
-      } catch {
-        return null;
-      }
-      const id = (payload as { id?: unknown }).id;
-      if (id === undefined || id === null) return null;
-      // Carry the VerifiedEvent through so parse re-uses the verified raw body.
-      return { platform: 'shortcut', externalEventId: String(id), payload: v };
-    },
-    parse(verified: VerifiedWebhook): AdapterEvent[] {
-      return adapter.parseAndDedupe(verified.payload as VerifiedEvent, registeredShortcutIds);
-    },
-  };
 }
 
 /**

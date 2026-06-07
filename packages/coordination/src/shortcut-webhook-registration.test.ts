@@ -78,9 +78,27 @@ describe('registerShortcutWebhook', () => {
     const cap: Capture = {};
     await expect(
       registerShortcutWebhook(
-        { apiToken: 't', webhookSecret: 's' },
-        fakeFetch(cap, { ok: false, status: 401, body: { message: 'bad token' } })
+        { apiToken: 'admin-tok', webhookSecret: 'whsec-long-value' },
+        fakeFetch(cap, { ok: false, status: 401, body: { message: 'unauthorized' } })
       )
     ).rejects.toThrow(/registerWebhook failed/);
+  });
+
+  it('scrubs the secret (and token) from a 422 error that echoes the rejected field', async () => {
+    const cap: Capture = {};
+    const SECRET = 'super-secret-hmac-value';
+    const TOKEN = 'admin-token-value';
+    // A 422 whose body echoes the offending secret value (Shortcut validation errors do this).
+    const err = await registerShortcutWebhook(
+      { apiToken: TOKEN, webhookSecret: SECRET },
+      fakeFetch(cap, { ok: false, status: 422, body: { message: `secret invalid: ${SECRET}` } })
+    ).then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e))
+    );
+    expect(err).not.toBeNull();
+    expect(err).not.toContain(SECRET); // HMAC secret never reaches the surfaced error
+    expect(err).not.toContain(TOKEN);
+    expect(err).toContain('***');
   });
 });

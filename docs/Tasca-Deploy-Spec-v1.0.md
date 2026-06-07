@@ -216,12 +216,13 @@ Do these in order. Items 1–2 are likely already done (carry-over).
 4. **worker.** New resource → **Docker Image** → `ghcr.io/icemint/tasca-worker:sha-<any>` (the CD will repoint the tag) → port `8080` → domain `api.tasca.dev` → HTTP healthcheck `/healthz` → attach a persistent volume at `/data` → set the §3.3 env vars (`DATABASE_URL` from step 3, `ANTHROPIC_API_KEY`, `TASCA_AGENT_GH_TOKEN`, `SHORTCUT_WEBHOOK_SECRET`, `TASCA_SECRET_STORE_KEY`, `EMDASH_DB_FILE=/data/execution.sqlite`, `TASCA_WORKTREE_ROOT=/data/worktrees`, `PORT=8080`) → ensure it’s on the `tasca` network with `postgres`.
 5. **(existing) website + app** — no change; they already deploy.
 6. **DNS.** Point `api.tasca.dev` at the Coolify host (A/AAAA or CNAME) so Traefik can issue TLS for the worker.
-7. **Shortcut webhook.** Once the worker is green, register the Outgoing Webhook at `https://api.tasca.dev/webhooks/shortcut` with the secret you put in `SHORTCUT_WEBHOOK_SECRET`. Run the one-shot command (needs a workspace admin token):
+7. **Shortcut webhook.** Once the worker is green, register the Outgoing Webhook at `https://api.tasca.dev/webhooks/shortcut` with the secret you put in `SHORTCUT_WEBHOOK_SECRET`. Run the one-shot command (needs a workspace admin token). Pass the secrets via the environment, **not** inline on the command line (inline `VAR=… cmd` leaks to `ps`/`/proc` and shell history):
    ```
-   SHORTCUT_API_TOKEN=<admin-token> SHORTCUT_WEBHOOK_SECRET=<same-secret-as-worker> \
-     pnpm --filter @tasca/coordination shortcut:register-webhook
+   export SHORTCUT_API_TOKEN        # paste the workspace admin token when prompted, or source from an untracked env file
+   export SHORTCUT_WEBHOOK_SECRET   # the same value the worker verifies with
+   pnpm --filter @tasca/coordination shortcut:register-webhook
    ```
-   It prints the created webhook id (deletable later) and exits non-zero on failure. (Or set the webhook in the Shortcut UI.) The worker self-dedupes its own round-tripped writes via the actor `member_id`.
+   It prints the created webhook id (deletable later) and exits non-zero on failure; the HMAC secret/token are scrubbed from any error output. (Or set the webhook in the Shortcut UI.)
 
 ---
 

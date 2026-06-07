@@ -47,5 +47,13 @@ export async function registerShortcutWebhook(
     webhookSecret,
     ...(fetchImpl ? { fetchImpl } : {}),
   });
-  return adapter.registerWebhook({ webhookUrl, secret: webhookSecret, token: apiToken });
+  try {
+    return await adapter.registerWebhook({ webhookUrl, secret: webhookSecret, token: apiToken });
+  } catch (err) {
+    // The adapter's failure message appends Shortcut's raw response body, which on a
+    // 422 can echo the rejected `secret` field. Scrub the secret (and token, defensively)
+    // before the error propagates to the CLI's stderr / CI logs.
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(raw.split(webhookSecret).join('***').split(apiToken).join('***'));
+  }
 }
