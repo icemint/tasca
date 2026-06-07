@@ -18,6 +18,8 @@
 // library surface (index.ts) stays adapter-free so inner consumers don't pull it.
 
 import type { IncomingMessage } from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { Pool } from 'pg';
 import { TASK_TABLE_DDL } from '@tasca/db';
 import { IDENTITY_SCHEMA_DDL } from '@tasca/identity';
@@ -45,7 +47,8 @@ import type {
   VerifiedWebhook,
   Logger,
 } from './ports';
-import type { TaskContentSource } from './orchestrate';
+import type { RepoProvisioner, TaskContentSource } from './orchestrate';
+import { GitAppRepoProvisioner } from './repo-provisioner';
 
 /** Minimal console logger with structured context (JSON line per event). */
 const logger: Logger = {
@@ -255,6 +258,7 @@ async function main(): Promise<void> {
   const githubWritebackEnabled = Boolean(githubAppId && githubAppPrivateKey && githubSecret);
   let statusReporter: StatusReporter = gatedStatusReporter;
   let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
+  let provisioner: RepoProvisioner | undefined;
   if (githubWritebackEnabled) {
     const store = new PgCoordinationStore(pool);
     const identity = new PgIdentityRepository(pool);
@@ -287,6 +291,17 @@ async function main(): Promise<void> {
       });
     };
     logger.info?.('github write-back enabled (App env present)');
+
+    // Clone-on-dispatch: a github event's repoHint is an `owner/repo` slug, not a
+    // local path. The provisioner mints an installation token (via appClient + the
+    // install→owner mapping in store) and clones/fetches into reposDir so
+    // reserveWorktree has a real local repo. Only wired with App env present.
+    // The clone's origin holds a (short-lived) installation token in .git/config —
+    // the provisioner creates reposDir mode 0700, but in production set
+    // TASCA_REPOS_DIR to a dedicated private volume, not the shared tmp root.
+    const reposDir = process.env.TASCA_REPOS_DIR ?? path.join(os.tmpdir(), 'tasca-repos');
+    provisioner = new GitAppRepoProvisioner({ appClient, store, reposDir });
+    logger.info?.('repo provisioning enabled', { reposDir });
   } else {
     logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
   }
@@ -353,6 +368,7 @@ async function main(): Promise<void> {
     logger,
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
     ...(githubInstallationHandler ? { githubInstallationHandler } : {}),
+    ...(provisioner ? { provisioner } : {}),
     ...(authHandler ? { authHandler } : {}),
     ...(verifySession ? { verifySession } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
