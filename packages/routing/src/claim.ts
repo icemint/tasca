@@ -11,15 +11,8 @@ export async function atomicClaim(
   agentId: string,
   expectedVersion: number
 ): Promise<ClaimResult> {
-  const outcome = await port.tryClaim(taskId, agentId, expectedVersion);
-  // Pass the enriched loss diagnostics (found / currentStatus / currentVersion)
-  // straight through so a caller can tell a retryable loss from a terminal one
-  // without a second query.
-  return {
-    won: outcome.won,
-    newVersion: outcome.newVersion,
-    ...(outcome.found !== undefined ? { found: outcome.found } : {}),
-    ...(outcome.currentStatus !== undefined ? { currentStatus: outcome.currentStatus } : {}),
-    ...(outcome.currentVersion !== undefined ? { currentVersion: outcome.currentVersion } : {}),
-  };
+  // ClaimResult is an alias of ClaimOutcome (the engine adds no fields), so the
+  // port's outcome — including the enriched loss diagnostics (found /
+  // currentStatus / currentVersion) — is returned directly.
+  return port.tryClaim(taskId, agentId, expectedVersion);
 }
