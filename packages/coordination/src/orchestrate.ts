@@ -18,6 +18,7 @@
 // Everything I/O is a port; this module is pure composition. Tests inject fakes;
 // the composition root (createCoordination) injects the real Postgres/exec impls.
 
+import { createHash } from 'node:crypto';
 import {
   estimateTier,
   matchCapability,
@@ -272,17 +273,21 @@ export async function orchestrateTaskAssigned(
 
 /**
  * A stable PR head branch for a story, identical across re-drives so a repeated
- * `openPr` reuses (and is recognized against) the same head — `tasca/<sanitized
- * external story id>`. Sanitized to a valid git ref (the GitHub story id is
- * `owner/repo#number`, which isn't a legal ref as-is). Starts with a letter so it
- * satisfies the open-pr SAFE_REF guard.
+ * `openPr` reuses (and is recognized against) the same head — and INJECTIVE so two
+ * different stories never collide onto one head (a collision would make story B
+ * adopt story A's PR and get none of its own). The readable slug is for humans;
+ * the appended short hash of the RAW id guarantees uniqueness even when the slug
+ * is lossy (the GitHub id `owner/repo#number` sanitizes to a legal ref, but
+ * `owner/repo#42` and `owner-repo#42` would otherwise both slug to the same thing).
+ * Starts with a letter so it satisfies the open-pr SAFE_REF guard.
  */
 function deterministicHeadBranch(externalStoryId: string): string {
   const slug = externalStoryId
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 200);
-  return `tasca/${slug || 'task'}`;
+    .slice(0, 180);
+  const hash = createHash('sha256').update(externalStoryId).digest('hex').slice(0, 8);
+  return `tasca/${slug || 'task'}-${hash}`;
 }
 
 /**
