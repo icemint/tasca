@@ -4,10 +4,39 @@
 // (the coordination server) depend only on this interface; the concrete
 // implementation in `factory.ts` bridges to the vendored modules at runtime.
 //
-// Types flow from @tasca/domain / @tasca/contracts only — this package must
-// NOT import routing/adapters/coordination (Stage-1 scaffold §1.3 boundary).
+// This module is self-contained — the contract types here are defined locally.
+// The package must NOT import routing/adapters/coordination (it may only import
+// @tasca/domain / @tasca/contracts per the Stage-1 scaffold §1.3 boundary, but
+// currently needs neither).
 
-import type { Task } from '@tasca/domain';
+/**
+ * Typed failure for the execution surface. Carries a coarse `kind` so the
+ * coordination server can route a failed task to `needs_attention` BY CAUSE
+ * (e.g. a `push` failure is retriable; a `worktree` failure usually isn't) and
+ * preserves the underlying error as `cause` for diagnostics.
+ *
+ *   - `worktree`  — reserveWorktree: the vendor createWorktree rejected.
+ *   - `spawn`     — spawnAgent: starting the lifecycle PTY threw (synchronously).
+ *   - `push`      — openPr: `git push` failed.
+ *   - `pr-create` — openPr: `gh pr create` failed (NOT the idempotent
+ *                   "already exists" path, which returns the existing PR).
+ *   - `pr-parse`  — openPr: `gh` succeeded but no PR URL could be parsed.
+ */
+export class ExecutionError extends Error {
+  readonly kind: 'worktree' | 'spawn' | 'push' | 'pr-create' | 'pr-parse';
+
+  constructor(
+    kind: 'worktree' | 'spawn' | 'push' | 'pr-create' | 'pr-parse',
+    message: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
+    this.name = 'ExecutionError';
+    this.kind = kind;
+    // Restore the prototype chain for `instanceof` across the ES2022/Error subclass boundary.
+    Object.setPrototypeOf(this, ExecutionError.prototype);
+  }
+}
 
 /** An isolated git worktree reserved for one task's execution. */
 export interface Worktree {
@@ -100,18 +129,55 @@ export interface ExecutionPort {
   /** Apply migrations and ready the local SQLite store. Idempotent. */
   initDb(): Promise<void>;
 
-  /** Reserve/create an isolated worktree for a task. */
+  /**
+   * Reserve/create an isolated worktree for a task.
+   *
+   * @throws never synchronously.
+   * @rejects {ExecutionError} kind `'worktree'` if the underlying worktree
+   *   creation fails (the original error is preserved as `cause`).
+   */
   reserveWorktree(input: ReserveWorktreeInput): Promise<Worktree>;
 
-  /** Spawn an agent command inside a worktree, streaming via callbacks. */
+  /**
+   * Spawn an agent command inside a worktree, streaming via callbacks.
+   *
+   * Returns synchronously; transport/exit are delivered via the handle's
+   * onData/onExit/onError callbacks.
+   *
+   * @throws {ExecutionError} kind `'spawn'` SYNCHRONOUSLY if starting the PTY
+   *   fails before the handle exists (the spawn error cannot arrive via
+   *   onError because there is no handle yet). Callers must wrap the call in
+   *   try/catch — a thrown ExecutionError here means no handle was registered.
+   */
   spawnAgent(input: SpawnAgentInput): AgentProcessHandle;
 
-  /** Push the worktree branch and open a PR (pure shell; no Electron). */
+  /**
+   * Kill a single live agent by its `SpawnAgentInput.id` and deregister it
+   * from the live set, so `close()` won't try to reap it again. No-op if the
+   * id isn't currently live. Best-effort: a kill error is swallowed. Lets a
+   * caller reap individual agents (e.g. on task cancellation) without tearing
+   * down the whole port.
+   */
+  killAgent(id: string): void;
+
+  /**
+   * Push the worktree branch and open a PR (pure shell; no Electron).
+   *
+   * Idempotent on re-drive: if the PR already exists for the head branch it
+   * returns the existing PR rather than rejecting.
+   *
+   * @rejects {ExecutionError} kind `'push'` if `git push` fails; kind
+   *   `'pr-create'` if `gh pr create` fails for any reason OTHER than the
+   *   idempotent "already exists" path; kind `'pr-parse'` if `gh` succeeded but
+   *   no PR URL could be parsed from its output. The original error is
+   *   preserved as `cause` where one exists.
+   */
   openPr(input: OpenPrInput): Promise<OpenPrResult>;
 
-  /** Release resources (close the DB client, etc.). */
+  /**
+   * Release resources: kill every still-live agent handle (best-effort), then
+   * close the DB client. Reaping is best-effort — a handle whose kill throws
+   * does not block draining the rest.
+   */
   close(): Promise<void>;
 }
-
-/** Optional context carried through execution; mirrors a domain Task slice. */
-export type ExecutionTaskRef = Pick<Task, 'id' | 'repoRef'>;

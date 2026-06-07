@@ -171,6 +171,7 @@ class FakeExecution implements ExecutionPort {
       ...(this.behavior.spawnError !== undefined ? { error: this.behavior.spawnError } : {}),
     });
   }
+  killAgent(_id: string): void {}
   async openPr(input: OpenPrInput): Promise<OpenPrResult> {
     this.prCalls += 1;
     if (this.behavior.prError) throw this.behavior.prError;

@@ -106,9 +106,6 @@ importers:
       '@tasca/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@tasca/domain':
-        specifier: workspace:*
-        version: link:../domain
     devDependencies:
       tsx:
         specifier: ^4.19.2

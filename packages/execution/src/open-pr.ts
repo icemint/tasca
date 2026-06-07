@@ -17,6 +17,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
+import { ExecutionError } from './port.js';
 import type { OpenPrInput, OpenPrResult } from './port.js';
 
 const execFileAsync = promisify(execFile);
@@ -58,7 +59,13 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
   //    option parsing so the validated refs can never be treated as flags. The
   //    refspec `branch:head` is built from two separately-validated refs.
   const refspec = head === branch ? branch : `${branch}:${head}`;
-  await exec('git', ['push', '--force', '--set-upstream', '--', remote, refspec], { cwd });
+  try {
+    await exec('git', ['push', '--force', '--set-upstream', '--', remote, refspec], { cwd });
+  } catch (err) {
+    throw new ExecutionError('push', `open-pr: git push failed: ${errText(err).trim()}`, {
+      cause: err,
+    });
+  }
 
   // 2. gh pr create. Use a temp body file so multiline Markdown is preserved
   //    exactly (the vendored handler does the same).
@@ -90,15 +97,21 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
       // failure — return the EXISTING PR rather than throwing (which would churn
       // the task) or risking a duplicate. Re-throw anything that isn't that case.
       const msg = errText(err);
-      if (!/already exists/i.test(msg)) throw err;
+      if (!/already exists/i.test(msg)) {
+        throw new ExecutionError('pr-create', `open-pr: gh pr create failed: ${msg.trim()}`, {
+          cause: err,
+        });
+      }
       const existing = await existingPrUrl(exec, cwd, head);
       if (existing) return { url: existing };
-      // "already exists" but we couldn't read it back — surface the original error.
-      throw err;
+      // "already exists" but we couldn't read it back — surface as a pr-create failure.
+      throw new ExecutionError('pr-create', `open-pr: gh pr create reported an existing PR but it could not be read back: ${msg.trim()}`, {
+        cause: err,
+      });
     }
     const match = out.match(PR_URL_RE);
     if (!match) {
-      throw new Error(`open-pr: could not parse a PR URL from gh output:\n${out.trim()}`);
+      throw new ExecutionError('pr-parse', `open-pr: could not parse a PR URL from gh output:\n${out.trim()}`);
     }
     return { url: match[0] };
   } finally {
