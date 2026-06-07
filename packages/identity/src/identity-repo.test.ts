@@ -299,4 +299,29 @@ run('PgIdentityRepository (Postgres) — stable principal + binding lifecycle', 
     events = await repo.listAuditEvents(serviceUser.principalId);
     expect(events).toHaveLength(0);
   });
+
+  it('withTransaction reuses a caller-supplied client tx (no nested BEGIN; rolls back with the outer)', async () => {
+    const { agent, serviceUser } = await makeAgent();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // A repo bound to an in-flight client: withTransaction must REUSE this tx
+      // (isPool(client) === false), not try to open a nested one. With the old
+      // connect()-based isPool this misclassified the client as a Pool.
+      const txRepo = new PgIdentityRepository(client);
+      await txRepo.withTransaction((r) =>
+        r.appendAuditEvent({ principalId: serviceUser.principalId, agentId: agent.id, action: 'tx.test' })
+      );
+      // Visible inside the outer tx (same client)...
+      const inTx = await client.query(`SELECT count(*)::int AS c FROM audit_event`);
+      expect(inTx.rows[0]!.c).toBe(1);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+    // ...and gone after the OUTER rollback — proving it joined the caller's tx
+    // rather than committing independently.
+    const after = await repo.listAuditEvents(serviceUser.principalId);
+    expect(after).toHaveLength(0);
+  });
 });

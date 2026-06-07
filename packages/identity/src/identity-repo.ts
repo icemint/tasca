@@ -501,8 +501,11 @@ interface AuditEventRow {
 }
 
 function isPool(db: Queryable): db is Pool {
-  // PoolClient has no `connect()`; Pool does. Used to decide tx ownership.
-  return typeof (db as Pool).connect === 'function';
+  // Discriminate by `release()`: a checked-out PoolClient has it, a Pool does not.
+  // (`connect()` is NOT a valid discriminator — pg's PoolClient is a Client, which
+  // also exposes connect(), so the old check misclassified a client as a Pool and
+  // broke the nested-tx reuse branch.) Used to decide tx ownership.
+  return typeof (db as { release?: unknown }).release !== 'function';
 }
 
 function mapAgent(row: AgentRow): AgentRecord {
