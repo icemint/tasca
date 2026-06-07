@@ -7,7 +7,8 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "shortcut:register-webhook": "tsx scripts/register-shortcut-webhook.ts"
+    "shortcut:register-webhook": "tsx scripts/register-shortcut-webhook.ts",
+    "provision-github-agent": "tsx scripts/provision-github-agent.ts"
   },
   "dependencies": {
     "@tasca/adapters": "workspace:*",

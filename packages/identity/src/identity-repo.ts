@@ -340,6 +340,28 @@ export class PgIdentityRepository {
   }
 
   /**
+   * Find the ACTIVE binding for a platform's external id, if any. The UNIQUE
+   * constraint is (agent_id, platform), NOT (platform, external_id), so the same
+   * external account *could* be bound to two agents — callers (e.g. provisioning)
+   * use this to detect/prevent that ambiguity and to make re-provisioning
+   * idempotent on the external account rather than on a remembered agent id.
+   */
+  async getActiveBindingByExternalId(
+    platform: Platform,
+    externalId: string
+  ): Promise<IdentityBinding | null> {
+    const res = await this.db.query<IdentityBindingRow>(
+      `SELECT id, agent_id, platform, external_id, external_handle, credential_ref, state
+         FROM identity_binding
+        WHERE platform = $1 AND external_id = $2 AND state = 'active'
+        LIMIT 1`,
+      [platform, externalId]
+    );
+    const row = res.rows[0];
+    return row ? mapBinding(row) : null;
+  }
+
+  /**
    * Rotate ONLY the per-binding `credential_ref` (and optionally state) for a
    * platform. This is the external-credential rotation seam: the secret pointer
    * changes, the agent's stable `principal_id` does not. Returns the updated
