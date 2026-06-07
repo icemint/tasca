@@ -7,7 +7,30 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import type { CapabilityMatch, Task, TaskStatus, TierEstimate } from '@tasca/domain';
+import {
+  TASK_TRANSITIONS,
+  isValidTransition,
+  type CapabilityMatch,
+  type Task,
+  type TaskStatus,
+  type TierEstimate,
+} from '@tasca/domain';
+
+/**
+ * Inverse of TASK_TRANSITIONS: for each status, the statuses it may legally be
+ * reached FROM. Derived once so the write-path guard (setStatus) enforces the
+ * domain's transition rules atomically, instead of any status overwriting any
+ * other. (The CAS claim routable→claimed rides @tasca/routing's ClaimPort, not
+ * this; setStatus owns the post-claim lifecycle writes.)
+ */
+const VALID_PREDECESSORS: Record<TaskStatus, TaskStatus[]> = (() => {
+  const inv = {} as Record<TaskStatus, TaskStatus[]>;
+  for (const status of Object.keys(TASK_TRANSITIONS) as TaskStatus[]) inv[status] = [];
+  for (const from of Object.keys(TASK_TRANSITIONS) as TaskStatus[]) {
+    for (const to of TASK_TRANSITIONS[from]) inv[to].push(from);
+  }
+  return inv;
+})();
 
 // ── Read-side projections (the read-only API surface, app/ UI track) ──────────
 // These are query-only shapes the read API serves; they project existing rows
@@ -285,10 +308,35 @@ export class PgCoordinationStore implements CoordinationStore {
   }
 
   async setStatus(taskId: string, status: TaskStatus): Promise<void> {
-    await this.db.query(
-      `UPDATE task SET status = $2, version = version + 1, updated_at = now() WHERE id = $1`,
-      [taskId, status]
+    // Enforce the domain transition rules at the write boundary: the row only moves
+    // to `status` if its current status legally precedes it (TASK_TRANSITIONS),
+    // checked IN the UPDATE so there's no read-then-write race. The identity entry
+    // (`status` itself) makes re-affirming the same status — an idempotent re-drive,
+    // e.g. finalize re-running setStatus('in_review') — a no-op rather than a
+    // spurious illegal transition.
+    const allowedFrom = [...VALID_PREDECESSORS[status], status];
+    const res = await this.db.query(
+      `UPDATE task SET status = $2, version = version + 1, updated_at = now()
+         WHERE id = $1 AND status = ANY($3::text[])`,
+      [taskId, status, allowedFrom]
     );
+    if (res.rowCount === 0) {
+      // Nothing moved: the task is gone, or its current status doesn't legally
+      // precede `status`. Read it back for a precise error.
+      const cur = await this.db.query<{ status: TaskStatus }>(
+        `SELECT status FROM task WHERE id = $1`,
+        [taskId]
+      );
+      if (cur.rowCount === 0) {
+        throw new Error(`setStatus: task ${taskId} not found`);
+      }
+      const from = cur.rows[0]!.status;
+      // isValidTransition(from, status) is normally false here (that's why the
+      // guarded UPDATE matched nothing); a true result means the row was changed
+      // concurrently between the UPDATE and this read.
+      const suffix = isValidTransition(from, status) ? ' (concurrent update)' : '';
+      throw new Error(`setStatus: illegal transition ${from} -> ${status}${suffix}`);
+    }
   }
 
   async recordFailureAndTransition(

@@ -327,3 +327,75 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(tasks.rows[0].c).toBe(1);
   });
 });
+
+// setStatus enforces the domain transition rules (TASK_TRANSITIONS) atomically at
+// the write boundary. Own schema so unqualified TRUNCATE/DDL can't race the suites
+// above (same pattern as the main block).
+run('coordination (Postgres) — setStatus transition guard', () => {
+  const SCHEMA = 'coordination_setstatus_test';
+  let pool: Pool;
+  let store: PgCoordinationStore;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
+    store = new PgCoordinationStore(pool);
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  beforeEach(async () => {
+    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+  });
+
+  // A fresh task starts `routable`. The CAS claim (routable→claimed) rides the
+  // ClaimPort, so here we set up `claimed` directly to exercise the setStatus edges
+  // the dispatch loop actually drives (claimed→executing→in_review).
+  async function newClaimedTask(): Promise<string> {
+    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#1', platform: 'github' });
+    await pool.query('UPDATE task SET status = $2 WHERE id = $1', [task.id, 'claimed']);
+    return task.id;
+  }
+
+  it('allows the legal dispatch edges claimed→executing→in_review', async () => {
+    const id = await newClaimedTask();
+    await store.setStatus(id, 'executing');
+    await store.setStatus(id, 'in_review');
+    const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
+    expect(r.rows[0]!.status).toBe('in_review');
+  });
+
+  it('rejects an illegal transition (routable→in_review) and leaves the row unchanged', async () => {
+    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#2', platform: 'github' });
+    await expect(store.setStatus(task.id, 'in_review')).rejects.toThrow(
+      /illegal transition routable -> in_review/
+    );
+    const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [task.id]);
+    expect(r.rows[0]!.status).toBe('routable'); // unchanged
+  });
+
+  it('allows an idempotent re-set of the same status (no spurious illegal-transition)', async () => {
+    const id = await newClaimedTask();
+    await store.setStatus(id, 'executing');
+    const before = await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [id]);
+    await store.setStatus(id, 'executing'); // identity allowance → no throw
+    const after = await pool.query<{ status: string; version: number }>(
+      'SELECT status, version FROM task WHERE id=$1',
+      [id]
+    );
+    expect(after.rows[0]!.status).toBe('executing');
+    expect(after.rows[0]!.version).toBe(before.rows[0]!.version + 1);
+  });
+
+  it('throws "not found" for a missing task', async () => {
+    await expect(
+      store.setStatus('00000000-0000-0000-0000-000000000000', 'executing')
+    ).rejects.toThrow(/not found/);
+  });
+});
