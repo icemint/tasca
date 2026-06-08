@@ -50,6 +50,9 @@ export {
   type SessionInfo,
 } from './read-api';
 
+// The human write-API (POST /api/tasks/:id/{escalate,retier,reassign}, GET /api/csrf).
+export { writeApiHandler, type WriteApiDeps, type WriteAuditSink } from './write-api';
+
 // The thin HTTP entry.
 export {
   createCoordinationServer,

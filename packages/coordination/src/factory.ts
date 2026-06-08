@@ -137,6 +137,14 @@ export function createCoordination(
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
+    // The human write-API shares the read API's session verifier; when no verifier
+    // is wired it fails closed (503), same posture as the read side. Mutations are
+    // additionally CSRF-gated (double-submit) inside the handler.
+    writeApi: {
+      store,
+      ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+      ...(input.logger !== undefined ? { logger: input.logger } : {}),
+    },
     ...(input.githubVerifier !== undefined ? { githubVerifier: input.githubVerifier } : {}),
     ...(input.githubInstallationHandler !== undefined
       ? { githubInstallationHandler: input.githubInstallationHandler }

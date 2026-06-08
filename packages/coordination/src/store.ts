@@ -12,8 +12,18 @@ import {
   type CapabilityMatch,
   type Task,
   type TaskStatus,
+  type Tier,
   type TierEstimate,
 } from '@tasca/domain';
+
+/**
+ * Outcome of a human write-API task intervention. `ok` carries the resulting
+ * status; `conflict` means the task exists but its current status forbids the
+ * action (mapped to HTTP 409); `not_found` → 404.
+ */
+export type TaskWriteOutcome =
+  | { ok: true; status: TaskStatus }
+  | { ok: false; reason: 'not_found' | 'conflict' };
 
 /**
  * Inverse of TASK_TRANSITIONS: for each status, the statuses it may legally be
@@ -166,6 +176,29 @@ export interface CoordinationStore {
   /** Persist the PR a run opened and link it to the task. */
   recordPullRequest(input: { taskId: string; url: string }): Promise<void>;
 
+  // ── Human write-API: PM/operator task interventions ──────────────────────────
+  // These are deliberate ADMIN overrides invoked from the app (session-gated), so
+  // they bypass the normal routing-flow guard (TASK_TRANSITIONS) with their own
+  // explicit state guards. Each bumps `version` (so an in-flight CAS sees the change)
+  // and returns a typed outcome the write-API maps to an HTTP status. They are split-
+  // independent: none cancels a LIVE run (that needs the execution cancel seam) —
+  // hence the guards reject actions that would race an executing dispatch.
+
+  /** Force a task to `needs_attention` (human review). Allowed from any non-terminal
+   *  status; a no-op `conflict` when already `done`. */
+  escalateTask(taskId: string): Promise<TaskWriteOutcome>;
+
+  /** Manually override the routing tier (sets `tier_estimate.tier`, preserving any
+   *  other estimate fields). Rejected (`conflict`) once the task is `done`. */
+  overrideTierEstimate(taskId: string, tier: Tier): Promise<TaskWriteOutcome>;
+
+  /** Release a task's claim so it re-routes from a clean slate (status → `routable`,
+   *  `claimed_by` cleared, `failure_count` reset). Allowed only from a NON-executing
+   *  status (`routable`/`claimed`/`needs_attention`/`failed`); `conflict` if the task
+   *  is `executing`/`in_review` (cancelling a live run needs the execution seam) or
+   *  `done`. */
+  reassignTask(taskId: string): Promise<TaskWriteOutcome>;
+
   // ── GitHub App installation (write-back installation resolution) ──────────────
 
   /**
@@ -303,6 +336,64 @@ export class PgCoordinationStore implements CoordinationStore {
     await this.db.query(
       `UPDATE task SET tier_estimate = $2::jsonb, updated_at = now() WHERE id = $1`,
       [taskId, JSON.stringify(estimate)]
+    );
+  }
+
+  /** Map a guarded UPDATE that RETURNs the new status to a TaskWriteOutcome: a row
+   *  returned → ok; else a PK probe distinguishes `not_found` from `conflict`
+   *  (exists but its status failed the guard). */
+  private async taskWrite(
+    sql: string,
+    params: unknown[],
+    taskId: string
+  ): Promise<TaskWriteOutcome> {
+    const res = await this.db.query<{ status: string }>(sql, params);
+    if (res.rowCount && res.rows[0]) return { ok: true, status: res.rows[0].status as TaskStatus };
+    const exists = await this.db.query(`SELECT 1 FROM task WHERE id = $1`, [taskId]);
+    return { ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' };
+  }
+
+  async escalateTask(taskId: string): Promise<TaskWriteOutcome> {
+    // Admin override: force needs_attention from any non-terminal status.
+    return this.taskWrite(
+      `UPDATE task
+          SET status = 'needs_attention', version = version + 1, updated_at = now()
+        WHERE id = $1 AND status <> 'done' AND status <> 'needs_attention'
+       RETURNING status`,
+      [taskId],
+      taskId
+    );
+  }
+
+  async overrideTierEstimate(taskId: string, tier: Tier): Promise<TaskWriteOutcome> {
+    // Set only tier_estimate.tier, preserving any existing estimate fields (or
+    // seeding a minimal manual estimate when none was recorded). The read path
+    // projects only `.tier`, so a manual estimate needs no classifier signals.
+    return this.taskWrite(
+      `UPDATE task
+          SET tier_estimate = jsonb_set(
+                COALESCE(tier_estimate, '{"confidence":1,"signals":{},"classifierUsed":false}'::jsonb),
+                '{tier}', to_jsonb($2::text)),
+              version = version + 1, updated_at = now()
+        WHERE id = $1 AND status <> 'done'
+       RETURNING status`,
+      [taskId, tier],
+      taskId
+    );
+  }
+
+  async reassignTask(taskId: string): Promise<TaskWriteOutcome> {
+    // Release the claim → re-route from a clean slate. Guarded to NON-executing
+    // statuses: cancelling a live run (executing/in_review) needs the execution
+    // cancel seam, so reject those here rather than orphan a running agent.
+    return this.taskWrite(
+      `UPDATE task
+          SET status = 'routable', claimed_by = NULL, failure_count = 0,
+              version = version + 1, updated_at = now()
+        WHERE id = $1 AND status IN ('routable','claimed','needs_attention','failed')
+       RETURNING status`,
+      [taskId],
+      taskId
     );
   }
 

@@ -20,6 +20,7 @@ import type { CoordinationStore } from './store';
 import type { WebhookVerifier, Logger } from './ports';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
 import { readApiHandler, type ReadApiDeps } from './read-api';
+import { writeApiHandler, type WriteApiDeps } from './write-api';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
   /**
@@ -28,6 +29,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * is additive and does not affect the webhook/healthz paths).
    */
   readApi?: ReadApiDeps;
+  /**
+   * The human write-API (POST /api/tasks/:id/{escalate,retier,reassign}, GET
+   * /api/csrf). Session + CSRF gated. Absent → those paths fall through to 404
+   * (additive; webhook/healthz/read paths unaffected).
+   */
+  writeApi?: WriteApiDeps;
   /** The Shortcut webhook verifier (POST /webhooks/shortcut). */
   verifier: WebhookVerifier;
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
@@ -257,6 +264,9 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
 
     // Read API (only when wired). Handles GET /api/* read endpoints.
     if (deps.readApi && (await readApiHandler(req, res, deps.readApi))) return;
+
+    // Write API (only when wired). Handles GET /api/csrf + the mutating POSTs.
+    if (deps.writeApi && (await writeApiHandler(req, res, deps.writeApi))) return;
 
     res.writeHead(404).end('not found');
   };

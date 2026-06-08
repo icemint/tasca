@@ -452,3 +452,86 @@ run('coordination (Postgres) — setStatus transition guard', () => {
     ).rejects.toThrow(/not found/);
   });
 });
+
+// Human write-API store methods (escalate / re-tier / reassign): admin overrides
+// that bypass TASK_TRANSITIONS with their own explicit state guards, bump version,
+// and return a typed outcome. Own schema (same isolation pattern).
+run('coordination (Postgres) — human write-API interventions', () => {
+  const SCHEMA = 'coordination_writeapi_test';
+  let pool: Pool;
+  let store: PgCoordinationStore;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
+    store = new PgCoordinationStore(pool);
+  });
+  afterAll(async () => {
+    await pool?.end();
+  });
+  beforeEach(async () => {
+    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+  });
+
+  const at = async (status: string): Promise<{ id: string; version: number }> => {
+    const t = await store.getOrCreateTask({ externalStoryId: `acme/widgets#${status}`, platform: 'github' });
+    await pool.query('UPDATE task SET status=$2 WHERE id=$1', [t.id, status]);
+    const r = await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [t.id]);
+    return { id: t.id, version: r.rows[0]!.version };
+  };
+  const statusOf = async (id: string) =>
+    (await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id])).rows[0]!.status;
+  const versionOf = async (id: string) =>
+    (await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [id])).rows[0]!.version;
+
+  it('escalateTask forces needs_attention from a live status and bumps version', async () => {
+    const { id, version } = await at('executing');
+    const out = await store.escalateTask(id);
+    expect(out).toEqual({ ok: true, status: 'needs_attention' });
+    expect(await statusOf(id)).toBe('needs_attention');
+    expect(await versionOf(id)).toBe(version + 1);
+  });
+
+  it('escalateTask is a conflict on a done task (terminal) and a 404 when missing', async () => {
+    const { id } = await at('done');
+    expect(await store.escalateTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await statusOf(id)).toBe('done'); // unchanged
+    expect(await store.escalateTask('00000000-0000-0000-0000-000000000000')).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('overrideTierEstimate sets only the tier, preserving the rest of the estimate', async () => {
+    const t = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#tier', platform: 'github' });
+    await store.setTierEstimate(t.id, { tier: 'low', confidence: 0.7, signals: { wordCount: 5, hasReasoningVerb: false, scopeHint: 'unknown', labelTier: null }, classifierUsed: true });
+    const out = await store.overrideTierEstimate(t.id, 'hard');
+    expect(out.ok).toBe(true);
+    const row = await pool.query<{ tier_estimate: { tier: string; confidence: number; classifierUsed: boolean } }>('SELECT tier_estimate FROM task WHERE id=$1', [t.id]);
+    expect(row.rows[0]!.tier_estimate.tier).toBe('hard');
+    expect(row.rows[0]!.tier_estimate.confidence).toBe(0.7); // preserved
+  });
+
+  it('overrideTierEstimate seeds a minimal estimate when none existed', async () => {
+    const t = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#tier2', platform: 'github' });
+    await store.overrideTierEstimate(t.id, 'ultra');
+    const got = await store.getTask(t.id);
+    expect(got!.tierEstimate!.tier).toBe('ultra');
+  });
+
+  it('reassignTask releases the claim → routable with failures reset, from a non-executing status', async () => {
+    const { id } = await at('needs_attention');
+    await pool.query('UPDATE task SET claimed_by=$2, failure_count=2 WHERE id=$1', [id, 'agent-x']);
+    const out = await store.reassignTask(id);
+    expect(out).toEqual({ ok: true, status: 'routable' });
+    const row = await pool.query<{ status: string; claimed_by: string | null; failure_count: number }>('SELECT status, claimed_by, failure_count FROM task WHERE id=$1', [id]);
+    expect(row.rows[0]).toMatchObject({ status: 'routable', claimed_by: null, failure_count: 0 });
+  });
+
+  it('reassignTask is a conflict on an executing task (cancelling a live run needs the execution seam)', async () => {
+    const { id } = await at('executing');
+    expect(await store.reassignTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await statusOf(id)).toBe('executing'); // unchanged — not orphaned
+  });
+});
