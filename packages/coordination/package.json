@@ -13,6 +13,7 @@
   "dependencies": {
     "@tasca/adapters": "workspace:*",
     "@tasca/auth": "workspace:*",
+    "@tasca/broker": "workspace:*",
     "@tasca/contracts": "workspace:*",
     "@tasca/db": "workspace:*",
     "@tasca/domain": "workspace:*",
