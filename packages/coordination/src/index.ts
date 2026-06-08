@@ -13,6 +13,9 @@ export {
   type TaskContentSource,
 } from './orchestrate';
 
+// The GitHub issue content source (real story content for the agent prompt).
+export { makeGitHubContentSource } from './github-content-source';
+
 // The injected seams.
 export type {
   StatusReporter,

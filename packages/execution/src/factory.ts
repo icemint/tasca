@@ -13,10 +13,14 @@
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import {
   ExecutionError,
   type AgentProcessHandle,
+  type CommitAgentWorkInput,
+  type CommitAgentWorkResult,
   type ExecutionPort,
   type OpenPrInput,
   type OpenPrResult,
@@ -25,6 +29,9 @@ import {
   type Worktree,
 } from './port.js';
 import { openPr as openPrImpl } from './open-pr.js';
+import { buildClaudeCommand } from './agent-command.js';
+
+const execFileAsync = promisify(execFile);
 
 // --- minimal shapes for the untyped vendored services ---
 interface VendorWorktreeInfo {
@@ -167,13 +174,27 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
     },
 
     spawnAgent(input: SpawnAgentInput): AgentProcessHandle {
+      // When a prompt is given, build the non-interactive claude command from it
+      // (injection-safe) and ignore input.command; otherwise run command as-is.
+      let command: string;
+      if (input.prompt !== undefined) {
+        command = buildClaudeCommand({
+          prompt: input.prompt,
+          ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
+        });
+      } else if (input.command !== undefined) {
+        command = input.command;
+      } else {
+        throw new ExecutionError('spawn', 'spawnAgent requires command or prompt');
+      }
+
       let handle: VendorPtyHandle;
       try {
         // startLifecyclePty can throw SYNCHRONOUSLY (before any handle exists,
         // so the failure can't be delivered via onError) — wrap it.
         handle = getServices().ptyManager.startLifecyclePty({
           id: input.id,
-          command: input.command,
+          command,
           cwd: input.cwd,
           // Merge over the parent env (PATH/HOME/...) per the ExecutionPort
           // contract — passing only input.env strips PATH and breaks CLI spawns
@@ -216,6 +237,10 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
       return openPrImpl(input);
     },
 
+    async commitAgentWork(input: CommitAgentWorkInput): Promise<CommitAgentWorkResult> {
+      return commitAgentWorkImpl(input);
+    },
+
     async close(): Promise<void> {
       // Reap every still-live agent BEFORE closing the DB. Snapshot first so
       // deregistration during iteration can't disturb the walk.
@@ -229,4 +254,61 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
 function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/** Minimal git exec surface, injectable so commitAgentWork is unit-testable. */
+export type GitExecFn = (args: string[], cwd: string) => Promise<{ stdout: string }>;
+
+const defaultGitExec: GitExecFn = async (args, cwd) => {
+  const { stdout } = await execFileAsync('git', ['-C', cwd, ...args]);
+  return { stdout };
+};
+
+/**
+ * Stage all, commit if anything is staged, and report whether a real change
+ * landed. git runs via execFile argv (no shell), so `message`/`baseRef` are safe.
+ * When `baseRef` is empty, `changed` falls back to whether THIS call committed
+ * (the no-base path); otherwise it counts commits ahead of `baseRef`.
+ *
+ * @rejects {ExecutionError} kind `'commit'` on any git failure.
+ */
+export async function commitAgentWorkImpl(
+  input: CommitAgentWorkInput,
+  git: GitExecFn = defaultGitExec
+): Promise<CommitAgentWorkResult> {
+  const { cwd, message, baseRef } = input;
+  try {
+    await git(['add', '-A'], cwd);
+    const { stdout: status } = await git(['status', '--porcelain'], cwd);
+    let didCommit = false;
+    if (status.trim() !== '') {
+      // A fresh clone has no committer identity (no global ~/.gitconfig in the
+      // container), so `git commit` would abort with "Please tell me who you are".
+      // Supply it inline (env-overridable) so the commit works off ANY clone.
+      const name = process.env.TASCA_GIT_AUTHOR_NAME ?? 'Tasca Agent';
+      const email = process.env.TASCA_GIT_AUTHOR_EMAIL ?? 'agent@tasca.dev';
+      await git(['-c', `user.name=${name}`, '-c', `user.email=${email}`, 'commit', '-m', message], cwd);
+      didCommit = true;
+    }
+    if (!baseRef) {
+      // No explicit base to count ahead of (no-provisioner path). A real change is
+      // one this call committed OR — if the agent committed on its own, leaving a
+      // clean tree — the branch being ahead of its upstream. Missing upstream → 0.
+      if (didCommit) return { changed: true };
+      let aheadOfUpstream = 0;
+      try {
+        const { stdout } = await git(['rev-list', '--count', '@{u}..HEAD'], cwd);
+        aheadOfUpstream = Number(stdout.trim()) || 0;
+      } catch {
+        // no upstream configured — treat as not-ahead
+      }
+      return { changed: aheadOfUpstream > 0 };
+    }
+    const { stdout: count } = await git(['rev-list', '--count', `${baseRef}..HEAD`], cwd);
+    return { changed: Number(count.trim()) > 0 };
+  } catch (err) {
+    throw new ExecutionError('commit', `commitAgentWork failed: ${errMessage(err)}`, {
+      cause: err,
+    });
+  }
 }

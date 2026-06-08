@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createExecution, type VendorServices } from './factory.js';
+import { createExecution, commitAgentWorkImpl, type GitExecFn, type VendorServices } from './factory.js';
 import { ExecutionError } from './port.js';
 
 // Unit tests for the createExecution() port — PTY reaping + typed-error wrapping —
@@ -211,6 +211,54 @@ describe('createExecution — typed error wrapping', () => {
     expect((thrown as ExecutionError).cause).toBeInstanceOf(Error);
   });
 
+  it('spawnAgent with a prompt builds a non-interactive claude command (quoted, injection-safe)', () => {
+    let capturedCommand: string | undefined;
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: (opts) => {
+          capturedCommand = opts.command;
+          return fakePty().handle;
+        },
+      }),
+    });
+
+    port.spawnAgent({ id: 'a', cwd: '/wt', prompt: 'do the thing' });
+
+    expect(capturedCommand).toContain("'claude' '-p'");
+    expect(capturedCommand).toContain("'do the thing'");
+    expect(capturedCommand).toContain("'--allowedTools'");
+  });
+
+  it('spawnAgent prefers prompt over command when both are given', () => {
+    let capturedCommand: string | undefined;
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: (opts) => {
+          capturedCommand = opts.command;
+          return fakePty().handle;
+        },
+      }),
+    });
+
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi', prompt: 'do the thing' });
+
+    expect(capturedCommand).toContain("'claude' '-p'");
+    expect(capturedCommand).not.toContain('echo hi');
+  });
+
+  it('spawnAgent with neither command nor prompt throws ExecutionError kind "spawn"', () => {
+    const port = createExecution({ servicesOverride: fakeServices({}) });
+    let thrown: unknown;
+    try {
+      // Deliberately omit both command and prompt (both are optional in the type).
+      port.spawnAgent({ id: 'a', cwd: '/wt' });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ExecutionError);
+    expect((thrown as ExecutionError).kind).toBe('spawn');
+  });
+
   it('a failed spawn registers no live handle (nothing to reap on close)', async () => {
     const close = vi.fn(async () => {});
     const port = createExecution({
@@ -224,5 +272,77 @@ describe('createExecution — typed error wrapping', () => {
     expect(() => port.spawnAgent(spawnInput('a'))).toThrow(ExecutionError);
     await expect(port.close()).resolves.toBeUndefined();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('commitAgentWork', () => {
+  /** A scripted git runner: returns stdout per `git <subcommand>` for deterministic, offline tests. */
+  function fakeGit(stdoutBySub: Record<string, string>): { git: GitExecFn; calls: string[][] } {
+    const calls: string[][] = [];
+    const git: GitExecFn = async (args) => {
+      calls.push(args);
+      return { stdout: stdoutBySub[args[0]!] ?? '' };
+    };
+    return { git, calls };
+  }
+
+  it('stages, commits when dirty, and reports changed=true when HEAD is ahead of baseRef', async () => {
+    const { git, calls } = fakeGit({ status: ' M file.ts\n', 'rev-list': '1\n' });
+    const res = await commitAgentWorkImpl(
+      { cwd: '/wt', message: 'Tasca: x', baseRef: 'origin/main' },
+      git
+    );
+    expect(res.changed).toBe(true);
+    // The commit carries an inline committer identity so it works off a fresh clone
+    // with no configured user.name/user.email.
+    expect(calls).toEqual([
+      ['add', '-A'],
+      ['status', '--porcelain'],
+      ['-c', 'user.name=Tasca Agent', '-c', 'user.email=agent@tasca.dev', 'commit', '-m', 'Tasca: x'],
+      ['rev-list', '--count', 'origin/main..HEAD'],
+    ]);
+  });
+
+  it('with an empty baseRef and a clean tree, counts commits ahead of upstream (agent self-committed)', async () => {
+    // The agent committed its own work → tree is clean → didCommit is false, so
+    // detection falls back to `@{u}..HEAD`; a real change is still reported.
+    const { git, calls } = fakeGit({ status: '', 'rev-list': '1\n' });
+    const res = await commitAgentWorkImpl({ cwd: '/wt', message: 'm', baseRef: '' }, git);
+    expect(res.changed).toBe(true);
+    expect(calls.some((c) => c[0] === 'rev-list' && c[2] === '@{u}..HEAD')).toBe(true);
+  });
+
+  it('reports changed=false when the worktree HEAD is not ahead of baseRef', async () => {
+    const { git } = fakeGit({ status: '', 'rev-list': '0\n' });
+    const res = await commitAgentWorkImpl(
+      { cwd: '/wt', message: 'm', baseRef: 'origin/main' },
+      git
+    );
+    expect(res.changed).toBe(false);
+  });
+
+  it('with an empty baseRef, changed reflects whether THIS call committed', async () => {
+    // Dirty → commits → changed=true, and rev-list is NOT consulted.
+    const dirty = fakeGit({ status: ' M f\n' });
+    const a = await commitAgentWorkImpl({ cwd: '/wt', message: 'm', baseRef: '' }, dirty.git);
+    expect(a.changed).toBe(true);
+    expect(dirty.calls.some((c) => c[0] === 'rev-list')).toBe(false);
+
+    // Clean → nothing committed → changed=false.
+    const clean = fakeGit({ status: '' });
+    const b = await commitAgentWorkImpl({ cwd: '/wt', message: 'm', baseRef: '' }, clean.git);
+    expect(b.changed).toBe(false);
+  });
+
+  it('wraps a git failure in ExecutionError kind "commit"', async () => {
+    const git: GitExecFn = async () => {
+      throw new Error('git add exploded');
+    };
+    const err = await commitAgentWorkImpl({ cwd: '/wt', message: 'm', baseRef: '' }, git).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(ExecutionError);
+    expect((err as ExecutionError).kind).toBe('commit');
+    expect((err as ExecutionError).cause).toBeInstanceOf(Error);
   });
 });

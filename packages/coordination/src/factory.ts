@@ -40,6 +40,7 @@ export interface CreateCoordinationDeps {
   provisioner?: RepoProvisioner;
   breakerThreshold?: number;
   perProjectLimit?: number;
+  agentTimeoutMs?: number;
   /** Structured logger for post-ack failures; defaults to `console` in the server. */
   logger?: Logger;
   /**
@@ -145,6 +146,7 @@ export function createCoordination(
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
+    ...(input.agentTimeoutMs !== undefined ? { agentTimeoutMs: input.agentTimeoutMs } : {}),
     ...(input.logger !== undefined ? { logger: input.logger } : {}),
   };
 
