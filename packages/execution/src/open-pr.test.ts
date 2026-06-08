@@ -223,3 +223,32 @@ describe('openPr — gh auth token (GH_TOKEN)', () => {
     expect(push.env).toBeUndefined();
   });
 });
+
+describe('openPr — error redaction (no token in a thrown/logged failure)', () => {
+  const TOKEN = 'ghs_' + 'a'.repeat(36); // realistic installation-token shape
+  const EXTRAHEADER = `Authorization: Basic ${Buffer.from('x-access-token:' + TOKEN).toString('base64')}`;
+
+  it('redacts a token-bearing git push failure (base64 extraheader echoed under git trace)', async () => {
+    const exec: ExecFn = async (file) => {
+      if (file === 'git') throw Object.assign(new Error('boom'), { stderr: `trace: extraheader ${EXTRAHEADER}` });
+      return { stdout: '', stderr: '' };
+    };
+    const err = (await openPr({ ...input, token: TOKEN }, exec).catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toContain(TOKEN);
+    expect(err.message).not.toContain(EXTRAHEADER.split(' ').pop()); // base64 blob gone
+    expect(err.message).toContain('Authorization: Basic ***');
+  });
+
+  it('redacts a bare GH_TOKEN echoed in a gh pr create failure', async () => {
+    const exec: ExecFn = async (file, args) => {
+      if (file === 'git') return { stdout: '', stderr: '' };
+      if (file === 'gh' && args[1] === 'create') {
+        throw Object.assign(new Error('fail'), { stderr: `gh: auth used GH_TOKEN=${TOKEN}` });
+      }
+      return { stdout: '', stderr: '' };
+    };
+    const err = (await openPr({ ...input, token: TOKEN }, exec).catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toContain(TOKEN);
+    expect(err.message).toContain('gh*_***');
+  });
+});

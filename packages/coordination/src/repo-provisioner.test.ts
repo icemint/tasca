@@ -219,6 +219,44 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(safe).toContain('x-access-token:***@');
   });
 
+  it('redactToken scrubs the base64 env-auth Authorization header it now ships', () => {
+    // The tokenless-origin design auths via an http.extraheader = base64(x-access-token:TOKEN).
+    // base64 hides the literal `x-access-token:` prefix, so the old regex missed it; a
+    // git-trace failure echoing GIT_CONFIG_VALUE_0 must still be scrubbed.
+    const safe = redactToken(`fatal: unable to access: extraheader ${EXTRAHEADER}`);
+    expect(safe).not.toContain(EXTRAHEADER.split(' ').pop()); // the base64 blob is gone
+    expect(safe).not.toContain(TOKEN);
+    expect(safe).toContain('Authorization: Basic ***');
+  });
+
+  it('redactToken scrubs bare GitHub token literals (gh*_… / github_pat_…)', () => {
+    // Realistic shapes: a ghs_ installation token is the prefix + ~36 base62 chars; a
+    // fine-grained PAT is github_pat_ + a long [A-Za-z0-9_] body.
+    const ghs = 'ghs_' + 'a'.repeat(36);
+    const pat = 'github_pat_11ABCDE0' + 'x'.repeat(60);
+    expect(redactToken(`GH_TOKEN=${ghs} surfaced`)).not.toContain(ghs);
+    expect(redactToken(`token ${pat} leaked`)).not.toContain(pat);
+  });
+
+  it('createWorktree leaves NO token at rest: no recorded git argv carries a credential', async () => {
+    // Regression guard for the tokenless-origin invariant — if a future change re-points
+    // origin with a credential or puts the token in argv, this trips. The agent runs in
+    // the worktree; any git config/argv it can read must be credential-free.
+    const { git, calls } = makeGit();
+    // Real fs probe so createWorktree sees the .git the fake clone created (a static
+    // exists:()=>false would make ensureLocalRepo clone but createWorktree think it's absent).
+    const { deps } = makeDeps({ git, exists: pathExists });
+    const p = new GitAppRepoProvisioner(deps);
+    await p.ensureLocalRepo('acme/widgets'); // clone (tokenless origin) + detect default
+    await p.createWorktree('acme/widgets', 'gh-story-1'); // local worktree add
+
+    const flat = calls.map((c) => c.join(' ')).join('\n');
+    expect(flat).not.toContain(TOKEN);
+    expect(flat).not.toContain('x-access-token');
+    // origin is the tokenless URL; the credential only ever rides in env (asserted elsewhere)
+    expect(flat).toContain('https://github.com/acme/widgets.git');
+  });
+
   it('the REAL default git wrapper rejects (env-auth) WITHOUT leaking the token', async () => {
     // No injected `git` → the production execFile wrapper runs. exists:()=>true takes
     // the set-url + fetch branch; localPath does not exist, so real `git -C <missing>

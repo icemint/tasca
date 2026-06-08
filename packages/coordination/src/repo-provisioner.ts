@@ -55,11 +55,19 @@ const execFileAsync = promisify(execFile);
 /** `owner/repo` — both segments are restricted to GitHub-legal name characters. */
 const REPO_REF_RE = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/;
 
-/** Replace any `x-access-token:<secret>@` with a redacted form, so a leaked argv
- *  (execFile attaches it to the rejection) never carries the live token. Exported
- *  so the default git wrapper's redaction is unit-testable without running git. */
+/** Scrub every credential form Tasca's git/gh calls can surface in an error so a
+ *  leaked argv/stderr (execFile attaches it to the rejection) never carries a live
+ *  token. Covers: the legacy `x-access-token:<tok>@` URL form; the env-auth
+ *  `Authorization: Basic <base64(x-access-token:<tok>)>` header the tokenless-origin
+ *  design now ships (the old regex missed this — base64 hides the literal prefix);
+ *  and bare GitHub token literals (installation/oauth/personal/fine-grained). Exported
+ *  so the redaction is unit-testable without running git. */
 export function redactToken(message: string): string {
-  return message.replace(/x-access-token:[^@]*@/g, 'x-access-token:***@');
+  return message
+    .replace(/x-access-token:[^@\s]*@/g, 'x-access-token:***@')
+    .replace(/(Authorization:\s*Basic\s+)[A-Za-z0-9+/=]+/gi, '$1***')
+    .replace(/\bgh[a-z]_[A-Za-z0-9]{20,}\b/g, 'gh*_***')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_***');
 }
 
 /**

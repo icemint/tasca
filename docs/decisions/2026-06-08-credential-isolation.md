@@ -32,9 +32,9 @@ A combination, enforced at the boundaries Tasca owns:
 These are host/deployment boundaries, not in-process leaks:
 
 1. **Login-shell profiles.** The vendor runs the command via `$SHELL -ilc …` (login+interactive), sourcing `/etc/profile` and the worker user's rc files inside the agent. Any `export SECRET=…` there re-enters after the scrub, and the agent's Bash can read those files. **Mitigation:** run the agent as a dedicated unprivileged user with empty profiles (the multi-tenant deploy target).
-2. **Same-user exposure.** The agent shares the worker user's HOME and could read a concurrent dispatch's git-child env via `/proc`.
+2. **Same-user / shared-namespace exposure (the dominant residual).** On the current deploy the worker runs as **root** and the agent is spawned **in-process**, sharing the worker's PID, network, mount namespaces and HOME. So the in-process env scrub is necessary but **not sufficient**: a prompt-injected root agent reads the **worker's own** `/proc/<pid>/environ` — which permanently holds `GITHUB_APP_PRIVATE_KEY` (the master credential), `DATABASE_URL`, and every other secret — directly, bypassing the scrub entirely. It can likewise read a concurrent git/gh child's environ to lift a live installation token, reach internal Postgres / cloud metadata over the shared network namespace, and source the worker's login profiles. *(An earlier draft of this residual understated it as only "a concurrent git-child's env" — corrected here; the always-present worker environ is the real target. Full analysis: `docs/Security-Review-Stage1.md`.)*
 
-Both close with a **separate-user / network-egress sandbox per agent** — the Phase-2 hardening. Until then: trusted single-tenant repos only, and set `TASCA_REPOS_DIR` to a dedicated private volume.
+These close only with a **separate-user + PID/mount/network-namespace sandbox per agent, brokered credential minting, and default-deny egress** — the Phase-2 hardening (the actual multi-tenant gate). Until then: **trusted single-tenant repos only**, and set `TASCA_REPOS_DIR` to a dedicated private volume.
 
 ## Provenance
 
