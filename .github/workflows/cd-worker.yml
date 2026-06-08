@@ -15,6 +15,7 @@ on:
     paths:
       - 'packages/**'
       - 'pnpm-lock.yaml'
+      - 'deploy/base.Dockerfile'
       - 'deploy/worker.Dockerfile'
       - '.dockerignore'
       - 'scripts/coolify-deploy.sh'
@@ -31,6 +32,10 @@ permissions:
 
 env:
   IMAGE: ghcr.io/icemint/tasca-worker
+  # The shared vendor base (native rebuild + git/gh/claude + the installed workspace).
+  # Built ONCE here and published so the worker (and slice-4's runner image) both
+  # `FROM` it — no second native rebuild, no drift between the two images.
+  IMAGE_BASE: ghcr.io/icemint/tasca-base
 
 jobs:
   build-and-deploy:
@@ -59,6 +64,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build + push the shared base FIRST (the heavy native rebuild). Tagged by the
+      # immutable SHA (consumed by the worker build below) and :latest (the default
+      # FROM for local/manual builds + the runner image).
+      - name: Build and push base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/base.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}:${{ steps.vars.outputs.sha_tag }}
+            ${{ env.IMAGE_BASE }}:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
       - name: Build and push worker image
         uses: docker/build-push-action@v6
         with:
@@ -66,6 +87,8 @@ jobs:
           file: deploy/worker.Dockerfile
           platforms: linux/amd64
           push: true
+          build-args: |
+            TASCA_BASE_IMAGE=${{ env.IMAGE_BASE }}:${{ steps.vars.outputs.sha_tag }}
           tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_tag }}
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
