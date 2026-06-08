@@ -81,6 +81,9 @@ importers:
       '@tasca/auth':
         specifier: workspace:*
         version: link:../auth
+      '@tasca/broker':
+        specifier: workspace:*
+        version: link:../broker
       '@tasca/contracts':
         specifier: workspace:*
         version: link:../contracts

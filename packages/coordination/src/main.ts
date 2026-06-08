@@ -33,6 +33,8 @@ import {
 } from '@tasca/auth';
 import { createExecution } from '@tasca/execution';
 import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
+import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
+import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
@@ -215,6 +217,9 @@ async function main(): Promise<void> {
   let statusReporter: StatusReporter = gatedStatusReporter;
   let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
   let provisioner: RepoProvisioner | undefined;
+  // The credential broker server (worker side) — serves per-task scoped tokens to the
+  // agent-runner over a unix socket, keeping the App master key in this process.
+  let brokerHandle: BrokerServerHandle | undefined;
   // Default content source derives a TaskInput from the event id; with the App
   // env present we fetch the REAL issue title/body for github events (so the
   // agent prompt is the actual story), delegating non-github to the default.
@@ -271,6 +276,29 @@ async function main(): Promise<void> {
       getInstallationIdForOwner: (owner) => store.getInstallationIdForOwner(owner),
       fallback: eventContentSource,
     });
+
+    // Serve the credential broker for the agent-runner — gated on TASCA_BROKER_SOCKET
+    // (the deploy mounts a shared volume + restricts the socket's perms). The injected
+    // minter resolves a task's owner→installation and mints a token scoped to JUST
+    // that one repo; the App master key never leaves this process. Absent socket →
+    // not served (Stage-1 single-container in-process dispatch needs no broker).
+    const brokerSocket = process.env.TASCA_BROKER_SOCKET;
+    if (brokerSocket) {
+      const mint = makeRepoTokenMinter({
+        resolveInstallation: (owner) => store.getInstallationIdForOwner(owner),
+        mintScoped: (installationId, scope) => appClient.mintScopedToken(installationId, scope),
+      });
+      try {
+        brokerHandle = await serveBroker({ socketPath: brokerSocket, mint, logger });
+        logger.info?.('credential broker serving', { socketPath: brokerSocket });
+      } catch (err) {
+        // A broker that can't bind is loud but non-fatal: in-process dispatch (the
+        // fallback) still works; the runner path just can't get tokens until fixed.
+        logger.error('credential broker failed to start — agent-runner token minting unavailable', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   } else {
     logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
   }
@@ -375,7 +403,9 @@ async function main(): Promise<void> {
     logger.info?.('shutting down', { signal });
     if (authSweep) clearInterval(authSweep);
     server.close(() => {
-      void Promise.allSettled([pool.end(), execution.close()]).then(() => process.exit(0));
+      void Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve()]).then(() =>
+        process.exit(0)
+      );
     });
     // Hard cap so a hung connection can't block the rollout forever.
     setTimeout(() => process.exit(0), 10_000).unref();
