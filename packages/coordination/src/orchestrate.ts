@@ -370,7 +370,12 @@ export async function orchestrateTaskAssigned(
         deps.logger?.info?.('coordination: dispatched to an agent-runner', { taskId: task.id, jobId });
         return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: '(runner)' };
       }
-      deps.logger?.info?.('coordination: no runner claimed; running in-process (fallback)', {
+      // SECURITY-POSTURE DOWNGRADE, logged LOUD (error, not info): the in-process fallback
+      // runs the prompt-injected agent INSIDE the worker — root-ish, full egress, co-located
+      // with the master key — i.e. the exact pre-split exposure the runner isolation closes.
+      // It's the migration safety net (a runner outage must never stall a task), but an
+      // operator should SEE every time the hardened boundary is bypassed.
+      deps.logger?.error('coordination: SECURITY — no runner claimed; running the agent IN-PROCESS (fallback bypasses the runner isolation)', {
         taskId: task.id,
         jobId,
       });

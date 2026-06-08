@@ -8,8 +8,10 @@
 #      unix socket (the worker holds the GitHub App key; it never crosses the wire).
 #   2. EGRESS IS ALLOWLISTED. The runner sits ONLY on `internal: true` networks (no default
 #      route to the internet), so its sole path out is the egress-proxy, which permits only
-#      Anthropic + GitHub. Even an agent that unsets HTTPS_PROXY cannot reach a third party
-#      to exfiltrate its scoped token — there is no route. This is the break-target.
+#      Anthropic + GitHub. Even an agent that unsets HTTPS_PROXY cannot reach an ARBITRARY
+#      third party — there is no route. (Note: GitHub is allowlisted AND attacker-writable, so
+#      egress is NOT a confidentiality boundary for secrets the agent can read; the scoped
+#      token isn't in the agent's env and is revoked on completion — see the ADR.)
 #
 # Local validation of the egress boundary (no app needed): deploy/verify-egress.sh.
 

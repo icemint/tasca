@@ -1,23 +1,40 @@
 #!/usr/bin/env bash
 # Prove the runner's egress boundary LOCALLY — the deploy/egress panel's break-target.
 #
-# It stands up ONLY the egress-proxy on an `--internal` (no-internet) network, plus a
-# probe container on that same internal network (the runner's position), and asserts:
+# Two parts:
+#   PART A (static): lint deploy/compose.yml — every network the runner attaches to is
+#     internal:true, and the runner is NOT on the internet-facing `frontend`. This catches a
+#     future regression the runtime probe (a hand-built single network) cannot model.
+#   PART B (runtime): stand up the egress-proxy on an `--internal` (no-internet) network plus
+#     a probe in the runner's position, and assert:
+#       1. ALLOWED host (api.github.com) reachable THROUGH the proxy.
+#       2. DENIED  host (example.com)    BLOCKED by the proxy (deny-by-default).
+#       3. NO ROUTE off the proxy — proven against a LITERAL PUBLIC IP so the failure is a
+#          routing failure (rc 7/28), NOT a DNS failure (rc 6) that would pass for the wrong
+#          reason. This is the load-bearing assertion of the thesis.
+#       4. LOOK-ALIKE host (evilgithub.com) blocked (the regex must anchor).
+#       5. ALLOWED subdomain (raw.githubusercontent.com) reachable.
+#       6. RAW-IP CONNECT via the proxy blocked (the allowlist is host-based; an IP literal
+#          matches no host pattern → deny-by-default).
+#       7. NON-443 CONNECT via the proxy blocked (ConnectPort 443 — no arbitrary-port tunnels).
 #
-#   1. ALLOWED host (api.github.com) is reachable THROUGH the proxy.
-#   2. DENIED  host (example.com)    is BLOCKED by the proxy (403, deny-by-default).
-#   3. DIRECT egress (no proxy) FAILS — the internal network has no route to the internet,
-#      so even an agent that unsets HTTPS_PROXY cannot reach ANY external host.
-#
-# Exit 0 iff all three hold. No app, no DB — just the network boundary.
+# NB: egress filtering stops exfil to ARBITRARY third parties. It is NOT a confidentiality
+# boundary against a GitHub-capable attacker (GitHub is allowlisted + attacker-writable) — see
+# docs/decisions/2026-06-09-coordination-execution-split.md. This script proves the former.
 set -uo pipefail
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE="$HERE/compose.yml"
 NET=tasca-egress-verify
 PROXY=tasca-egress-proxy-verify
 IMG=tasca-egress-proxy:verify
 CURL=curlimages/curl:8.11.1
 PROBE="docker run --rm --network $NET -e HTTPS_PROXY=http://$PROXY:8888 $CURL"
+# A GitHub public IP literal — used to prove pure route-absence (no DNS in the path).
+PUBLIC_IP=140.82.112.3
 fail=0
+pass() { echo "  PASS: $1"; }
+bad()  { echo "  FAIL: $1"; fail=1; }
 
 cleanup() {
   docker rm -f "$PROXY" >/dev/null 2>&1 || true
@@ -26,8 +43,31 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
+echo "==> A. STATIC: deploy/compose.yml runner egress isolation"
+tmpcfg=$(mktemp)
+docker compose -f "$COMPOSE" config --format json >"$tmpcfg" 2>/dev/null
+python3 - "$tmpcfg" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+nets = cfg.get('networks', {})
+runner_nets = list((cfg.get('services', {}).get('runner', {}).get('networks', {}) or {}).keys())
+ok = True
+if not runner_nets:
+    print("  FAIL: runner has no networks"); ok = False
+if 'frontend' in runner_nets:
+    print("  FAIL: runner is on `frontend` (internet-facing) — must not be"); ok = False
+for n in runner_nets:
+    if not nets.get(n, {}).get('internal', False):
+        print(f"  FAIL: runner network `{n}` is not internal:true"); ok = False
+if ok:
+    print(f"  PASS: runner attaches only to internal:true networks {runner_nets}")
+sys.exit(0 if ok else 1)
+PY
+[ $? -eq 0 ] || fail=1
+rm -f "$tmpcfg"
+
 echo "==> building egress-proxy image"
-docker build -q -t "$IMG" "$(dirname "$0")/egress-proxy" >/dev/null || { echo "build failed"; exit 1; }
+docker build -q -t "$IMG" "$HERE/egress-proxy" >/dev/null || { echo "build failed"; exit 1; }
 
 echo "==> creating internal (no-internet) network + proxy (bridged to the internet)"
 docker network create --internal "$NET" >/dev/null
@@ -35,58 +75,53 @@ docker run -d --name "$PROXY" --network "$NET" "$IMG" >/dev/null
 docker network connect bridge "$PROXY" >/dev/null # the proxy's ONLY internet NIC
 sleep 2
 
-pass() { echo "  PASS: $1"; }
-bad()  { echo "  FAIL: $1"; fail=1; }
-
 echo "==> 1. ALLOWED host via proxy (expect reachable)"
-# api.github.com answers 200 at its root — a real GitHub HTTP response (not a proxy 403)
-# means the CONNECT was allowed and reached GitHub.
 code=$($PROBE -sS -o /dev/null -w '%{http_code}' --max-time 20 https://api.github.com 2>/dev/null)
-if [ "$code" = "200" ]; then
-  pass "api.github.com reachable through the proxy (HTTP $code)"
-else
-  bad "api.github.com NOT reachable through the proxy (got '$code')"
-fi
+[ "$code" = "200" ] && pass "api.github.com reachable through the proxy (HTTP $code)" \
+  || bad "api.github.com NOT reachable through the proxy (got '$code')"
 
 echo "==> 2. DENIED host via proxy (expect blocked)"
-out=$($PROBE -sS -o /dev/null --max-time 20 https://example.com 2>&1)
-rc=$?
-if [ $rc -ne 0 ] && echo "$out" | grep -qiE '403|forbidden|denied|CONNECT'; then
-  pass "example.com blocked by the proxy (deny-by-default)"
-else
-  bad "example.com was NOT blocked (rc=$rc, out='$out')"
-fi
+out=$($PROBE -sS -o /dev/null --max-time 20 https://example.com 2>&1); rc=$?
+{ [ $rc -ne 0 ] && echo "$out" | grep -qiE '403|forbidden|denied|CONNECT'; } \
+  && pass "example.com blocked by the proxy (deny-by-default)" \
+  || bad "example.com was NOT blocked (rc=$rc, out='$out')"
 
-echo "==> 3. DIRECT egress, NO proxy (expect no route — agent cannot bypass)"
-out=$(docker run --rm --network "$NET" "$CURL" -sS -o /dev/null --max-time 8 https://api.github.com 2>&1)
-rc=$?
-if [ $rc -ne 0 ]; then
-  pass "direct egress impossible from the internal network (rc=$rc)"
+echo "==> 3. NO ROUTE off the proxy — LITERAL IP (failure must be routing, not DNS)"
+# Direct (no proxy) to a public IP literal: no DNS in the path, so a non-zero exit is a
+# genuine route-absence (curl rc 7 connect-failed / 28 timeout), NOT rc 6 (DNS).
+out=$(docker run --rm --network "$NET" "$CURL" -sS -o /dev/null --connect-timeout 6 "https://$PUBLIC_IP" 2>&1); rc=$?
+if [ "$rc" = "7" ] || [ "$rc" = "28" ]; then
+  pass "no route to a public IP from the internal network (curl rc=$rc = connect/timeout)"
+elif [ "$rc" = "6" ]; then
+  bad "got rc=6 (DNS) — the IP-literal path must not hit DNS; test is unsound"
 else
-  bad "DIRECT egress SUCCEEDED — the internal network is not isolating (token-exfil path open!)"
+  bad "unexpected direct-egress result (rc=$rc, out='$out')"
 fi
 
 echo "==> 4. LOOK-ALIKE host via proxy (expect blocked — the regex must anchor)"
-# evilgithub.com ends with 'github.com' but is NOT a subdomain; the (^|\.) anchor must
-# deny it, else a prompt-injected agent registers a look-alike and exfiltrates through it.
-out=$($PROBE -sS -o /dev/null --max-time 20 https://evilgithub.com 2>&1)
-rc=$?
-if [ $rc -ne 0 ] && echo "$out" | grep -qiE '403|forbidden|denied|CONNECT'; then
-  pass "evilgithub.com blocked (allowlist anchors to apex/subdomain only)"
-else
-  bad "look-alike evilgithub.com was NOT blocked (rc=$rc, out='$out')"
-fi
+out=$($PROBE -sS -o /dev/null --max-time 20 https://evilgithub.com 2>&1); rc=$?
+{ [ $rc -ne 0 ] && echo "$out" | grep -qiE '403|forbidden|denied|CONNECT'; } \
+  && pass "evilgithub.com blocked (allowlist anchors to apex/subdomain only)" \
+  || bad "look-alike evilgithub.com was NOT blocked (rc=$rc, out='$out')"
 
 echo "==> 5. ALLOWED subdomain via proxy (expect reachable — real agent traffic works)"
 code=$($PROBE -sS -o /dev/null -w '%{http_code}' --max-time 20 https://raw.githubusercontent.com 2>/dev/null)
-# raw.githubusercontent.com returns 301/302/400-ish at root, but ANY real HTTP code (not
-# 000) means the CONNECT was allowed and reached GitHub.
-if [ -n "$code" ] && [ "$code" != "000" ]; then
-  pass "raw.githubusercontent.com reachable through the proxy (HTTP $code)"
-else
-  bad "allowed subdomain raw.githubusercontent.com NOT reachable (got '$code')"
-fi
+{ [ -n "$code" ] && [ "$code" != "000" ]; } \
+  && pass "raw.githubusercontent.com reachable through the proxy (HTTP $code)" \
+  || bad "allowed subdomain raw.githubusercontent.com NOT reachable (got '$code')"
+
+echo "==> 6. RAW-IP CONNECT via proxy (expect blocked — host-based allowlist)"
+out=$($PROBE -sS -o /dev/null --max-time 15 "https://$PUBLIC_IP" 2>&1); rc=$?
+{ [ $rc -ne 0 ] && echo "$out" | grep -qiE '403|forbidden|denied|CONNECT'; } \
+  && pass "CONNECT to a raw IP literal blocked (matches no host pattern)" \
+  || bad "raw-IP CONNECT via proxy was NOT blocked (rc=$rc, out='$out')"
+
+echo "==> 7. NON-443 CONNECT via proxy (expect blocked — ConnectPort 443 only)"
+out=$($PROBE -sS -o /dev/null --max-time 15 https://github.com:8443 2>&1); rc=$?
+{ [ $rc -ne 0 ] && echo "$out" | grep -qiE '403|forbidden|denied|CONNECT'; } \
+  && pass "CONNECT to an allowed host on :8443 blocked (no arbitrary-port tunnels)" \
+  || bad "non-443 CONNECT was NOT blocked (rc=$rc, out='$out')"
 
 echo
-if [ $fail -eq 0 ]; then echo "EGRESS BOUNDARY HOLDS ✓"; else echo "EGRESS BOUNDARY BROKEN ✗"; fi
+if [ $fail -eq 0 ]; then echo "EGRESS TOPOLOGY HOLDS ✓ (no arbitrary-third-party route)"; else echo "EGRESS BOUNDARY BROKEN ✗"; fi
 exit $fail

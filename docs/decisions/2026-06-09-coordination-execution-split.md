@@ -40,15 +40,34 @@ Two controls contain the runner — both are the panels' break-targets across th
    `internal: true` networks (the DB plane + the proxy plane). It has **no default route to
    the internet**. Its sole path out is an egress proxy (`deploy/egress-proxy`, tinyproxy with
    `FilterDefaultDeny`) that permits CONNECT only to `*.anthropic.com` + `*.github.com` +
-   `*.githubusercontent.com`, port 443 only. So even an agent that unsets `HTTPS_PROXY`
-   cannot reach a third party to exfiltrate its scoped token — there is no route, and what
-   does go through the proxy is constrained to the allowlist. *(Proven locally:
-   `deploy/verify-egress.sh` — allowed reachable, denied + look-alike blocked, direct egress
-   impossible.)*
+   `*.githubusercontent.com`, port 443 only. So even an agent that unsets `HTTPS_PROXY` cannot
+   reach an **arbitrary third party** — there is no route, and the proxy denies any host off
+   the allowlist. *(Proven locally: `deploy/verify-egress.sh` — allowed reachable, denied +
+   look-alike blocked, **no-route proven against a literal public IP**.)*
+
+   **What egress filtering does NOT do (be precise — the prior wording over-claimed):** it is
+   *not* a confidentiality boundary for secrets against a GitHub-capable attacker. GitHub
+   (`github.com`, `api.github.com`, `*.githubusercontent.com`) is multi-tenant and
+   **attacker-writable** — anyone can create a gist/repo/issue — and the proxy only inspects
+   the CONNECT host, not the tunnelled TLS. So a prompt-injected agent that holds a secret
+   *can* write it as content to an attacker-controlled GitHub destination. What contains the
+   secrets is therefore NOT egress but the scrub + scope + lifetime below; egress stops the
+   naive third-party beacon, DNS look-alike, and arbitrary-host exfil, which is its job.
 
 The credential-isolation carried into execution earlier (#230): the token authenticates git
 via a `GIT_CONFIG` extraheader on the clone child's env only (never persisted to `.git/config`),
 and the agent is spawned with a scrubbed env (no token, no broker socket path).
+
+**What the prompt-injected agent can actually reach (the true secret surface):**
+- The **scoped GitHub token is NOT in the agent's environment** (#230 scrub; it lives only in
+  the transient clone/push child processes). So the agent cannot read its own scoped token to
+  exfiltrate it — its confidentiality rests on the scrub + the one-repo scope + the task
+  lifetime + **revoke-on-completion** (#237 always revokes, even on failure), not on egress.
+- The **`ANTHROPIC_API_KEY` IS in the agent's env** (the Claude CLI needs it). Egress does not
+  make it confidential: the agent could write it to an attacker-controlled GitHub gist over the
+  allowlisted proxy. This is a **residual** — bounded (the key is rotatable, org-level not
+  customer data), and the proper fix (proxy the Anthropic credential so the agent never holds
+  the raw key, or use a per-session token) is tracked as a follow-up, not in this slice.
 
 ## Reference topology
 
@@ -61,16 +80,31 @@ ingress. `cd-worker.yml` builds + publishes the shared base; `cd-runner.yml` bui
 
 ## Consequences
 
-- **+** A prompt-injected agent cannot read the master key (it's in another process) nor
-  exfiltrate its scoped token (no egress route off the allowlist). Blast radius = one repo,
-  task-lived token.
+- **+** A prompt-injected agent cannot read the master key (it's in another process) nor reach
+  an arbitrary third party (no egress route off the allowlist). Its own scoped token isn't in
+  its env (#230) and is revoked on completion (#237), so even the GitHub-as-exfil-channel
+  residual (above) buys an attacker a one-repo, already-expiring token. Blast radius = one repo,
+  task-lived.
 - **+** The runner is non-root; a container-level compromise has no root in the container.
+- **−** **GitHub is an exfil channel for whatever the agent CAN read.** Egress filtering is a
+  host-level CONNECT allowlist, not TLS-inspecting, and GitHub is attacker-writable — so any
+  secret in the agent's env (today: `ANTHROPIC_API_KEY`) can be written to an attacker gist.
+  Carried by token scrub/scope/lifetime, not egress; closing it fully needs the Anthropic-cred
+  proxy (tracked).
+- **−** **Cross-task persistence on a shared runner.** The agent runs via a login shell and
+  `HOME=/data` is the runner's persistent, agent-writable volume, so task A's agent can plant a
+  `~/.bashrc` / git credential helper that task B's agent sources — harvesting a future task's
+  context. The egress wall still contains the box, but this erodes per-task isolation on a
+  shared runner. Fix (tracked follow-up in `@tasca/execution`): give each agent run an
+  **ephemeral per-task `HOME`** distinct from the runner volume, and spawn with a non-login,
+  non-interactive shell so rc/profile files are never sourced.
 - **−** The **in-process fallback** in the worker still runs agents with the worker's trust
   and full egress when no runner claims a job (a runner outage). This is the migration safety
   net (a runner outage never stalls a task), but it is a *reduced-but-not-zero* exposure until
   runners are the steady-state path. Mitigation: keep `TASCA_DISPATCH_MODE=queue` with healthy
-  runners so the fallback is cold; hardening the worker's own agent spawn (drop-root, egress)
-  is tracked for a later pass.
+  runners so the fallback is cold; the fallback path now logs at **error-level** ("SECURITY —
+  running the agent IN-PROCESS") so a boundary downgrade is visible/alertable; hardening the
+  worker's own agent spawn (drop-root, egress) is tracked for a later pass.
 - **−** Operational surface grows (a proxy + extra networks). The egress allowlist must be
   maintained as legitimate agent destinations change; `deploy/verify-egress.sh` guards it.
 - The egress enforcement is **network-level** (internal-only networks) by deliberate choice;
