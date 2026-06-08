@@ -196,6 +196,45 @@ export class GitHubAppClient {
   }
 
   /**
+   * Mint an installation token SCOPED to specific repositories with minimal
+   * permissions — the credential broker uses this to hand the agent-runner a
+   * per-task token. Unlike getInstallationToken this is NOT cached and NOT broad:
+   * even if the token leaks, it can touch only `scope.repositories` with only
+   * `scope.permissions`, for ~1h. The App private key is used here ONLY to sign the
+   * App JWT; it never leaves this client (and never reaches the runner — the broker
+   * returns only the minted token).
+   */
+  async mintScopedToken(
+    installationId: string,
+    scope: { repositories: string[]; permissions: Record<string, string> }
+  ): Promise<InstallationToken> {
+    const jwt = this.mintAppJwt();
+    const res = await this.fetchImpl(
+      `${this.apiBase}/app/installations/${installationId}/access_tokens`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ repositories: scope.repositories, permissions: scope.permissions }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`github scoped-token failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+    const json = (await res.json()) as { token?: string; expires_at?: string };
+    if (!json.token || !json.expires_at) {
+      throw new Error('github scoped-token: response missing token/expires_at');
+    }
+    return { token: json.token, expiresAt: new Date(json.expires_at).getTime() };
+  }
+
+  /**
    * Issue an authenticated REST request under an installation token. `path` is a
    * leading-slash API path (`/repos/{owner}/{repo}/issues/{n}/comments`); `body`
    * is JSON-serialized when present. Resolves to the parsed JSON (or null for an

@@ -99,6 +99,31 @@ describe('GitHubAppClient.getInstallationToken (POST shape + cache)', () => {
     expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28');
   });
 
+  it('mintScopedToken POSTs a repositories + permissions body and is NOT cached', async () => {
+    let calls = 0;
+    let captured: { init: RequestInit } | undefined;
+    const fakeFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      captured = { init: init ?? {} };
+      return tokenResponse('ghs_scoped', '2026-01-01T01:00:00Z');
+    }) as unknown as typeof fetch;
+
+    const client = new GitHubAppClient({
+      appId: APP_ID,
+      privateKey,
+      apiBase: 'https://api.example.test',
+      fetchImpl: fakeFetch,
+      now: () => 1_700_000_000_000,
+    });
+    const scope = { repositories: ['widgets'], permissions: { contents: 'write', pull_requests: 'write' } };
+    const t1 = await client.mintScopedToken('77', scope);
+    const t2 = await client.mintScopedToken('77', scope);
+
+    expect(t1.token).toBe('ghs_scoped');
+    expect(calls).toBe(2); // NOT cached — each task gets a fresh scoped token
+    expect(JSON.parse(captured!.init.body as string)).toEqual(scope); // scoped to one repo + minimal perms
+  });
+
   it('reuses the cached token before the refresh margin (fetch called once)', async () => {
     let calls = 0;
     const fakeFetch = (async () => {

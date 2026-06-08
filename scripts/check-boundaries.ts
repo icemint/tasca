@@ -25,13 +25,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const ALLOWLIST: Record<string, readonly string[]> = {
   domain: [],
   auth: [],
+  broker: [], // credential-broker transport: pure node:net, zero @tasca deps (a leaf)
   contracts: ['domain'],
   db: ['domain'],
   identity: ['domain'],
   routing: ['domain', 'contracts'],
   execution: ['domain', 'contracts'],
   adapters: ['domain', 'contracts'],
-  coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters'],
+  coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters', 'broker'],
 };
 
 export interface ImportRef {
