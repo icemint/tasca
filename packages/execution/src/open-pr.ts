@@ -152,13 +152,26 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
   }
 }
 
-/** Extract a string message from an execFile rejection (carries stdout/stderr). */
+/** Scrub credential forms a failing git/gh can echo (the env-auth `Authorization:
+ *  Basic <base64>` header, a `GH_TOKEN` value, bare GitHub token literals) before the
+ *  message lands in a thrown error → dispatch log / audit. Kept local — execution must
+ *  not import @tasca/coordination's redactToken (port.ts §1.3 boundary). */
+function redact(message: string): string {
+  return message
+    .replace(/x-access-token:[^@\s]*@/g, 'x-access-token:***@')
+    .replace(/(Authorization:\s*Basic\s+)[A-Za-z0-9+/=]+/gi, '$1***')
+    .replace(/\bgh[a-z]_[A-Za-z0-9]{20,}\b/g, 'gh*_***')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_***');
+}
+
+/** Extract a string message from an execFile rejection (carries stdout/stderr),
+ *  redacted so a verbose/traced git/gh failure can't leak a live token. */
 function errText(err: unknown): string {
   if (err && typeof err === 'object') {
     const e = err as { stderr?: string; stdout?: string; message?: string };
-    return `${e.stderr ?? ''}\n${e.stdout ?? ''}\n${e.message ?? ''}`;
+    return redact(`${e.stderr ?? ''}\n${e.stdout ?? ''}\n${e.message ?? ''}`);
   }
-  return String(err);
+  return redact(String(err));
 }
 
 /** Look up the URL of the existing open PR for `branch` (the idempotency fallback). */

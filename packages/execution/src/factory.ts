@@ -170,11 +170,16 @@ function spawnWithScrubbedEnv<T>(allowedKeys: Set<string>, spawn: () => T): T {
 //      and the agent's Bash can read those rc files directly. Run the agent as a
 //      DEDICATED unprivileged user with empty profiles (the multi-tenant deploy target),
 //      not as the worker user.
-//   2. Same-user exposure: the agent shares the worker user's HOME and could read a
-//      concurrent dispatch's git-child env via /proc. Closing both needs a
-//      separate-user / network-egress sandbox per agent.
-// The scrub closes the in-process env leak (the worker's OWN secrets in process.env);
-// these residuals are host/deployment boundaries, tracked for the Phase-2 sandbox.
+//   2. Same-user / shared-namespace exposure (the DOMINANT residual): the worker runs
+//      as root and the agent is an in-process child sharing the worker's PID/net/mount
+//      namespaces + HOME. A root agent reads the WORKER'S OWN /proc/<pid>/environ —
+//      which permanently holds GITHUB_APP_PRIVATE_KEY/DATABASE_URL/etc — directly,
+//      bypassing this scrub; likewise a concurrent git/gh child's environ, internal
+//      Postgres/metadata over the shared net ns. Closing it needs a separate-user +
+//      PID/mount/net-namespace sandbox per agent (+ brokered creds + egress allowlist).
+// The scrub closes the in-process env-INHERITANCE leak (what the child gets); it does
+// NOT bound what a same-uid sibling can READ. See docs/Security-Review-Stage1.md.
+// These residuals are deployment boundaries, tracked for the Phase-2 sandbox.
 
 function defaultVendorRoot(): string {
   // src/factory.ts -> ../vendor/emdash
@@ -283,6 +288,12 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
       // allowlisted vars) plus the vendor's own PTY control flag.
       const scrubKeep = new Set([...allowedNames, ...VENDOR_CONTROL_ENV]);
 
+      // Resolve the vendor services OUTSIDE the scrub: the lazy bridge load reads
+      // EMDASH_* (which the scrub strips) and must not run under the reduced env. In
+      // production initDb() already warmed this at boot; hoisting keeps the scrub
+      // window to exactly the startLifecyclePty call regardless.
+      const ptyManager = getServices().ptyManager;
+
       let handle: VendorPtyHandle;
       try {
         // startLifecyclePty can throw SYNCHRONOUSLY (before any handle exists,
@@ -290,7 +301,7 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
         // under spawnWithScrubbedEnv so the vendor cannot re-add a worker secret
         // (or SSH_AUTH_SOCK) from the global process.env it reads directly.
         handle = spawnWithScrubbedEnv(scrubKeep, () =>
-          getServices().ptyManager.startLifecyclePty({
+          ptyManager.startLifecyclePty({
             id: input.id,
             command,
             cwd: input.cwd,
