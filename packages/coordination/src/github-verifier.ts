@@ -27,12 +27,17 @@ function diagnose(
       assignee?: { id?: unknown } | null;
       comment?: unknown;
     };
+    const action = typeof body.action === 'string' ? body.action : null;
+    // GitHub puts a top-level `assignee` on BOTH `assigned` and `unassigned`, but
+    // parseEvent only emits on `assigned`. Report `assigneeId`/`assigneeInSet` ONLY
+    // for `assigned` so the diagnostic can't read as "in set but matched:0" on an
+    // unassigned/other action — the action gate is the real reason for matched:0.
     const assigneeId =
-      body.assignee && body.assignee.id !== undefined && body.assignee.id !== null
+      action === 'assigned' && body.assignee && body.assignee.id !== undefined && body.assignee.id !== null
         ? String(body.assignee.id)
         : null;
     return {
-      action: typeof body.action === 'string' ? body.action : null,
+      action,
       assigneeId,
       assigneeInSet: assigneeId !== null ? registeredGitHubIds.has(assigneeId) : null,
       hasComment: Boolean(body.comment),
