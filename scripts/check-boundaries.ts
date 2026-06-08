@@ -32,6 +32,9 @@ export const ALLOWLIST: Record<string, readonly string[]> = {
   routing: ['domain', 'contracts'],
   execution: ['domain', 'contracts'],
   adapters: ['domain', 'contracts'],
+  // The execution-side composition root: claims dispatch_job (db), gets a scoped token
+  // (broker), runs the agent (execution). The mirror of coordination on the runner side.
+  'agent-runner': ['domain', 'contracts', 'db', 'broker', 'execution'],
   coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters', 'broker'],
 };
 
