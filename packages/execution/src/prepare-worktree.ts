@@ -76,6 +76,8 @@ export interface PrepareWorktreeInput {
 export interface PreparedWorktree {
   /** Absolute path to the worktree the agent runs in. */
   worktreePath: string;
+  /** The shared local clone the worktree is attached to (needed to remove it). */
+  localPath: string;
   /** The per-attempt local branch. */
   branch: string;
   /** Base ref the work is compared against (`origin/<default>`). */
@@ -91,6 +93,11 @@ export interface PreparedWorktree {
 export async function prepareScopedWorktree(input: PrepareWorktreeInput): Promise<PreparedWorktree> {
   const m = REPO_REF_RE.exec(input.repoRef);
   if (!m) throw new Error(`prepareScopedWorktree: invalid repoRef ${JSON.stringify(input.repoRef)}`);
+  // The dot-permitting regex alone admits a bare `..` segment (owner='..' escapes
+  // reposDir; repo='..' resolves to reposDir itself — an rm -rf of every other task's
+  // clones). The broker's isValidRepoRef bans `..` upstream, but this is the FS-write
+  // site, so it carries its own guard — matching open-pr.ts and the contract.ts note.
+  if (input.repoRef.includes('..')) throw new Error(`prepareScopedWorktree: unsafe repoRef ${JSON.stringify(input.repoRef)}`);
   const owner = m[1]!;
   const repo = m[2]!;
   const git = input.git ?? defaultGit;
@@ -105,6 +112,11 @@ export async function prepareScopedWorktree(input: PrepareWorktreeInput): Promis
     // token) and fetch the latest via env-auth.
     await git(['-C', localPath, 'remote', 'set-url', 'origin', originUrl]);
     await git(['-C', localPath, 'fetch', '--prune', 'origin'], { env: authEnv });
+    // Refresh origin/HEAD so the default-branch read tracks an upstream rename (a
+    // fetch alone leaves the original origin/HEAD, so we'd otherwise branch off a
+    // pruned ref and the worktree-add would throw into an infinite retry). Best-effort:
+    // detectDefaultBranch falls back to the existing ref if this can't reach the remote.
+    await git(['-C', localPath, 'remote', 'set-head', 'origin', '--auto'], { env: authEnv }).catch(() => {});
   } else {
     // No usable checkout: clear any leftover, clone into a temp dir (env-auth) + rename
     // into place so localPath only appears once the clone is complete.
@@ -132,14 +144,37 @@ export async function prepareScopedWorktree(input: PrepareWorktreeInput): Promis
   // LOCAL branch off the already-fetched remote default — no network, no auth.
   await git(['-C', localPath, 'worktree', 'add', '--no-track', '-b', branch, worktreePath, `origin/${defaultBranch}`]);
 
-  return { worktreePath, branch, baseRef: `origin/${defaultBranch}` };
+  return { worktreePath, localPath, branch, baseRef: `origin/${defaultBranch}` };
+}
+
+/**
+ * Tear down a worktree once its agent run is done. Worktrees accumulate on a shared
+ * volume — each job adds a randomly-named one — so the runner MUST reclaim them or it
+ * walks into ENOSPC. `worktree remove --force` drops the registration + dir; if git
+ * can't (already gone, lock), fall back to an rm and a prune so the shared clone's
+ * worktree list doesn't keep a dangling entry. Best-effort: callers run it in a finally.
+ */
+export async function removeScopedWorktree(input: {
+  localPath: string;
+  worktreePath: string;
+  git?: GitRunner;
+}): Promise<void> {
+  const git = input.git ?? defaultGit;
+  try {
+    await git(['-C', input.localPath, 'worktree', 'remove', '--force', input.worktreePath]);
+  } catch {
+    await rm(input.worktreePath, { recursive: true, force: true }).catch(() => {});
+    await git(['-C', input.localPath, 'worktree', 'prune']).catch(() => {});
+  }
 }
 
 async function detectDefaultBranch(git: GitRunner, localPath: string): Promise<string> {
-  const out = (await git(['-C', localPath, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-  if (!out || out === 'HEAD') {
-    const sym = (await git(['-C', localPath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
-    return sym.replace(/^origin\//, '') || 'main';
-  }
-  return out;
+  // origin/HEAD is the remote's default (set at clone, refreshed via set-head after a
+  // fetch) — the source of truth for a ref we know exists. Prefer it over the local
+  // checked-out branch, which on the reuse path is stale (never re-checked-out) and can
+  // name a branch that's been renamed/pruned upstream.
+  const sym = (await git(['-C', localPath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).catch(() => '')).trim();
+  if (sym) return sym.replace(/^origin\//, '');
+  const out = (await git(['-C', localPath, 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim();
+  return out && out !== 'HEAD' ? out : 'main';
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { prepareScopedWorktree, gitAuthEnv, type GitRunner } from './prepare-worktree';
+import { prepareScopedWorktree, removeScopedWorktree, gitAuthEnv, type GitRunner } from './prepare-worktree';
 
 const TOKEN = 'ghs_scoped_tok_abcdef0123456789';
 
@@ -78,5 +78,66 @@ describe('prepareScopedWorktree — credential isolation carries over to the run
     await expect(
       prepareScopedWorktree({ repoRef: 'not-a-ref', token: TOKEN, reposDir: '/tmp', taskLabel: 't', git: fakeGit().git })
     ).rejects.toThrow(/invalid repoRef/);
+  });
+
+  it('rejects a `..` repoRef before any filesystem write (path-traversal guard)', async () => {
+    // The dot-permitting regex matches owner='..' / repo='..'; without the guard, path.join
+    // would escape reposDir and the no-checkout branch would rm -rf the escaped path.
+    for (const repoRef of ['../x', 'foo/..', '../..']) {
+      const { git, calls } = fakeGit();
+      await expect(
+        prepareScopedWorktree({ repoRef, token: TOKEN, reposDir: '/tmp/tasca-repos', taskLabel: 't', git, exists: async () => false })
+      ).rejects.toThrow(/unsafe repoRef/);
+      expect(calls).toHaveLength(0); // rejected before any git/rm ran
+    }
+  });
+
+  it('branches off the REMOTE default (origin/HEAD), not the stale local checkout', async () => {
+    const reposDir = await mkdtemp(path.join(os.tmpdir(), 'tasca-rt-'));
+    try {
+      // Simulate an upstream rename: the local checkout still reads `master` via rev-parse,
+      // but origin/HEAD now points at `main`. The base must follow origin/HEAD.
+      const calls: Array<{ args: string[]; env?: Record<string, string> }> = [];
+      const git: GitRunner = async (args, opts) => {
+        calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
+        if (args.includes('symbolic-ref')) return 'origin/main\n';
+        if (args.includes('rev-parse')) return 'master\n'; // stale local branch
+        return '';
+      };
+      const wt = await prepareScopedWorktree({ repoRef: 'acme/widgets', token: TOKEN, reposDir, taskLabel: 'gh-3', git, exists: async () => true });
+      expect(wt.baseRef).toBe('origin/main');
+      const wtAdd = calls.find((c) => c.args.includes('worktree'))!;
+      expect(wtAdd.args).toContain('origin/main'); // not origin/master
+      // origin/HEAD was refreshed via env-auth so a rename is picked up
+      const setHead = calls.find((c) => c.args.includes('set-head'))!;
+      expect(setHead.env?.GIT_CONFIG_VALUE_0).toBeDefined();
+    } finally {
+      await rm(reposDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('removeScopedWorktree — the runner reclaims worktrees so the shared volume cannot fill', () => {
+  it('removes the worktree via `git worktree remove --force`', async () => {
+    const calls: string[][] = [];
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      return '';
+    };
+    await removeScopedWorktree({ localPath: '/repos/acme/widgets', worktreePath: '/repos/acme/widgets.worktrees/x', git });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(['-C', '/repos/acme/widgets', 'worktree', 'remove', '--force', '/repos/acme/widgets.worktrees/x']);
+  });
+
+  it('falls back to prune when the git remove fails (dangling registration is still cleared)', async () => {
+    const calls: string[][] = [];
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      if (args.includes('remove')) throw new Error('worktree is locked');
+      return '';
+    };
+    await removeScopedWorktree({ localPath: '/repos/acme/widgets', worktreePath: '/nope', git });
+    expect(calls.some((a) => a.includes('remove'))).toBe(true);
+    expect(calls.some((a) => a.includes('prune'))).toBe(true); // pruned after the failed remove
   });
 });

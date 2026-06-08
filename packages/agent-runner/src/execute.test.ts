@@ -70,9 +70,10 @@ const PAYLOAD: DispatchPayload = {
 const JOB: DispatchJob = { id: 'job-1', taskId: 'task-1', payload: PAYLOAD, attempts: 1, fence: 1 };
 const TOKEN: RepoToken = { token: 'ghs_scoped', expiresAt: Date.now() + 3_600_000 };
 
-const fakePrepare = (over: Partial<{ worktreePath: string; branch: string; baseRef: string }> = {}) =>
+const fakePrepare = (over: Partial<{ worktreePath: string; localPath: string; branch: string; baseRef: string }> = {}) =>
   vi.fn(async (_input: PrepareWorktreeInput) => ({
     worktreePath: '/wt',
+    localPath: '/repos/acme/widgets',
     branch: 'tasca-wt/x',
     baseRef: 'origin/main',
     ...over,
@@ -82,7 +83,8 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
   it('runs the full flow and returns the PR url; threads the SCOPED token to git auth', async () => {
     const { execution, spawns, commits, prs } = fakeExecution();
     const prepareWorktree = fakePrepare();
-    const execute = makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree });
+    const removeWorktree = vi.fn(async () => {});
+    const execute = makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree, removeWorktree });
 
     const outcome = await execute(JOB, PAYLOAD, TOKEN);
 
@@ -95,11 +97,13 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
     expect(commits[0]).toMatchObject({ cwd: '/wt', baseRef: 'origin/main' });
     // the PR push carries the SCOPED token (ExecutionPort.openPr does env-auth, token NOT in argv)
     expect(prs[0]).toMatchObject({ cwd: '/wt', branch: 'tasca-wt/x', headBranch: 'tasca/acme-widgets-5-abc123', token: 'ghs_scoped' });
+    // the worktree is reclaimed (no disk leak on the shared volume)
+    expect(removeWorktree).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: '/wt', localPath: '/repos/acme/widgets' }));
   });
 
   it('SECURITY: the agent spawn input carries NO token and NO broker socket', async () => {
     const { execution, spawns } = fakeExecution();
-    await makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare() })(JOB, PAYLOAD, TOKEN);
+    await makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) })(JOB, PAYLOAD, TOKEN);
     const spawnInput = spawns[0]!;
     const serialized = JSON.stringify(spawnInput);
     expect(serialized).not.toContain('ghs_scoped'); // no token in the spawn surface
@@ -108,29 +112,36 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
     expect(spawnInput.env).toBeUndefined();
   });
 
-  it('no committed change → terminal fail, no PR opened', async () => {
+  it('no committed change → terminal fail, no PR opened — and the worktree is still reclaimed', async () => {
     const { execution, prs } = fakeExecution({ async commitAgentWork() { return { changed: false }; } });
-    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare() })(JOB, PAYLOAD, TOKEN);
+    const removeWorktree = vi.fn(async () => {});
+    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(JOB, PAYLOAD, TOKEN);
     expect(outcome).toEqual({ ok: false, retry: false, error: 'agent produced no committed changes' });
     expect(prs).toHaveLength(0);
+    expect(removeWorktree).toHaveBeenCalledTimes(1); // no disk leak even on the terminal path
   });
 
-  it('a clone failure is a RETRYABLE outcome (transient infra)', async () => {
+  it('a clone failure is a RETRYABLE outcome (transient infra) — nothing to reclaim', async () => {
     const prepareWorktree = vi.fn(async () => {
       throw new Error('network down');
     });
-    const outcome = await makeRunnerExecute({ execution: fakeExecution().execution, reposDir: '/r', prepareWorktree })(JOB, PAYLOAD, TOKEN);
+    const removeWorktree = vi.fn(async () => {});
+    const outcome = await makeRunnerExecute({ execution: fakeExecution().execution, reposDir: '/r', prepareWorktree, removeWorktree })(JOB, PAYLOAD, TOKEN);
     expect(outcome).toMatchObject({ ok: false, retry: true });
+    // prepare threw before a worktree existed → no teardown to run
+    expect(removeWorktree).not.toHaveBeenCalled();
   });
 
-  it('a non-zero agent exit is a retryable failure (no PR)', async () => {
+  it('a non-zero agent exit is a retryable failure (no PR) — and the worktree is reclaimed', async () => {
     const { execution, prs } = fakeExecution({
       spawnAgent(input) {
         return handleExiting(1); // non-zero exit
       },
     });
-    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare() })(JOB, PAYLOAD, TOKEN);
+    const removeWorktree = vi.fn(async () => {});
+    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(JOB, PAYLOAD, TOKEN);
     expect(outcome).toMatchObject({ ok: false, retry: true });
     expect(prs).toHaveLength(0);
+    expect(removeWorktree).toHaveBeenCalledTimes(1); // reclaimed after the failed run
   });
 });

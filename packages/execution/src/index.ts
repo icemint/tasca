@@ -31,6 +31,7 @@ export { openPr } from './open-pr.js';
 
 export {
   prepareScopedWorktree,
+  removeScopedWorktree,
   gitAuthEnv,
   redactToken,
   type PrepareWorktreeInput,

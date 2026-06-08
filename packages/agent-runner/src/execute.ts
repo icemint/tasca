@@ -12,6 +12,7 @@
 
 import {
   prepareScopedWorktree as defaultPrepareWorktree,
+  removeScopedWorktree as defaultRemoveWorktree,
   type ExecutionPort,
   type PrepareWorktreeInput,
   type PreparedWorktree,
@@ -27,6 +28,8 @@ export interface RunnerExecuteDeps {
   agentTimeoutMs?: number;
   /** Clone+worktree (injectable for tests); defaults to the real env-auth clone. */
   prepareWorktree?: (input: PrepareWorktreeInput) => Promise<PreparedWorktree>;
+  /** Tear down the worktree after the run (injectable for tests); defaults to real. */
+  removeWorktree?: (worktree: PreparedWorktree) => Promise<void>;
   logger?: RunnerLogger;
 }
 
@@ -35,9 +38,10 @@ const DEFAULT_AGENT_TIMEOUT_MS = 600_000;
 export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
   const timeoutMs = deps.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
   const prepareWorktree = deps.prepareWorktree ?? defaultPrepareWorktree;
+  const removeWorktree = deps.removeWorktree ?? ((w: PreparedWorktree) => defaultRemoveWorktree({ localPath: w.localPath, worktreePath: w.worktreePath }));
   return async (job, payload, token): Promise<ExecuteOutcome> => {
     // 1. Clone + worktree using the SCOPED token via env-auth (never persisted).
-    let worktree;
+    let worktree: PreparedWorktree;
     try {
       worktree = await prepareWorktree({
         repoRef: payload.repoRef,
@@ -50,40 +54,49 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
       return { ok: false, retry: true, error: `prepare worktree failed: ${errMsg(err)}` };
     }
 
-    // 2. Spawn the agent. ExecutionPort scrubs the child env (no token, no broker
-    //    socket). The prompt is the only attacker-influenced value; the factory
-    //    POSIX-quotes it into the claude command.
+    // Once a worktree exists it MUST be reclaimed — on success, terminal fail, or retry
+    // alike — or worktrees pile up on the shared volume until ENOSPC. The token-bearing
+    // git work all lives inside this try; the finally tears the worktree down regardless.
     try {
-      await spawnAndAwait(deps.execution, { id: payload.taskId, prompt: payload.prompt, cwd: worktree.worktreePath }, timeoutMs);
-    } catch (err) {
-      return { ok: false, retry: true, error: `agent run failed: ${errMsg(err)}` };
+      // 2. Spawn the agent. ExecutionPort scrubs the child env (no token, no broker
+      //    socket). The prompt is the only attacker-influenced value; the factory
+      //    POSIX-quotes it into the claude command.
+      try {
+        await spawnAndAwait(deps.execution, { id: payload.taskId, prompt: payload.prompt, cwd: worktree.worktreePath }, timeoutMs);
+      } catch (err) {
+        return { ok: false, retry: true, error: `agent run failed: ${errMsg(err)}` };
+      }
+
+      // 3. Commit whatever the agent left; never open an empty PR.
+      const work = await deps.execution.commitAgentWork({
+        cwd: worktree.worktreePath,
+        message: `Tasca: ${payload.externalStoryId}`,
+        baseRef: worktree.baseRef,
+      });
+      if (!work.changed) {
+        return { ok: false, retry: false, error: 'agent produced no committed changes' };
+      }
+
+      // 4. Open the PR with the SCOPED token (env-auth push + gh GH_TOKEN; not in argv).
+      //    The deterministic head makes a re-drive idempotent (no duplicate PR).
+      const pr = await deps.execution.openPr({
+        cwd: worktree.worktreePath,
+        branch: worktree.branch,
+        headBranch: payload.headBranch,
+        title: `Tasca: ${payload.externalStoryId}`,
+        token: token.token,
+      });
+
+      deps.logger?.info?.('agent-runner: PR opened', { jobId: job.id, taskId: payload.taskId, url: pr.url });
+      // The PR url is the runner's result, written back to the QUEUE only (the reaper —
+      // coordination-side — records it + finalizes; the runner never touches coordination
+      // tables).
+      return { ok: true, result: { prUrl: pr.url } };
+    } finally {
+      await removeWorktree(worktree).catch((err) => {
+        deps.logger?.error?.('agent-runner: worktree teardown failed', { jobId: job.id, err: errMsg(err) });
+      });
     }
-
-    // 3. Commit whatever the agent left; never open an empty PR.
-    const work = await deps.execution.commitAgentWork({
-      cwd: worktree.worktreePath,
-      message: `Tasca: ${payload.externalStoryId}`,
-      baseRef: worktree.baseRef,
-    });
-    if (!work.changed) {
-      return { ok: false, retry: false, error: 'agent produced no committed changes' };
-    }
-
-    // 4. Open the PR with the SCOPED token (env-auth push + gh GH_TOKEN; not in argv).
-    //    The deterministic head makes a re-drive idempotent (no duplicate PR).
-    const pr = await deps.execution.openPr({
-      cwd: worktree.worktreePath,
-      branch: worktree.branch,
-      headBranch: payload.headBranch,
-      title: `Tasca: ${payload.externalStoryId}`,
-      token: token.token,
-    });
-
-    deps.logger?.info?.('agent-runner: PR opened', { jobId: job.id, taskId: payload.taskId, url: pr.url });
-    // The PR url is the runner's result, written back to the QUEUE only (the reaper —
-    // coordination-side — records it + finalizes; the runner never touches coordination
-    // tables).
-    return { ok: true, result: { prUrl: pr.url } };
   };
 }
 
