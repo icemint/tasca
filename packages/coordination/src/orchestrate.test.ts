@@ -9,14 +9,15 @@ import type {
   TierEstimate,
 } from '@tasca/domain';
 import type { AdapterEvent } from '@tasca/contracts';
-import type {
-  AgentProcessHandle,
-  ExecutionPort,
-  OpenPrInput,
-  OpenPrResult,
-  ReserveWorktreeInput,
-  SpawnAgentInput,
-  Worktree,
+import {
+  ExecutionError,
+  type AgentProcessHandle,
+  type ExecutionPort,
+  type OpenPrInput,
+  type OpenPrResult,
+  type ReserveWorktreeInput,
+  type SpawnAgentInput,
+  type Worktree,
 } from '@tasca/execution';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
 import type { CoordinationStore } from './store';
@@ -633,5 +634,44 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
 
     expect(outcome.kind).toBe('dispatched');
     expect(execution.reserveInputs[0]!.repoPath).toBe('.');
+  });
+});
+
+describe('orchestrateTaskAssigned — failure observability', () => {
+  it('logs "dispatch failed" with the failing stage + error message (ExecutionError → stage)', async () => {
+    const store = new FakeStore();
+    const lines: Array<{ message: string; context?: Record<string, unknown> }> = [];
+    const logger = {
+      error: (message: string, context?: Record<string, unknown>) => lines.push({ message, ...(context ? { context } : {}) }),
+      info: () => {},
+    };
+    // Fail at the worktree stage with a typed ExecutionError (post-claim).
+    const failingExecution: ExecutionPort = {
+      async initDb() {},
+      async reserveWorktree() {
+        throw new ExecutionError('worktree', 'reserveWorktree failed: git worktree add exploded');
+      },
+      spawnAgent() {
+        throw new Error('unreached');
+      },
+      killAgent() {},
+      async openPr(): Promise<OpenPrResult> {
+        return { url: 'unreached' };
+      },
+      async close() {},
+    };
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution: new FakeExecution(), status: new FakeStatus(), audit: new FakeAudit() }),
+      execution: failingExecution, // OrchestrationDeps.execution is ExecutionPort
+      logger,
+    };
+
+    const outcome = await orchestrateTaskAssigned(EVENT, deps);
+    expect(outcome.kind).toBe('failed');
+
+    const failLog = lines.find((l) => l.message === 'coordination: dispatch failed');
+    expect(failLog, 'a dispatch-failed log line should be emitted').toBeDefined();
+    expect(failLog!.context).toMatchObject({ stage: 'worktree', taskId: outcome.taskId });
+    expect(String(failLog!.context!.error)).toMatch(/git worktree add exploded/);
   });
 });

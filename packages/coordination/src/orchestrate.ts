@@ -31,7 +31,7 @@ import {
 } from '@tasca/routing';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus } from '@tasca/domain';
-import type { ExecutionPort } from '@tasca/execution';
+import { ExecutionError, type ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
 import type { StatusReporter, Logger } from './ports';
 
@@ -283,6 +283,19 @@ export async function orchestrateTaskAssigned(
       breakerThreshold
     );
     const outcome = tripped ? 'needs_attention' : 'retry';
+
+    // Surface WHY at the boundary (stdout), not only in the audit row: the error
+    // message carries the failing stage (provisioner / reserveWorktree / spawn /
+    // openPr), and an ExecutionError adds a typed `stage`. Without this a "failed"
+    // outcome is undiagnosable from logs.
+    deps.logger?.error('coordination: dispatch failed', {
+      taskId: task.id,
+      agentId: winnerAgentId ?? null,
+      failureCount,
+      outcome,
+      stage: err instanceof ExecutionError ? err.kind : undefined,
+      error: err instanceof Error ? err.message : String(err),
+    });
 
     // Best-effort audit: a pre-claim failure has no claimed agent/principal, so
     // `audit` is skipped (principalId null); a post-claim failure attributes to
