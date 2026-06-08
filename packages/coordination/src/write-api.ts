@@ -268,7 +268,10 @@ async function handleWrite(
     case 'resume':
     case 'profile': {
       if (!deps.identity) {
-        sendJson(res, 404, { error: 'agent writes not configured' });
+        // 503 (not 404): the agent exists/readable — agent writes just aren't wired.
+        // The client maps 503 → an honest "actions aren't enabled" message, whereas
+        // 404 would wrongly tell the user the agent no longer exists.
+        sendJson(res, 503, { error: 'agent writes not configured' });
         return;
       }
       let body: { version?: unknown; maxTier?: unknown; concurrencyLimit?: unknown; costCeiling?: unknown };

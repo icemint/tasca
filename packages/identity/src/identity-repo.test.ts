@@ -383,6 +383,16 @@ run('PgIdentityRepository — versioned agent writes (optimistic concurrency)', 
     expect(got!.agent.version).toBe(1);
   });
 
+  it('editing an agent that has NO profile row creates+persists it (no false success)', async () => {
+    const { agent } = await make(); // createAgent does not seed a capability_profile
+    expect(await repo.getCapabilityProfile(agent.id)).toBeNull(); // none yet
+    const out = await repo.updateCapabilityProfile(agent.id, { maxTier: 'medium', concurrencyLimit: 2, costCeiling: 7 }, 0);
+    expect(out).toEqual({ ok: true, version: 1 });
+    // The edit actually landed — not a phantom success on a missing row.
+    const prof = await repo.getCapabilityProfile(agent.id);
+    expect(prof).toMatchObject({ maxTier: 'medium', concurrencyLimit: 2, costCeiling: 7 });
+  });
+
   it('a conflicting profile edit does NOT half-apply (atomic CAS + profile update)', async () => {
     const { agent } = await make();
     await repo.setCapabilityProfile({

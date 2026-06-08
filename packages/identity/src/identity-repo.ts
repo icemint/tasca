@@ -333,13 +333,20 @@ export class PgIdentityRepository {
         [agentId, expectedVersion]
       );
       if (cas.rowCount !== 1) return repo.agentWriteMiss(agentId);
+      // UPSERT, not UPDATE: an agent can exist with no capability_profile row yet
+      // (createAgent doesn't seed one; the read path LEFT JOINs and shows "—"). A
+      // plain UPDATE would silently match 0 rows and let us report a FALSE success —
+      // a write that lies. The upsert makes the edit always land. concurrency_limit
+      // is NOT NULL (default 1) → COALESCE a null patch to the existing value (or 1
+      // on insert); cost_ceiling is nullable (NULL = "no cap", read back as 0).
       await repo.db.query(
-        // concurrency_limit is NOT NULL (default 1) → COALESCE a null patch to the
-        // existing value rather than violating the constraint. cost_ceiling is
-        // nullable; NULL is the "no cap" sentinel (read back as 0 by the mapper).
-        `UPDATE capability_profile
-            SET max_tier = $2, concurrency_limit = COALESCE($3, concurrency_limit), cost_ceiling = $4, updated_at = now()
-          WHERE agent_id = $1`,
+        `INSERT INTO capability_profile (agent_id, max_tier, concurrency_limit, cost_ceiling, updated_at)
+         VALUES ($1, $2, COALESCE($3, 1), $4, now())
+         ON CONFLICT (agent_id) DO UPDATE SET
+           max_tier = $2,
+           concurrency_limit = COALESCE($3, capability_profile.concurrency_limit),
+           cost_ceiling = $4,
+           updated_at = now()`,
         [agentId, patch.maxTier, patch.concurrencyLimit, patch.costCeiling]
       );
       return { ok: true, version: cas.rows[0]!.version };

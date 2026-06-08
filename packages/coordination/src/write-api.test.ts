@@ -249,10 +249,10 @@ describe('agent-state writes (optimistic concurrency via version)', () => {
     expect(badNum.statusCode).toBe(400);
   });
 
-  it('agent routes 404 when no identity writer is wired', async () => {
+  it('agent routes 503 (not 404) when no identity writer is wired (honest "not enabled")', async () => {
     const d: WriteApiDeps = { store: new FakeWriteStore(), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
     const r = await run(d, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }));
-    expect(r.statusCode).toBe(404);
+    expect(r.statusCode).toBe(503);
   });
 
   it('still session+CSRF gated', async () => {
