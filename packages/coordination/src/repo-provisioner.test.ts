@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile, access } from 'node:fs/promises';
-import { GitAppRepoProvisioner, redactToken, githubAuthEnv, type RepoProvisionerDeps } from './repo-provisioner';
+import {
+  GitAppRepoProvisioner,
+  redactToken,
+  githubAuthEnv,
+  defaultGitRunner,
+  type RepoProvisionerDeps,
+} from './repo-provisioner';
 
 // ── Per-test scratch dir ──────────────────────────────────────────────────────
 // The provisioner does REAL fs (mkdir/rename/rm) even when `git` is faked, so each
@@ -227,6 +233,30 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
 
     expect(err).not.toBeNull();
     expect(err).not.toContain(TOKEN);
+  });
+
+  it('the default git wrapper REDACTS a token that surfaces in a failing git argv (wiring proof)', async () => {
+    // Production keeps the token out of argv, so the line above can only prove the
+    // negative (no token present to leak). This proves the POSITIVE: the production
+    // wrapper actually invokes redactToken. Force an offline git failure whose argv
+    // carries an x-access-token URL and assert the propagated message is the REDACTED
+    // form — deleting the redactToken call in defaultGitRunner makes this fail.
+    const leakyUrl = `https://x-access-token:${TOKEN}@github.com/acme/widgets.git`;
+    const err = await defaultGitRunner([
+      '-C',
+      '/nonexistent-tasca-redact-test-xyz',
+      'remote',
+      'set-url',
+      'origin',
+      leakyUrl,
+    ]).then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e))
+    );
+
+    expect(err).not.toBeNull();
+    expect(err).not.toContain(TOKEN);
+    expect(err).toContain('x-access-token:***@'); // the wrapper redacted the argv leak
   });
 
   it('serializes concurrent provisioning of the SAME owner/repo (no interleave)', async () => {

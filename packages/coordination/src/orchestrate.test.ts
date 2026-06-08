@@ -632,6 +632,7 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
     const execution = new FakeExecution();
     const ensured: string[] = [];
     const worktreeArgs: Array<{ repoRef: string; taskLabel: string }> = [];
+    const removed: Array<{ repoRef: string; path: string; branch: string }> = [];
     const provisioner: RepoProvisioner = {
       async ensureLocalRepo(repoRef) {
         ensured.push(repoRef);
@@ -643,6 +644,9 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
       },
       async tokenForRepo() {
         return 'ghs_install_token';
+      },
+      async removeWorktree(repoRef, path, branch) {
+        removed.push({ repoRef, path, branch });
       },
     };
     const deps: OrchestrationDeps = {
@@ -668,6 +672,9 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
       branch: 'tasca-wt/x',
       token: 'ghs_install_token',
     });
+    // (e) the provisioner's worktree is reclaimed after the dispatch terminates, so
+    //     dispatches/re-drives don't leak worktrees + branches under reposDir.
+    expect(removed).toEqual([{ repoRef: 'acme/widgets', path: '/wt', branch: 'tasca-wt/x' }]);
   });
 
   it('a provisioning failure feeds the breaker (failed → needs_attention)', async () => {
@@ -681,6 +688,9 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
       },
       async tokenForRepo() {
         throw new Error('no GitHub App installation for owner acme');
+      },
+      async removeWorktree() {
+        // never reached — ensureLocalRepo throws before a worktree exists
       },
     };
     const deps = () => ({

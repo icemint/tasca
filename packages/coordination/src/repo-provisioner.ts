@@ -80,6 +80,30 @@ export function githubAuthEnv(token: string): Record<string, string> {
 }
 
 /**
+ * The production git runner: `execFile('git', …)` returning stdout, with token
+ * redaction on failure. `env` is merged OVER process.env for the one invocation
+ * (env-auth). Exported (and used as the default `git` runner) so a test can prove the
+ * wrapper WIRES redactToken on a real token-bearing argv — the only remaining way a
+ * token could surface, since production now keeps the token out of argv entirely.
+ */
+export async function defaultGitRunner(
+  args: string[],
+  opts?: { cwd?: string; env?: Record<string, string> }
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', args, {
+      ...(opts?.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
+    });
+    return stdout;
+  } catch (err) {
+    // execFile's rejection echoes the full argv (incl. any auth URL); redact the
+    // token before it propagates into the breaker's error log.
+    throw new Error(redactToken(err instanceof Error ? err.message : String(err)));
+  }
+}
+
+/**
  * The minimal structural deps GitAppRepoProvisioner needs, typed against shapes
  * (not the concrete GitHubAppClient / store classes) so tests inject fakes. The
  * real wiring passes the @tasca/adapters GitHubAppClient + the coordination store.
@@ -103,21 +127,7 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
   private readonly chain = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: RepoProvisionerDeps) {
-    this.git =
-      deps.git ??
-      (async (args, opts) => {
-        try {
-          const { stdout } = await execFileAsync('git', args, {
-            ...(opts?.cwd ? { cwd: opts.cwd } : {}),
-            ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
-          });
-          return stdout;
-        } catch (err) {
-          // execFile's rejection echoes the full argv (incl. the auth URL); redact
-          // the token before it propagates into the breaker's error log.
-          throw new Error(redactToken(err instanceof Error ? err.message : String(err)));
-        }
-      });
+    this.git = deps.git ?? defaultGitRunner;
     this.exists =
       deps.exists ??
       (async (p) => {
@@ -238,6 +248,38 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
       ]);
       return { path: worktreePath, branch, baseRef: `origin/${defaultBranch}` };
     });
+  }
+
+  /**
+   * Reclaim a worktree + its branch once a dispatch terminates, so re-drives and
+   * completed runs don't accumulate worktrees/branches without bound under reposDir
+   * (inode/disk exhaustion + ref bloat on a long-lived worker). Best-effort: every
+   * step is independently swallowed and the whole method never rejects — a failure to
+   * clean up MUST NOT fail or re-drive the dispatch. Runs under the per-repo lock so
+   * it can't race a concurrent provision/createWorktree on the same clone's .git dir.
+   */
+  async removeWorktree(repoRef: string, worktreePath: string, branch: string): Promise<void> {
+    try {
+      const { owner, repo } = parseRef(repoRef);
+      const localPath = path.join(this.deps.reposDir, owner, repo);
+      await this.withRepoLock(`${owner}/${repo}`, async () => {
+        // `worktree remove --force` drops the checkout even with a dirty tree; `prune`
+        // then clears the admin entry if the dir was already gone; `branch -D` removes
+        // the per-attempt branch. Each is independent — a missing worktree/branch
+        // (e.g. `worktree add` failed mid-way) must not block reclaiming the rest.
+        for (const args of [
+          ['-C', localPath, 'worktree', 'remove', '--force', worktreePath],
+          ['-C', localPath, 'worktree', 'prune'],
+          ['-C', localPath, 'branch', '-D', branch],
+        ]) {
+          await this.git(args).catch(() => undefined);
+        }
+        // Also remove the worktree dir if `git worktree remove` left it (rare).
+        await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+      });
+    } catch {
+      // Never throw from cleanup — the dispatch outcome is already decided.
+    }
   }
 
   /**

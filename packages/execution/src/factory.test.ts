@@ -306,10 +306,11 @@ describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () 
     return { port, envOf: () => captured };
   }
 
-  it('omits inherited worker secrets but keeps PATH', () => {
+  it('omits inherited worker secrets but keeps PATH + the Anthropic auth the CLI reads', () => {
     setEnv('GITHUB_APP_PRIVATE_KEY', '-----BEGIN PRIVATE KEY-----');
     setEnv('DATABASE_URL', 'postgres://secret@db/app');
     setEnv('PATH', '/usr/bin:/bin');
+    setEnv('ANTHROPIC_API_KEY', 'sk-ant-xxx'); // the keep-list is pinned, not just the deny-list
 
     const { port, envOf } = captureEnv();
     port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
@@ -318,6 +319,77 @@ describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () 
     expect(env.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.PATH).toBe('/usr/bin:/bin'); // non-secret essentials still flow
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-xxx'); // dropping this would break agent auth
+  });
+
+  // The capstone's real guarantee: the vendor reads the GLOBAL process.env directly
+  // (happy-path SSH_AUTH_SOCK/display vars, and the node-pty-unavailable fallback
+  // spreads ALL of process.env under our `env`). The `env` ARG the previous tests
+  // capture cannot see that leak. This fake snapshots process.env AT CALL TIME — what
+  // the vendor would actually read — and proves the spawn-time scrub closes it.
+  function captureProcessEnv(): {
+    port: ReturnType<typeof createExecution>;
+    seenOf: () => NodeJS.ProcessEnv | undefined;
+  } {
+    let seen: NodeJS.ProcessEnv | undefined;
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: () => {
+          seen = { ...process.env }; // exactly what the vendor's process.env reads see
+          return fakePty().handle;
+        },
+      }),
+    });
+    return { port, seenOf: () => seen };
+  }
+
+  it('scrubs worker secrets AND SSH_AUTH_SOCK/DISPLAY from the GLOBAL process.env during the spawn', () => {
+    setEnv('GITHUB_APP_PRIVATE_KEY', '-----BEGIN PRIVATE KEY-----');
+    setEnv('DATABASE_URL', 'postgres://secret@db/app');
+    setEnv('SHORTCUT_API_TOKEN', 'sc-secret');
+    setEnv('GH_TOKEN', 'ghs_leak');
+    setEnv('SSH_AUTH_SOCK', '/tmp/agent.sock'); // vendor happy-path forwards this from process.env
+    setEnv('DISPLAY', ':0'); // vendor getDisplayEnv() copies this from process.env
+    setEnv('PATH', '/usr/bin:/bin');
+
+    const { port, seenOf } = captureProcessEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
+
+    const seen = seenOf()!;
+    // The vendor — reading process.env on EITHER path — can only surface allowlisted vars.
+    expect(seen.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
+    expect(seen.DATABASE_URL).toBeUndefined();
+    expect(seen.SHORTCUT_API_TOKEN).toBeUndefined();
+    expect(seen.GH_TOKEN).toBeUndefined();
+    expect(seen.SSH_AUTH_SOCK).toBeUndefined(); // ssh-agent socket no longer reachable
+    expect(seen.DISPLAY).toBeUndefined();
+    expect(seen.PATH).toBe('/usr/bin:/bin'); // allowlisted essentials survive
+  });
+
+  it('restores the full process.env after the spawn (the scrub is transient)', () => {
+    setEnv('GITHUB_APP_PRIVATE_KEY', 'k');
+    setEnv('SSH_AUTH_SOCK', '/tmp/agent.sock');
+    const before = { ...process.env };
+
+    const { port } = captureProcessEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
+
+    expect(process.env.GITHUB_APP_PRIVATE_KEY).toBe('k');
+    expect(process.env.SSH_AUTH_SOCK).toBe('/tmp/agent.sock');
+    expect({ ...process.env }).toEqual(before); // worker keeps every var it had
+  });
+
+  it('restores process.env even when the spawn throws', () => {
+    setEnv('GITHUB_APP_PRIVATE_KEY', 'k');
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: () => {
+          throw new Error('boom');
+        },
+      }),
+    });
+    expect(() => port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' })).toThrow(ExecutionError);
+    expect(process.env.GITHUB_APP_PRIVATE_KEY).toBe('k'); // finally-restore ran
   });
 
   it('passes caller-supplied input.env through (it wins over the allowlist)', () => {

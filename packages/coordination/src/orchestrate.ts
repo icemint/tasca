@@ -96,6 +96,13 @@ export interface RepoProvisioner {
   /** A current installation token for the repo's owner — used to auth `gh pr create`
    *  AND the env-auth'd `git push` in open-pr (the tokenless origin can't auth it). */
   tokenForRepo(repoRef: string): Promise<string>;
+  /**
+   * Reclaim a worktree created by createWorktree: remove the worktree dir + its
+   * branch + prune stale admin entries. Best-effort (never throws) — called once a
+   * dispatch terminates (success OR failure) so re-drives don't accumulate worktrees
+   * and branches without bound under the worker's repos dir.
+   */
+  removeWorktree(repoRef: string, worktreePath: string, branch: string): Promise<void>;
 }
 
 export interface OrchestrationDeps {
@@ -172,6 +179,10 @@ export async function orchestrateTaskAssigned(
   // not errors, so they `return` and bypass the catch.
   let winnerAgentId: string | null = null;
   let principalId: string | null = null;
+  // Set only on the provisioner path, so the finally can reclaim the worktree +
+  // branch the provisioner created once the dispatch terminates (success OR failure)
+  // — without it, every dispatch and every re-drive leaks a worktree under reposDir.
+  let provisionedWorktree: { path: string; branch: string } | undefined;
   try {
     // §6.5 — estimate tier (heuristics + one budgeted/cached classifier call),
     // then persist it (inspectable).
@@ -272,12 +283,10 @@ export async function orchestrateTaskAssigned(
     let baseRef: string | undefined;
     if (repoRef && deps.provisioner) {
       await deps.provisioner.ensureLocalRepo(repoRef);
-      const provisionedWorktree = await deps.provisioner.createWorktree(
-        repoRef,
-        event.externalStoryId
-      );
-      worktree = provisionedWorktree;
-      baseRef = provisionedWorktree.baseRef;
+      const created = await deps.provisioner.createWorktree(repoRef, event.externalStoryId);
+      worktree = created;
+      baseRef = created.baseRef;
+      provisionedWorktree = { path: created.path, branch: created.branch };
     } else {
       worktree = await deps.execution.reserveWorktree({
         repoPath: repoRef ?? '.',
@@ -409,6 +418,18 @@ export async function orchestrateTaskAssigned(
       return { kind: 'needs_attention', taskId: task.id, failureCount };
     }
     return { kind: 'failed', taskId: task.id, failureCount };
+  } finally {
+    // Reclaim the provisioner-created worktree + branch on EVERY terminal path
+    // (success, failure, re-drive) so they don't accumulate without bound. Only the
+    // provisioner path sets this; reserveWorktree (no-provisioner) is unaffected.
+    // removeWorktree is best-effort and never throws, so it can't disturb the outcome.
+    if (provisionedWorktree && repoRef && deps.provisioner) {
+      await deps.provisioner.removeWorktree(
+        repoRef,
+        provisionedWorktree.path,
+        provisionedWorktree.branch
+      );
+    }
   }
 }
 
