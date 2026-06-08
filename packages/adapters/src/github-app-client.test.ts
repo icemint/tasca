@@ -99,6 +99,60 @@ describe('GitHubAppClient.getInstallationToken (POST shape + cache)', () => {
     expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28');
   });
 
+  it('mintScopedToken POSTs a repositories + permissions body and is NOT cached', async () => {
+    let calls = 0;
+    let captured: { init: RequestInit } | undefined;
+    const fakeFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      captured = { init: init ?? {} };
+      return tokenResponse('ghs_scoped', '2026-01-01T01:00:00Z');
+    }) as unknown as typeof fetch;
+
+    const client = new GitHubAppClient({
+      appId: APP_ID,
+      privateKey,
+      apiBase: 'https://api.example.test',
+      fetchImpl: fakeFetch,
+      now: () => 1_700_000_000_000,
+    });
+    const scope = { repositories: ['widgets'], permissions: { contents: 'write', pull_requests: 'write' } };
+    const t1 = await client.mintScopedToken('77', scope);
+    const t2 = await client.mintScopedToken('77', scope);
+
+    expect(t1.token).toBe('ghs_scoped');
+    expect(calls).toBe(2); // NOT cached — each task gets a fresh scoped token
+    expect(JSON.parse(captured!.init.body as string)).toEqual(scope); // scoped to one repo + minimal perms
+  });
+
+  it('mintScopedToken REJECTS an empty repositories[] (which GitHub treats as ALL repos)', async () => {
+    const client = new GitHubAppClient({
+      appId: APP_ID,
+      privateKey,
+      fetchImpl: (async () => tokenResponse('x', '2026-01-01T01:00:00Z')) as unknown as typeof fetch,
+      now: () => 1_700_000_000_000,
+    });
+    await expect(client.mintScopedToken('77', { repositories: [], permissions: { contents: 'read' } })).rejects.toThrow(
+      /repositories must be non-empty/
+    );
+  });
+
+  it('mintScopedToken falls back to the minimal agent permission set when none is given (never empty)', async () => {
+    let captured: RequestInit | undefined;
+    const client = new GitHubAppClient({
+      appId: APP_ID,
+      privateKey,
+      fetchImpl: (async (_u: unknown, init?: RequestInit) => {
+        captured = init;
+        return tokenResponse('x', '2026-01-01T01:00:00Z');
+      }) as unknown as typeof fetch,
+      now: () => 1_700_000_000_000,
+    });
+    await client.mintScopedToken('77', { repositories: ['widgets'] });
+    const body = JSON.parse(captured!.body as string) as { permissions: Record<string, string> };
+    expect(body.permissions).toMatchObject({ contents: 'write', pull_requests: 'write' });
+    expect(Object.keys(body.permissions).length).toBeGreaterThan(0); // never an empty (=full) perm set
+  });
+
   it('reuses the cached token before the refresh margin (fetch called once)', async () => {
     let calls = 0;
     const fakeFetch = (async () => {

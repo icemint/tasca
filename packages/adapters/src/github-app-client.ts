@@ -30,6 +30,16 @@ const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 /** Per-call timeout for every GitHub HTTP request. */
 const REQUEST_TIMEOUT_MS = 8000;
 
+/** The minimal permission set a Tasca agent needs on its one task repo: write code +
+ *  open PRs + comment on issues. Used when a scoped-token request omits permissions,
+ *  so an over-broad (full default) token is never minted by accident. */
+const DEFAULT_AGENT_PERMISSIONS: Record<string, string> = {
+  contents: 'write',
+  pull_requests: 'write',
+  issues: 'write',
+  metadata: 'read',
+};
+
 export interface GitHubAppClientConfig {
   /** The numeric GitHub App id (as a string or number). */
   appId: string | number;
@@ -193,6 +203,57 @@ export class GitHubAppClient {
     };
     this.tokenCache.set(installationId, minted);
     return minted;
+  }
+
+  /**
+   * Mint an installation token SCOPED to specific repositories with minimal
+   * permissions — the credential broker uses this to hand the agent-runner a
+   * per-task token. Unlike getInstallationToken this is NOT cached and NOT broad:
+   * even if the token leaks, it can touch only `scope.repositories` with only
+   * `scope.permissions`, for ~1h. The App private key is used here ONLY to sign the
+   * App JWT; it never leaves this client (and never reaches the runner — the broker
+   * returns only the minted token).
+   */
+  async mintScopedToken(
+    installationId: string,
+    scope: { repositories: string[]; permissions?: Record<string, string> }
+  ): Promise<InstallationToken> {
+    // Defend the scope here, not trust the caller: GitHub treats an EMPTY (or absent)
+    // `repositories` as the ENTIRE installation, and an empty `permissions` as the
+    // App's full default set — either would silently over-issue an installation-wide
+    // token from a method that promises a narrow one. Require ≥1 repo, and never send
+    // empty permissions (fall back to the minimal set the agent actually needs).
+    if (!scope.repositories || scope.repositories.length === 0) {
+      throw new Error('mintScopedToken: repositories must be non-empty (empty = ALL repos)');
+    }
+    const permissions =
+      scope.permissions && Object.keys(scope.permissions).length > 0
+        ? scope.permissions
+        : DEFAULT_AGENT_PERMISSIONS;
+    const jwt = this.mintAppJwt();
+    const res = await this.fetchImpl(
+      `${this.apiBase}/app/installations/${installationId}/access_tokens`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ repositories: scope.repositories, permissions }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`github scoped-token failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+    const json = (await res.json()) as { token?: string; expires_at?: string };
+    if (!json.token || !json.expires_at) {
+      throw new Error('github scoped-token: response missing token/expires_at');
+    }
+    return { token: json.token, expiresAt: new Date(json.expires_at).getTime() };
   }
 
   /**
