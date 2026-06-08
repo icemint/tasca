@@ -18,31 +18,57 @@ export interface DispatchJob {
   payload: Record<string, unknown>;
   /** 1 on the first delivery; higher after a lease reclaim / release-retry. */
   attempts: number;
+  /**
+   * The FENCING TOKEN for this claim — a monotonic counter bumped on every claim.
+   * complete/release/fail/renewLease must present it; the write is rejected if the
+   * job was reclaimed and re-claimed by another runner in the meantime (the epoch
+   * advanced). This stops a lease-lapsed-but-alive runner from clobbering the job a
+   * second runner now legitimately owns. Treat it as opaque.
+   */
+  fence: number;
 }
 
 /**
- * The dispatch queue contract: coordination enqueues, an agent-runner claims. The
- * claim is exactly-once under concurrent runners — `claimNext` is the load-bearing
- * guarantee (FOR UPDATE SKIP LOCKED), proven by a forced-parallelism test.
+ * The dispatch queue contract: coordination enqueues, an agent-runner claims.
+ *
+ * Two layered guarantees:
+ *   1. DELIVERY is exactly-once under concurrent runners — `claimNext` (FOR UPDATE
+ *      SKIP LOCKED) never hands the same job to two callers (proven by a forced-
+ *      parallelism test).
+ *   2. COMPLETION is fenced — complete/release/fail are rejected unless they carry
+ *      the `fence` from the CURRENT claim, so a runner that overran its lease (and
+ *      was reclaimed + re-claimed by another runner) cannot clobber the new owner's
+ *      job. Those methods return `true` iff the write applied (the caller still
+ *      holds the claim) and `false` if it was fenced out (it lost the lease).
+ *
+ * A runner doing long work should `renewLease` before its lease lapses; otherwise
+ * `reclaimExpired` will requeue the job and EXECUTION degrades to at-least-once
+ * (a second runner may run it concurrently) — so runner side effects must be
+ * idempotent (Tasca's deterministic PR head + idempotent openPr provide this).
  */
 export interface DispatchQueue {
   /** Enqueue a job (status `queued`). Returns its id. */
   enqueue(input: DispatchJobInput): Promise<{ id: string }>;
   /**
    * Atomically claim the oldest available `queued` job for `runnerId`, leasing it
-   * for `leaseSeconds` (after which a crashed runner's job is reclaimable). Returns
-   * the job, or null when nothing is claimable. NEVER returns the same job to two
-   * concurrent callers.
+   * for `leaseSeconds` and bumping its fence. Returns the job (with its `fence`), or
+   * null when nothing is claimable. NEVER returns the same job to two concurrent
+   * callers.
    */
   claimNext(runnerId: string, leaseSeconds: number): Promise<DispatchJob | null>;
-  /** Mark a claimed job `done` (terminal). */
-  complete(jobId: string): Promise<void>;
-  /** Return a job to `queued` for another attempt, optionally delayed (backoff). */
-  release(jobId: string, opts?: { delaySeconds?: number }): Promise<void>;
-  /** Mark a job `failed` (terminal); records `error` for diagnostics. */
-  fail(jobId: string, error?: string): Promise<void>;
+  /** Extend the lease of a still-held job (heartbeat for long runs). Returns false
+   *  if the claim was already lost (fence advanced / no longer claimed). */
+  renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean>;
+  /** Mark a claimed job `done` (terminal). Fenced: returns false if the claim was lost. */
+  complete(jobId: string, fence: number): Promise<boolean>;
+  /** Return a job to `queued` for another attempt, optionally delayed (backoff).
+   *  Fenced: returns false if the claim was lost. */
+  release(jobId: string, fence: number, opts?: { delaySeconds?: number }): Promise<boolean>;
+  /** Mark a job `failed` (terminal); records `error`. Fenced: returns false if lost. */
+  fail(jobId: string, fence: number, error?: string): Promise<boolean>;
   /** Requeue every `claimed` job whose lease has expired (crashed-runner recovery).
-   *  Returns how many were reclaimed. */
+   *  Returns how many were reclaimed. The next claim bumps their fence, so a revived
+   *  original runner's terminal write is fenced out. */
   reclaimExpired(): Promise<number>;
 }
 
@@ -72,9 +98,11 @@ export class PgDispatchQueue implements DispatchQueue {
       task_id: string;
       payload: Record<string, unknown>;
       attempts: number;
+      claim_epoch: string;
     }>(
       `UPDATE dispatch_job
           SET status = 'claimed', claimed_by = $1, attempts = attempts + 1,
+              claim_epoch = claim_epoch + 1,
               lease_expires_at = now() + make_interval(secs => $2), updated_at = now()
         WHERE id = (
           SELECT id FROM dispatch_job
@@ -83,38 +111,54 @@ export class PgDispatchQueue implements DispatchQueue {
            FOR UPDATE SKIP LOCKED
            LIMIT 1
         )
-      RETURNING id, task_id, payload, attempts`,
+      RETURNING id, task_id, payload, attempts, claim_epoch`,
       [runnerId, leaseSeconds]
     );
     if (res.rowCount !== 1) return null;
     const row = res.rows[0]!;
-    return { id: row.id, taskId: row.task_id, payload: row.payload, attempts: row.attempts };
+    // bigint comes back as a string from pg; the fence fits well within a JS number
+    // for any realistic claim count, and is treated as opaque by callers.
+    return { id: row.id, taskId: row.task_id, payload: row.payload, attempts: row.attempts, fence: Number(row.claim_epoch) };
   }
 
-  async complete(jobId: string): Promise<void> {
-    await this.db.query(
-      `UPDATE dispatch_job SET status = 'done', lease_expires_at = NULL, updated_at = now() WHERE id = $1`,
-      [jobId]
+  async renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE dispatch_job
+          SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+      [jobId, fence, leaseSeconds]
     );
+    return res.rowCount === 1;
   }
 
-  async release(jobId: string, opts?: { delaySeconds?: number }): Promise<void> {
-    await this.db.query(
+  async complete(jobId: string, fence: number): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE dispatch_job SET status = 'done', lease_expires_at = NULL, updated_at = now()
+        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+      [jobId, fence]
+    );
+    return res.rowCount === 1;
+  }
+
+  async release(jobId: string, fence: number, opts?: { delaySeconds?: number }): Promise<boolean> {
+    const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL,
-              available_at = now() + make_interval(secs => $2), updated_at = now()
-        WHERE id = $1`,
-      [jobId, opts?.delaySeconds ?? 0]
+              available_at = now() + make_interval(secs => $3), updated_at = now()
+        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+      [jobId, fence, opts?.delaySeconds ?? 0]
     );
+    return res.rowCount === 1;
   }
 
-  async fail(jobId: string, error?: string): Promise<void> {
-    await this.db.query(
+  async fail(jobId: string, fence: number, error?: string): Promise<boolean> {
+    const res = await this.db.query(
       `UPDATE dispatch_job
-          SET status = 'failed', lease_expires_at = NULL, last_error = $2, updated_at = now()
-        WHERE id = $1`,
-      [jobId, error ?? null]
+          SET status = 'failed', lease_expires_at = NULL, last_error = $3, updated_at = now()
+        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+      [jobId, fence, error ?? null]
     );
+    return res.rowCount === 1;
   }
 
   async reclaimExpired(): Promise<number> {

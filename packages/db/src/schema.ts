@@ -39,10 +39,12 @@ CREATE TABLE IF NOT EXISTS dispatch_job (
   status           text NOT NULL DEFAULT 'queued' CONSTRAINT dispatch_job_status_chk CHECK (status IN ('queued','claimed','done','failed')),
   claimed_by       text,
   attempts         integer NOT NULL DEFAULT 0,
+  claim_epoch      bigint NOT NULL DEFAULT 0,
   available_at     timestamptz NOT NULL DEFAULT now(),
   lease_expires_at timestamptz,
   last_error       text,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS claim_epoch bigint NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS dispatch_job_claimable ON dispatch_job (available_at, created_at) WHERE status = 'queued';`;
