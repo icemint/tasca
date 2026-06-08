@@ -15,7 +15,7 @@ const SECTIONS = [
 export async function loadSettings(): Promise<LoadResult> {
   const rows = SECTIONS.map(
     (s) =>
-      `<div class="idrow"><div class="idp"><span class="idp-name">${esc(s.title)}</span><span class="idp-h">${esc(s.desc)}</span></div><span class="coming-tag">Coming soon</span></div>`
+      `<div class="idrow"><div class="idp"><span class="idp-name">${esc(s.title)}</span><span class="idp-h">${esc(s.desc)}</span></div><span class="coming-tag">Planned</span></div>`
   ).join('');
 
   const html = `<div class="roster-head"><div><h1>Settings</h1><div class="sub">Workspace configuration</div></div></div>

@@ -105,6 +105,7 @@ describe('agent detail — bindings, recent work, read-only controls', () => {
     expect(htmlOf(r)).toContain('roadhero/agentic-playground#5'); // recent work
     expect(htmlOf(r)).toContain('Agent provisioning is operator-run today'); // Deploy gated
     expect(htmlOf(r)).toContain('data-ro="soon"'); // Pause / Edit profile = preview
+    expect(htmlOf(r)).not.toContain('Coming soon');
   });
 });
 
@@ -117,6 +118,7 @@ describe('connections', () => {
     expect(htmlOf(r)).toContain('Healthy');
     expect(htmlOf(r)).toContain('12 received');
     expect(htmlOf(r)).toContain('data-ro="gated"'); // Manage / Repair = operator setup
+    expect(htmlOf(r)).not.toContain('Coming soon');
   });
 });
 
@@ -138,5 +140,7 @@ describe('settings', () => {
     expect(r.kind).toBe('ok');
     expect(htmlOf(r)).toContain('Workspace');
     expect(htmlOf(r)).toContain('Audit log');
+    expect(htmlOf(r)).toContain('Planned'); // honest deferred tag, not a stray "Coming soon"
+    expect(htmlOf(r)).not.toContain('Coming soon');
   });
 });

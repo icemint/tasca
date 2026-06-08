@@ -59,5 +59,8 @@
   content: ""; width: 6px; height: 6px; border-radius: 50%;
   background: var(--amber); opacity: 0.8;
 }
-.ro-ctl { cursor: not-allowed; }
+/* Dim every read-only control so the disabled state reads as intentional — there's
+   no global :disabled rule, and bright bases (.btn-add = signal blue) otherwise look
+   clickable. Replaces the per-button .is-disabled the onboarding buttons used to carry. */
+.ro-ctl { cursor: not-allowed; opacity: var(--op-disabled); pointer-events: none; }
 .head-actions { display: inline-flex; align-items: center; gap: 10px; }

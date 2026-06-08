@@ -22,7 +22,7 @@ Date: 2026-06-08 · Scope: `app.tasca.dev` (the authenticated console) + a marke
 - Honest gated-vs-not-built split:
   - **gated** (operator-run today): Add agent / Deploy / Assign — *agent provisioning*; Connect / Manage / Repair / Continue — *platform setup*.
   - **soon** (ships with the write API): Pause, Edit profile, Interrupt, Reassign, Escalate, Re-tier.
-- The only remaining "Coming soon" is the **Settings** page's panel list (an intentional roadmap shell, not a control).
+- No stray "Coming soon" remains anywhere: the Settings page's deferred panels carry an honest **"Planned"** tag (a roadmap shell, not a control). Every view test asserts `not.toContain("Coming soon")`.
 
 ### Real agent activity actually shows
 - Task inspector renders the agent-authored PRs (e.g. agentic-playground `#5`→PR `#8`) with their merge state; monitoring boards the done + needs-attention tasks; agent detail lists recent work + the `tasca-elvis` GitHub binding. Pinned by tests against fixtures mirroring the live run.
