@@ -12,41 +12,63 @@
 // empty roster) instead of silently producing events:0.
 
 import { GitHubAdapter } from '@tasca/adapters';
-import type { AdapterEvent, VerifiedEvent } from '@tasca/contracts';
+import { GitHubWebhookSchema, type AdapterEvent, type VerifiedEvent } from '@tasca/contracts';
 import type { WebhookVerifier, RawWebhook, VerifiedWebhook, Logger } from './ports';
 
-/** Per-delivery parse diagnostic — the same fields parseEvent keys its decision on. */
+/** First Zod issue as `path: message`, so a schema reject names the offending field. */
+function firstSchemaError(err: { issues: Array<{ path: Array<string | number>; message: string }> }): string {
+  const issue = err.issues[0];
+  if (!issue) return 'unknown schema error';
+  return `${issue.path.join('.') || '(root)'}: ${issue.message}`;
+}
+
+/**
+ * Per-delivery parse diagnostic. Beyond action/assignee, it re-runs the SAME
+ * validation parseEvent uses (GitHubWebhookSchema.safeParse) and reports WHY a
+ * delivery produced matched:0 — the schema rejected it (`schemaOk:false` +
+ * `schemaError` naming the field), or repository/issue couldn't be resolved
+ * (`repoResolved:false`). Without this, a schema reject reads as a phantom
+ * "in set but matched:0" because diagnose reads the raw JSON, not the schema.
+ */
 function diagnose(
   rawBody: string,
   registeredGitHubIds: ReadonlySet<string>,
   matched: number
 ): Record<string, unknown> {
+  let raw: unknown;
   try {
-    const body = JSON.parse(rawBody) as {
-      action?: unknown;
-      assignee?: { id?: unknown } | null;
-      comment?: unknown;
-    };
-    const action = typeof body.action === 'string' ? body.action : null;
-    // GitHub puts a top-level `assignee` on BOTH `assigned` and `unassigned`, but
-    // parseEvent only emits on `assigned`. Report `assigneeId`/`assigneeInSet` ONLY
-    // for `assigned` so the diagnostic can't read as "in set but matched:0" on an
-    // unassigned/other action — the action gate is the real reason for matched:0.
-    const assigneeId =
-      action === 'assigned' && body.assignee && body.assignee.id !== undefined && body.assignee.id !== null
-        ? String(body.assignee.id)
-        : null;
-    return {
-      action,
-      assigneeId,
-      assigneeInSet: assigneeId !== null ? registeredGitHubIds.has(assigneeId) : null,
-      hasComment: Boolean(body.comment),
-      matched,
-      registeredCount: registeredGitHubIds.size,
-    };
+    raw = JSON.parse(rawBody);
   } catch {
-    return { parseError: true, matched, registeredCount: registeredGitHubIds.size };
+    return { jsonOk: false, matched, registeredCount: registeredGitHubIds.size };
   }
+  const body = raw as {
+    action?: unknown;
+    assignee?: { id?: unknown } | null;
+    comment?: unknown;
+    repository?: { full_name?: unknown } | null;
+    issue?: { number?: unknown } | null;
+  };
+  const action = typeof body.action === 'string' ? body.action : null;
+  const assigneeId =
+    action === 'assigned' && body.assignee && body.assignee.id !== undefined && body.assignee.id !== null
+      ? String(body.assignee.id)
+      : null;
+  const parsed = GitHubWebhookSchema.safeParse(raw);
+  const repoResolved =
+    parsed.success &&
+    parsed.data.repository?.full_name !== undefined &&
+    parsed.data.issue?.number !== undefined;
+  return {
+    action,
+    assigneeId,
+    assigneeInSet: assigneeId !== null ? registeredGitHubIds.has(assigneeId) : null,
+    hasComment: Boolean(body.comment),
+    matched,
+    registeredCount: registeredGitHubIds.size,
+    // Why parseEvent may have returned [] before reaching the assignee match:
+    schemaOk: parsed.success,
+    ...(parsed.success ? { repoResolved } : { schemaError: firstSchemaError(parsed.error) }),
+  };
 }
 
 export function githubVerifier(
