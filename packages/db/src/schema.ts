@@ -23,3 +23,26 @@ CREATE TABLE IF NOT EXISTS task (
   failure_count    integer NOT NULL DEFAULT 0,
   repo_ref         text
 );`;
+
+// The dispatch queue: the coordination↔execution seam. Coordination ENQUEUES a job
+// per dispatch; an agent-runner CLAIMS one atomically via FOR UPDATE SKIP LOCKED, so
+// under concurrent runners a job is delivered to EXACTLY ONE runner (no two ever pull
+// the same row). `lease_expires_at` gives crash recovery: a claimed job whose lease
+// lapses is reclaimable (the runner died mid-run). `available_at` supports delayed
+// (re)enqueue for backoff. Statuses constrained so an out-of-band writer can't park a
+// job in a state the claim loop can't reason about.
+export const DISPATCH_JOB_DDL = `
+CREATE TABLE IF NOT EXISTS dispatch_job (
+  id               uuid PRIMARY KEY,
+  task_id          text NOT NULL,
+  payload          jsonb NOT NULL,
+  status           text NOT NULL DEFAULT 'queued' CONSTRAINT dispatch_job_status_chk CHECK (status IN ('queued','claimed','done','failed')),
+  claimed_by       text,
+  attempts         integer NOT NULL DEFAULT 0,
+  available_at     timestamptz NOT NULL DEFAULT now(),
+  lease_expires_at timestamptz,
+  last_error       text,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS dispatch_job_claimable ON dispatch_job (available_at, created_at) WHERE status = 'queued';`;
