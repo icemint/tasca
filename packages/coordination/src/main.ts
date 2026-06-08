@@ -289,7 +289,13 @@ async function main(): Promise<void> {
         mintScoped: (installationId, scope) => appClient.mintScopedToken(installationId, scope),
       });
       try {
-        brokerHandle = await serveBroker({ socketPath: brokerSocket, mint, logger });
+        // 0o660: the non-root runner connects via a shared group (the deploy runs the
+        // worker with the runner's gid); never world-accessible. TASCA_BROKER_SOCKET_MODE
+        // overrides (octal) for envs that wire perms differently.
+        const socketMode = process.env.TASCA_BROKER_SOCKET_MODE
+          ? parseInt(process.env.TASCA_BROKER_SOCKET_MODE, 8)
+          : 0o660;
+        brokerHandle = await serveBroker({ socketPath: brokerSocket, mint, logger, socketMode });
         logger.info?.('credential broker serving', { socketPath: brokerSocket });
       } catch (err) {
         // A broker that can't bind is loud but non-fatal: in-process dispatch (the

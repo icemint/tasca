@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
+import { stat } from 'node:fs/promises';
 import { serveBroker, brokerClient, type BrokerServerHandle, type RepoTokenMinter } from './index';
 
 // Real unix-socket round-trips. /tmp keeps the path short (unix socket paths are
@@ -26,6 +27,13 @@ describe('credential broker — round-trip', () => {
     const socketPath = await start(async (repoRef) => ({ token: `scoped-for-${repoRef}`, expiresAt: 123 }));
     const token = await brokerClient({ socketPath }).mintRepoToken('acme/widgets');
     expect(token).toEqual({ token: 'scoped-for-acme/widgets', expiresAt: 123 });
+  });
+
+  it('chmods the socket to socketMode so only the group-shared runner uid can connect (not world)', async () => {
+    const socketPath = sockPath();
+    servers.push(await serveBroker({ socketPath, mint: async () => ({ token: 't', expiresAt: 1 }), socketMode: 0o660 }));
+    const mode = (await stat(socketPath)).mode & 0o777;
+    expect(mode).toBe(0o660); // group rw, NO world access to the mint channel
   });
 
   it('serves concurrent requests, each its own token', async () => {

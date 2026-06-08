@@ -1,0 +1,121 @@
+# Platform-agnostic reference topology for the coordination|execution split. It encodes
+# the SECURITY BOUNDARY the deploy must preserve; the Coolify resources mirror it (see
+# docs/decisions/2026-06-08-coordination-execution-split.md for the mapping).
+#
+# The thesis: the agent-runner executes a PROMPT-INJECTED agent, so it is the lowest-trust
+# process. Two controls contain it:
+#   1. It holds NO master key — only per-task scoped tokens it mints from the broker over a
+#      unix socket (the worker holds the GitHub App key; it never crosses the wire).
+#   2. EGRESS IS ALLOWLISTED. The runner sits ONLY on `internal: true` networks (no default
+#      route to the internet), so its sole path out is the egress-proxy, which permits only
+#      Anthropic + GitHub. Even an agent that unsets HTTPS_PROXY cannot reach a third party
+#      to exfiltrate its scoped token — there is no route. This is the break-target.
+#
+# Local validation of the egress boundary (no app needed): deploy/verify-egress.sh.
+
+name: tasca
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pg}
+      POSTGRES_DB: tasca
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend # internal-only; the DB is never internet-exposed
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The trusted worker: coordination HTTP + the credential broker + the reaper + the
+  # in-process execution fallback. Holds the GitHub App master key. On `frontend` (it
+  # needs the internet for the GitHub App API + Shortcut + serving webhooks) and
+  # `backend` (the DB). It runs the broker with the RUNNER's gid (group 10001) so the
+  # 0o660 socket is group-connectable by the non-root runner.
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/worker.Dockerfile
+      args:
+        TASCA_BASE_IMAGE: ${TASCA_BASE_IMAGE:-tasca-base:latest}
+    user: '0:10001' # root uid (writes /data), runner's gid → broker socket group-owned 10001
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-pg}@postgres:5432/tasca
+      TASCA_BROKER_SOCKET: /run/tasca/broker.sock
+      TASCA_DISPATCH_MODE: queue # enqueue for the runner + run the reaper
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - worker-data:/data
+      - broker-sock:/run/tasca # the broker socket, shared with the runner
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '8080:8080' # api.tasca.dev ingress (webhooks + /healthz)
+
+  # The egress allowlist proxy: the runner's ONLY route to the internet. It straddles the
+  # runner's internal network (`runner-egress`) and `frontend` (the real internet); the
+  # runner has no other path out. Deny-by-default; only Anthropic + GitHub (see allowlist).
+  egress-proxy:
+    build:
+      context: ./egress-proxy
+    networks:
+      - frontend # the bridge to the internet
+      - runner-egress # the runner-facing side (internal)
+    restart: unless-stopped
+
+  # The lowest-trust process: claims dispatch_job, mints a scoped token from the broker,
+  # runs the agent, opens the PR, revokes the token. NON-ROOT (uid 10001). On `backend`
+  # (the queue) and `runner-egress` (the proxy) — NOT on `frontend`, so it has NO direct
+  # internet. It carries no worker secret (no App key, no Shortcut creds).
+  runner:
+    build:
+      context: ..
+      dockerfile: deploy/runner.Dockerfile
+      args:
+        TASCA_BASE_IMAGE: ${TASCA_BASE_IMAGE:-tasca-base:latest}
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-pg}@postgres:5432/tasca
+      TASCA_BROKER_SOCKET: /run/tasca/broker.sock
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Force agent toolchain (git/gh/claude) through the allowlist proxy. The network
+      # boundary is the HARD control; this is the cooperative default for the allowed hosts.
+      HTTPS_PROXY: http://egress-proxy:8888
+      HTTP_PROXY: http://egress-proxy:8888
+      NO_PROXY: postgres,localhost,127.0.0.1
+    volumes:
+      - runner-data:/data
+      - broker-sock:/run/tasca # connect to the broker socket (group 10001, 0o660)
+    networks:
+      - backend # the dispatch queue (Postgres) — internal, no internet
+      - runner-egress # the proxy — internal, no internet
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  # The internet-facing bridge. ONLY the worker (trusted) and the egress-proxy attach.
+  frontend:
+    driver: bridge
+  # DB plane: internal-only (no internet). Postgres + worker + runner.
+  backend:
+    driver: bridge
+    internal: true
+  # The runner→proxy plane: internal-only. The runner cannot reach the internet here;
+  # the proxy forwards allowed hosts via its `frontend` NIC.
+  runner-egress:
+    driver: bridge
+    internal: true
+
+volumes:
+  pgdata:
+  worker-data:
+  runner-data:
+  broker-sock: # the unix-socket channel between the worker (broker) and the runner
