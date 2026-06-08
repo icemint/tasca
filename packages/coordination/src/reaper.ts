@@ -107,7 +107,7 @@ export function makeReaper(deps: ReaperDeps): Reaper {
         .record({
           principalId,
           agentId,
-          platform: payload.platform,
+          ...(payload.platform ? { platform: payload.platform } : {}),
           action: 'task.failed',
           target: job.taskId,
           payload: { failureCount, outcome: tripped ? 'needs_attention' : 'retry', error: job.lastError ?? 'runner reported failure' },

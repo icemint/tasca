@@ -781,6 +781,13 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     async reclaimExpired(): Promise<number> {
       return 0;
     }
+    async sweepExpired(): Promise<{ reclaimed: number; failedOver: number }> {
+      return { reclaimed: 0, failedOver: 0 };
+    }
+    async claimFinished(): Promise<never[]> {
+      return [];
+    }
+    async markReaped(): Promise<void> {}
   }
 
   const passingProvisioner: RepoProvisioner = {
