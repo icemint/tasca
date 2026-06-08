@@ -6,7 +6,7 @@
 // filesystem permissions, with no network surface.
 
 import { createServer, type Socket } from 'node:net';
-import { unlink } from 'node:fs/promises';
+import { unlink, chmod } from 'node:fs/promises';
 import { isValidRepoRef, type BrokerResponse, type RepoTokenMinter } from './contract';
 
 export interface BrokerLogger {
@@ -21,6 +21,14 @@ export interface BrokerServerOptions {
   mint: RepoTokenMinter;
   /** Drop a connection that doesn't complete a request within this many ms. Default 5000. */
   idleTimeoutMs?: number;
+  /**
+   * Permission bits to chmod the socket to after binding. The worker runs the broker;
+   * the runner is a DIFFERENT (non-root) uid that must connect, so the deploy runs the
+   * worker with the runner's gid as a supplementary/primary group and sets 0o660 here —
+   * group connect, no world access. Omitted → Node's umask default (owner-only in
+   * practice), correct for same-uid local/test use.
+   */
+  socketMode?: number;
   logger?: BrokerLogger;
 }
 
@@ -118,6 +126,12 @@ export async function serveBroker(options: BrokerServerOptions): Promise<BrokerS
       resolve();
     });
   });
+
+  // Tighten the socket perms so ONLY the intended (group-shared) runner uid can connect —
+  // never world. Done after listen so the node never sees a world-accessible mint channel.
+  if (options.socketMode !== undefined) {
+    await chmod(options.socketPath, options.socketMode);
+  }
 
   return {
     async close(): Promise<void> {

@@ -1,0 +1,14 @@
+# Egress allowlist for the agent-runner (POSIX extended regex, one host pattern per line,
+# matched case-insensitively against the destination host). DENY-BY-DEFAULT is set in
+# tinyproxy.conf (FilterDefaultDeny Yes) — only hosts matching a line here are reachable.
+#
+# The `(^|\.)host$` form matches the apex AND its subdomains, but NOT a look-alike that
+# merely ends with the string (e.g. `evilgithub.com` does NOT match `(^|\.)github\.com$`).
+# Keep this list MINIMAL — every entry widens what a prompt-injected agent could reach.
+
+# Anthropic — the Claude Code CLI (the agent model API).
+(^|\.)anthropic\.com$
+
+# GitHub — git clone/fetch/push over HTTPS, the REST API (gh), and raw/asset content.
+(^|\.)github\.com$
+(^|\.)githubusercontent\.com$
