@@ -48,6 +48,22 @@ export interface AgentDirectory {
   principalIdFor(agentId: string): Promise<string | null>;
 }
 
+/** The narrow slice of OrchestrationDeps the finalize seam needs — also what the reaper
+ *  (which finalizes a runner-completed job out of band) supplies. */
+export interface FinalizeDeps {
+  store: CoordinationStore;
+  status: StatusReporter;
+  audit: AuditSink;
+  logger?: Logger;
+}
+
+/** The event fields finalize/audit actually read — so a caller (e.g. the reaper) that
+ *  only has the dispatch payload can finalize without fabricating a whole AdapterEvent. */
+export interface FinalizeEvent {
+  platform: AdapterEvent['platform'];
+  externalStoryId: string;
+}
+
 /** Append-only audit seam (the @tasca/identity audit trail). */
 export interface AuditSink {
   record(input: {
@@ -608,10 +624,10 @@ function runAgentToCompletion(
  * left-behind status (e.g. still 'executing') is cosmetic and reconciles on a
  * later delivery, never a duplicated customer PR.
  */
-async function finalizeDispatch(
-  deps: OrchestrationDeps,
+export async function finalizeDispatch(
+  deps: FinalizeDeps,
   taskId: string,
-  event: AdapterEvent,
+  event: FinalizeEvent,
   agentId: string,
   principalId: string | null,
   prUrl: string
@@ -654,10 +670,10 @@ async function finalizeDispatch(
 
 /** Best-effort audit append — skipped (not failed) when no principal resolves. */
 async function audit(
-  deps: OrchestrationDeps,
+  deps: Pick<OrchestrationDeps, 'audit'>,
   principalId: string | null,
   agentId: string,
-  event: AdapterEvent,
+  event: { platform: AdapterEvent['platform'] },
   entry: { action: string; target?: string; payload?: Record<string, unknown> }
 ): Promise<void> {
   if (!principalId) return;

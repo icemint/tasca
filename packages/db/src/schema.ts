@@ -43,8 +43,17 @@ CREATE TABLE IF NOT EXISTS dispatch_job (
   available_at     timestamptz NOT NULL DEFAULT now(),
   lease_expires_at timestamptz,
   last_error       text,
+  result           jsonb,
+  reaping_at       timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS claim_epoch bigint NOT NULL DEFAULT 0;
-CREATE INDEX IF NOT EXISTS dispatch_job_claimable ON dispatch_job (available_at, created_at) WHERE status = 'queued';`;
+-- The runner writes its result (e.g. the PR url) back to the QUEUE only; the reaper
+-- reads it to finalize. reaping_at leases a finished row to one reaper WITHOUT changing
+-- its terminal status, so a reaper crash just lets the lease lapse and the row is
+-- re-selected — the status stays the source of truth, never lost to a 'reaping' limbo.
+ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS result jsonb;
+ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS reaping_at timestamptz;
+CREATE INDEX IF NOT EXISTS dispatch_job_claimable ON dispatch_job (available_at, created_at) WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS dispatch_job_finished ON dispatch_job (updated_at) WHERE status IN ('done','failed');`;

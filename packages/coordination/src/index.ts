@@ -6,12 +6,18 @@
 // The orchestration loop (the heart).
 export {
   orchestrateTaskAssigned,
+  finalizeDispatch,
   type OrchestrationDeps,
   type OrchestrationOutcome,
   type AgentDirectory,
   type AuditSink,
   type TaskContentSource,
+  type FinalizeDeps,
+  type FinalizeEvent,
 } from './orchestrate';
+
+// The split-dispatch reaper: finalizes runner-completed jobs + sweeps dead claims.
+export { makeReaper, type Reaper, type ReaperDeps, type ReapResult } from './reaper';
 
 // The GitHub issue content source (real story content for the agent prompt).
 export { makeGitHubContentSource } from './github-content-source';

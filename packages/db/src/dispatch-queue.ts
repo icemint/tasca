@@ -11,6 +11,26 @@ export interface DispatchJobInput {
   availableInSeconds?: number;
 }
 
+/** A finished (terminal) job the reaper leases to finalize: a `done` job carries the
+ *  runner's `result` (e.g. the PR url) to record; a `failed` job carries `lastError` to
+ *  drive the task's breaker. The status is the source of truth — the reaper finalizes
+ *  per it, then `markReaped` deletes the row. */
+export interface FinishedJob {
+  id: string;
+  taskId: string;
+  payload: Record<string, unknown>;
+  status: 'done' | 'failed';
+  result: Record<string, unknown> | null;
+  lastError: string | null;
+}
+
+/** What a single sweep of expired-lease claims did: how many were requeued for another
+ *  runner vs failed-over (over the attempts cap) so the reaper drives the task breaker. */
+export interface SweepResult {
+  reclaimed: number;
+  failedOver: number;
+}
+
 /** A claimed job handed to exactly one runner. */
 export interface DispatchJob {
   id: string;
@@ -68,8 +88,9 @@ export interface DispatchQueue {
   /** Extend the lease of a still-held job (heartbeat for long runs). Returns false
    *  if the claim was already lost (fence advanced / no longer claimed). */
   renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean>;
-  /** Mark a claimed job `done` (terminal). Fenced: returns false if the claim was lost. */
-  complete(jobId: string, fence: number): Promise<boolean>;
+  /** Mark a claimed job `done` (terminal), storing the runner's `result` for the reaper
+   *  to finalize against (e.g. the PR url). Fenced: returns false if the claim was lost. */
+  complete(jobId: string, fence: number, result?: Record<string, unknown>): Promise<boolean>;
   /** Return a job to `queued` for another attempt, optionally delayed (backoff).
    *  Fenced: returns false if the claim was lost. */
   release(jobId: string, fence: number, opts?: { delaySeconds?: number }): Promise<boolean>;
@@ -79,6 +100,23 @@ export interface DispatchQueue {
    *  Returns how many were reclaimed. The next claim bumps their fence, so a revived
    *  original runner's terminal write is fenced out. */
   reclaimExpired(): Promise<number>;
+  /**
+   * Sweep expired-lease claims (a runner claimed then died): requeue those under
+   * `maxAttempts` for another runner, but FAIL OVER those at/over the cap to `failed`
+   * (so the reaper drives the task's breaker instead of re-dispatching forever). This
+   * is the runner-path equivalent of the in-process fallback — a dead runner can't
+   * stall its task indefinitely. Returns the split of reclaimed vs failed-over.
+   */
+  sweepExpired(maxAttempts: number): Promise<SweepResult>;
+  /**
+   * Lease up to `limit` terminal (`done`/`failed`) jobs to ONE reaper for finalization,
+   * via FOR UPDATE SKIP LOCKED. Sets `reaping_at` (a lease) WITHOUT changing status, so
+   * a reaper crash mid-finalize just lets the lease lapse and the row is re-selected.
+   * Idempotent finalize + this lease give at-least-once finalization with no lost rows.
+   */
+  claimFinished(limit: number, leaseSeconds: number): Promise<FinishedJob[]>;
+  /** Delete a finished job once the reaper has finalized it (terminal cleanup). */
+  markReaped(jobId: string): Promise<void>;
 }
 
 /**
@@ -150,11 +188,12 @@ export class PgDispatchQueue implements DispatchQueue {
     return res.rowCount === 1;
   }
 
-  async complete(jobId: string, fence: number): Promise<boolean> {
+  async complete(jobId: string, fence: number, result?: Record<string, unknown>): Promise<boolean> {
     const res = await this.db.query(
-      `UPDATE dispatch_job SET status = 'done', lease_expires_at = NULL, updated_at = now()
+      `UPDATE dispatch_job
+          SET status = 'done', lease_expires_at = NULL, result = $3::jsonb, updated_at = now()
         WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
-      [jobId, fence]
+      [jobId, fence, result === undefined ? null : JSON.stringify(result)]
     );
     return res.rowCount === 1;
   }
@@ -187,5 +226,62 @@ export class PgDispatchQueue implements DispatchQueue {
         WHERE status = 'claimed' AND lease_expires_at < now()`
     );
     return res.rowCount ?? 0;
+  }
+
+  async sweepExpired(maxAttempts: number): Promise<SweepResult> {
+    // Two writes, both scoped to expired-lease claims. Fail over FIRST (attempts at the
+    // cap → 'failed' for the reaper's breaker path), then requeue the rest — ordering so
+    // a row counts once. attempts was already incremented by the claim that then died,
+    // so `attempts >= maxAttempts` means it has had its allotted runner tries.
+    const failed = await this.db.query(
+      `UPDATE dispatch_job
+          SET status = 'failed', claimed_by = NULL, lease_expires_at = NULL,
+              last_error = 'exceeded max dispatch attempts', updated_at = now()
+        WHERE status = 'claimed' AND lease_expires_at < now() AND attempts >= $1`,
+      [maxAttempts]
+    );
+    const reclaimed = await this.db.query(
+      `UPDATE dispatch_job
+          SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE status = 'claimed' AND lease_expires_at < now() AND attempts < $1`,
+      [maxAttempts]
+    );
+    return { reclaimed: reclaimed.rowCount ?? 0, failedOver: failed.rowCount ?? 0 };
+  }
+
+  async claimFinished(limit: number, leaseSeconds: number): Promise<FinishedJob[]> {
+    const res = await this.db.query<{
+      id: string;
+      task_id: string;
+      payload: Record<string, unknown>;
+      status: 'done' | 'failed';
+      result: Record<string, unknown> | null;
+      last_error: string | null;
+    }>(
+      `UPDATE dispatch_job
+          SET reaping_at = now() + make_interval(secs => $2), updated_at = now()
+        WHERE id IN (
+          SELECT id FROM dispatch_job
+           WHERE status IN ('done','failed')
+             AND (reaping_at IS NULL OR reaping_at < now())
+           ORDER BY updated_at
+           FOR UPDATE SKIP LOCKED
+           LIMIT $1
+        )
+      RETURNING id, task_id, payload, status, result, last_error`,
+      [limit, leaseSeconds]
+    );
+    return res.rows.map((r) => ({
+      id: r.id,
+      taskId: r.task_id,
+      payload: r.payload,
+      status: r.status,
+      result: r.result,
+      lastError: r.last_error,
+    }));
+  }
+
+  async markReaped(jobId: string): Promise<void> {
+    await this.db.query(`DELETE FROM dispatch_job WHERE id = $1`, [jobId]);
   }
 }

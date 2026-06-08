@@ -314,3 +314,88 @@ run('PgDispatchQueue (Postgres) — fencing: a stale runner cannot clobber the n
     expect(await q.renewLease(job.id, job.fence - 1, 60)).toBe(false);
   });
 });
+
+// The reaper seam: the runner writes its result back to the queue (complete carries the
+// PR url), then coordination's reaper leases finished jobs (claimFinished), finalizes,
+// and deletes them (markReaped). sweepExpired is the runner-path safety net.
+run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFinished, markReaped, sweepExpired', () => {
+  let pool: Pool;
+  let q: PgDispatchQueue;
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: url });
+    await pool.query(DISPATCH_JOB_DDL);
+    q = new PgDispatchQueue(pool);
+  });
+  afterAll(async () => {
+    await pool?.end();
+  });
+  beforeEach(async () => {
+    await pool.query('TRUNCATE dispatch_job');
+  });
+
+  it('complete stores the runner result; claimFinished leases it for the reaper; markReaped deletes it', async () => {
+    await q.enqueue({ taskId: 't-done', payload: { repoRef: 'acme/widgets' } });
+    const job = (await q.claimNext('r1', 30))!;
+    expect(await q.complete(job.id, job.fence, { prUrl: 'https://github.com/acme/widgets/pull/9' })).toBe(true);
+
+    const finished = await q.claimFinished(10, 30);
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({
+      id: job.id,
+      taskId: 't-done',
+      status: 'done',
+      result: { prUrl: 'https://github.com/acme/widgets/pull/9' },
+    });
+
+    // Leased → a concurrent reaper sweep skips it (reaping_at is in the future).
+    expect(await q.claimFinished(10, 30)).toHaveLength(0);
+
+    await q.markReaped(job.id);
+    const row = await pool.query('SELECT 1 FROM dispatch_job WHERE id=$1', [job.id]);
+    expect(row.rowCount).toBe(0);
+  });
+
+  it('claimFinished re-selects a job whose reaping lease lapsed (a reaper crash never strands it)', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = (await q.claimNext('r1', 30))!;
+    await q.complete(job.id, job.fence, { prUrl: 'x' });
+    expect(await q.claimFinished(10, 30)).toHaveLength(1); // leased
+    // Simulate the reaper dying mid-finalize: force the reaping lease into the past.
+    await pool.query(`UPDATE dispatch_job SET reaping_at = now() - interval '1 second' WHERE id=$1`, [job.id]);
+    const again = await q.claimFinished(10, 30);
+    expect(again).toHaveLength(1); // re-selected, status still the source of truth
+    expect(again[0]!.status).toBe('done');
+  });
+
+  it('claimFinished returns failed jobs too (the reaper drives their breaker), with the error', async () => {
+    await q.enqueue({ taskId: 't-fail', payload: {} });
+    const job = (await q.claimNext('r1', 30))!;
+    await q.fail(job.id, job.fence, 'no committed changes');
+    const finished = await q.claimFinished(10, 30);
+    expect(finished[0]).toMatchObject({ taskId: 't-fail', status: 'failed', lastError: 'no committed changes' });
+  });
+
+  it('sweepExpired requeues an expired claim under the cap, but FAILS OVER one at the cap', async () => {
+    // Under the cap (attempts=1, cap=3): a dead runner's claim is requeued for retry.
+    await q.enqueue({ taskId: 't-retry', payload: {} });
+    const a = (await q.claimNext('r1', 30))!;
+    await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second' WHERE id=$1`, [a.id]);
+
+    // At the cap (force attempts up to the cap): a dead runner's claim fails over.
+    await q.enqueue({ taskId: 't-giveup', payload: {} });
+    const b = (await q.claimNext('r2', 30))!;
+    await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second', attempts = 3 WHERE id=$1`, [b.id]);
+
+    const swept = await q.sweepExpired(3);
+    expect(swept).toEqual({ reclaimed: 1, failedOver: 1 });
+
+    // The under-cap job is claimable again; the at-cap job is terminal failed.
+    const re = await q.claimNext('r3', 30);
+    expect(re!.id).toBe(a.id);
+    const failedRow = await pool.query<{ status: string; last_error: string }>(
+      'SELECT status, last_error FROM dispatch_job WHERE id=$1',
+      [b.id]
+    );
+    expect(failedRow.rows[0]).toMatchObject({ status: 'failed', last_error: 'exceeded max dispatch attempts' });
+  });
+});
