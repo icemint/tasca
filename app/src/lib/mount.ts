@@ -26,7 +26,15 @@ export function fromResult<T>(
   return render(res.data);
 }
 
-export async function mount(el: HTMLElement, load: () => Promise<LoadResult>): Promise<void> {
+/** Optional post-render hook: wire live controls in `el`; `rerun` re-fetches +
+ *  re-renders the view from server truth (used by live writes to reconcile). */
+export type WireFn = (el: HTMLElement, rerun: () => Promise<void>) => void;
+
+export async function mount(
+  el: HTMLElement,
+  load: () => Promise<LoadResult>,
+  wire?: WireFn
+): Promise<void> {
   const run = async () => {
     el.innerHTML = loading();
 
@@ -68,6 +76,8 @@ export async function mount(el: HTMLElement, load: () => Promise<LoadResult>): P
     // Empty and ok both render their html; wire any in-content refresh control
     // (a view can include a `data-act="refresh"` button to re-run its read).
     wireAction(el, 'refresh', run);
+    // Live controls (writes) wire after each render and reconcile via `run`.
+    wire?.(el, run);
   };
 
   await run();

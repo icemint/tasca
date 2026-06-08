@@ -95,17 +95,29 @@ describe('task inspector — the agent-authored PR actually shows', () => {
   });
 });
 
-describe('agent detail — bindings, recent work, read-only controls', () => {
-  it('renders the identity binding, recent tasks, and a gated Deploy', async () => {
+describe('agent detail — bindings, recent work, live + read-only controls', () => {
+  it('renders the binding, recent tasks, a LIVE pause control, and a gated Deploy', async () => {
     withId('agent-elvis');
     stubFetch({ '/api/agents/agent-elvis': { body: AGENT_ELVIS_DETAIL } });
     const r = await loadAgent();
     expect(r.kind).toBe('ok');
     expect(htmlOf(r)).toContain('tasca-elvis'); // github binding handle
     expect(htmlOf(r)).toContain('roadhero/agentic-playground#5'); // recent work
-    expect(htmlOf(r)).toContain('Agent provisioning is operator-run today'); // Deploy gated
-    expect(htmlOf(r)).toContain('data-ro="soon"'); // Pause / Edit profile = preview
+    // Pause is now a LIVE control carrying the optimistic-concurrency version.
+    expect(htmlOf(r)).toContain('class="ictl live-ctl"');
+    expect(htmlOf(r)).toContain('data-action="pause"');
+    expect(htmlOf(r)).toContain('data-version="0"');
+    expect(htmlOf(r)).toContain('Agent provisioning is operator-run today'); // Deploy still gated
     expect(htmlOf(r)).not.toContain('Coming soon');
+  });
+
+  it('a paused agent shows a Paused chip and a Resume control (status is visible)', async () => {
+    withId('agent-elvis');
+    stubFetch({ '/api/agents/agent-elvis': { body: { ...AGENT_ELVIS_DETAIL, status: 'paused', version: 3 } } });
+    const r = await loadAgent();
+    expect(htmlOf(r)).toContain('status-chip paused');
+    expect(htmlOf(r)).toContain('data-action="resume"');
+    expect(htmlOf(r)).toContain('data-version="3"');
   });
 });
 

@@ -34,15 +34,15 @@ const TASKS: TaskSummary[] = [
 ];
 
 const AGENTS: Agent[] = [
-  { id: 'nova', name: 'Nova', vendor: 'claude', model: 'Sonnet 4.5', status: 'active', avatarUrl: null, state: 'working', currentTaskId: 'tas-241',
+  { id: 'nova', name: 'Nova', vendor: 'claude', model: 'Sonnet 4.5', status: 'active', version: 0, avatarUrl: null, state: 'working', currentTaskId: 'tas-241',
     capability: { maxTier: 'hard', tiersCovered: ['basic','low','medium','hard'], languageSpecialties: ['TypeScript','Node'], frameworkSpecialties: ['Auth','Postgres'], concurrencyLimit: 2, costCeiling: 20, successRate: 0.94 } },
-  { id: 'sable', name: 'Sable', vendor: 'claude', model: 'Opus 4.1', status: 'active', avatarUrl: null, state: 'blocked', currentTaskId: 'bill-77',
+  { id: 'sable', name: 'Sable', vendor: 'claude', model: 'Opus 4.1', status: 'active', version: 0, avatarUrl: null, state: 'blocked', currentTaskId: 'bill-77',
     capability: { maxTier: 'ultra', tiersCovered: ['medium','hard','ultra'], languageSpecialties: ['TypeScript','Go'], frameworkSpecialties: ['Billing','Distributed'], concurrencyLimit: 2, costCeiling: 40, successRate: 0.90 } },
-  { id: 'juno', name: 'Juno', vendor: 'openai', model: 'GPT-4.1', status: 'active', avatarUrl: null, state: 'working', currentTaskId: 'tas-219',
+  { id: 'juno', name: 'Juno', vendor: 'openai', model: 'GPT-4.1', status: 'active', version: 0, avatarUrl: null, state: 'working', currentTaskId: 'tas-219',
     capability: { maxTier: 'medium', tiersCovered: ['basic','low','medium'], languageSpecialties: ['Node'], frameworkSpecialties: ['Edge','Webhooks'], concurrencyLimit: 2, costCeiling: 15, successRate: 0.92 } },
-  { id: 'pike', name: 'Pike', vendor: 'claude', model: 'Sonnet 4.5', status: 'active', avatarUrl: null, state: 'shipped', currentTaskId: null,
+  { id: 'pike', name: 'Pike', vendor: 'claude', model: 'Sonnet 4.5', status: 'active', version: 0, avatarUrl: null, state: 'shipped', currentTaskId: null,
     capability: { maxTier: 'hard', tiersCovered: ['basic','low','medium','hard'], languageSpecialties: ['TypeScript'], frameworkSpecialties: ['API','Security'], concurrencyLimit: 2, costCeiling: 20, successRate: 0.96 } },
-  { id: 'echo', name: 'Echo', vendor: 'local', model: 'LM Studio · qwen2.5', status: 'active', avatarUrl: null, state: 'idle', currentTaskId: null,
+  { id: 'echo', name: 'Echo', vendor: 'local', model: 'LM Studio · qwen2.5', status: 'active', version: 0, avatarUrl: null, state: 'idle', currentTaskId: null,
     capability: { maxTier: 'low', tiersCovered: ['basic','low'], languageSpecialties: ['Scripts'], frameworkSpecialties: ['Tests'], concurrencyLimit: 3, costCeiling: 0, successRate: null } },
 ];
 

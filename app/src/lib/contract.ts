@@ -38,6 +38,8 @@ export interface Agent {
   vendor: Vendor | string;
   model: string;
   status: AgentStatus;
+  /** Optimistic-concurrency token echoed on writes (pause/resume/edit). */
+  version: number;
   avatarUrl: string | null;
   capability: Capability;
   currentTaskId: string | null;

@@ -54,6 +54,7 @@ export const AGENT_ELVIS: Agent = {
   vendor: 'claude',
   model: 'claude-opus-4-8',
   status: 'active',
+  version: 0,
   avatarUrl: null,
   currentTaskId: 'task-lru',
   state: 'working',

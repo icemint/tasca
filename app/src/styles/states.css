@@ -64,3 +64,31 @@
    clickable. Replaces the per-button .is-disabled the onboarding buttons used to carry. */
 .ro-ctl { cursor: not-allowed; opacity: var(--op-disabled); pointer-events: none; }
 .head-actions { display: inline-flex; align-items: center; gap: 10px; }
+
+/* ── Live (write) controls ─────────────────────────────────────────────────────
+   Unlike .ro-ctl these are real: full affordance, pointer cursor. While a write is
+   in flight they go aria-busy (dimmed + wait cursor) but stay visible. */
+.live-ctl { cursor: pointer; }
+.live-ctl[aria-busy="true"] { opacity: var(--op-disabled); cursor: progress; }
+
+/* Lifecycle status chip (Paused/Retired) — makes a pause/resume visible. */
+.status-chip {
+  display: inline-flex; align-items: center; font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--line-2);
+}
+.status-chip.paused { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+.status-chip.retired { color: var(--fg-4); }
+
+/* Write banner — a failed/conflicting write reconciles to truth and explains why. */
+.write-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 0 16px; padding: 10px 14px; border-radius: var(--radius-md);
+  font-size: 13.5px; line-height: 1.5;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  background: color-mix(in srgb, var(--amber) 9%, var(--surface-2));
+  color: var(--fg-2);
+}
+.write-banner.info { border-color: var(--line-2); background: var(--surface-2); }
+.write-banner .wb-x { color: var(--fg-4); cursor: pointer; line-height: 1; padding: 2px 4px; }
+.write-banner .wb-x:hover { color: var(--fg-2); }

@@ -45,6 +45,25 @@ export interface CreatedAgent {
 }
 
 /**
+ * Outcome of a versioned agent write (pause/resume/edit-profile). Optimistic
+ * concurrency rides the agent row's `version`: a write that presents a stale
+ * version loses to whoever bumped it first and learns the `currentVersion` so the
+ * UI can reconcile to truth instead of silently overwriting. `ok` carries the new
+ * version; `not_found` → 404; `version_conflict` → 409 (the caller re-reads truth).
+ */
+export type AgentWriteOutcome =
+  | { ok: true; version: number }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'version_conflict'; currentVersion: number };
+
+/** The editable slice of a capability profile (the agent-edit form). */
+export interface CapabilityProfilePatch {
+  maxTier: CapabilityProfile['maxTier'];
+  concurrencyLimit: number | null;
+  costCeiling: number | null;
+}
+
+/**
  * Read-side projection: an agent joined to its capability profile. The profile
  * is `null` when none has been set yet (so the UI shows an honest empty/"—"
  * rather than fabricated capability numbers).
@@ -266,6 +285,72 @@ export class PgIdentityRepository {
     );
     const row = res.rows[0];
     return row ? mapCapabilityProfile(row) : null;
+  }
+
+  /** Resolve why a versioned write matched no row: missing agent vs stale version. */
+  private async agentWriteMiss(agentId: string): Promise<AgentWriteOutcome> {
+    const cur = await this.db.query<{ version: number }>(
+      `SELECT version FROM agent WHERE id = $1`,
+      [agentId]
+    );
+    if (cur.rowCount === 0) return { ok: false, reason: 'not_found' };
+    return { ok: false, reason: 'version_conflict', currentVersion: cur.rows[0]!.version };
+  }
+
+  /**
+   * Set an agent's lifecycle status (pause/resume/retire) under optimistic
+   * concurrency: the UPDATE only applies at the expected `version` and bumps it, so
+   * a concurrent writer's stale attempt loses and gets `version_conflict`.
+   */
+  async setAgentStatus(
+    agentId: string,
+    status: AgentStatus,
+    expectedVersion: number
+  ): Promise<AgentWriteOutcome> {
+    const res = await this.db.query<{ version: number }>(
+      `UPDATE agent SET status = $2, version = version + 1
+        WHERE id = $1 AND version = $3
+      RETURNING version`,
+      [agentId, status, expectedVersion]
+    );
+    if (res.rowCount === 1) return { ok: true, version: res.rows[0]!.version };
+    return this.agentWriteMiss(agentId);
+  }
+
+  /**
+   * Edit the agent's capability profile under optimistic concurrency. Atomic: the
+   * agent-row version CAS and the profile update commit together (or neither), so a
+   * stale edit never half-applies. `version_conflict` when someone edited first.
+   */
+  async updateCapabilityProfile(
+    agentId: string,
+    patch: CapabilityProfilePatch,
+    expectedVersion: number
+  ): Promise<AgentWriteOutcome> {
+    return this.withTransaction(async (repo) => {
+      const cas = await repo.db.query<{ version: number }>(
+        `UPDATE agent SET version = version + 1 WHERE id = $1 AND version = $2 RETURNING version`,
+        [agentId, expectedVersion]
+      );
+      if (cas.rowCount !== 1) return repo.agentWriteMiss(agentId);
+      // UPSERT, not UPDATE: an agent can exist with no capability_profile row yet
+      // (createAgent doesn't seed one; the read path LEFT JOINs and shows "—"). A
+      // plain UPDATE would silently match 0 rows and let us report a FALSE success —
+      // a write that lies. The upsert makes the edit always land. concurrency_limit
+      // is NOT NULL (default 1) → COALESCE a null patch to the existing value (or 1
+      // on insert); cost_ceiling is nullable (NULL = "no cap", read back as 0).
+      await repo.db.query(
+        `INSERT INTO capability_profile (agent_id, max_tier, concurrency_limit, cost_ceiling, updated_at)
+         VALUES ($1, $2, COALESCE($3, 1), $4, now())
+         ON CONFLICT (agent_id) DO UPDATE SET
+           max_tier = $2,
+           concurrency_limit = COALESCE($3, capability_profile.concurrency_limit),
+           cost_ceiling = $4,
+           updated_at = now()`,
+        [agentId, patch.maxTier, patch.concurrencyLimit, patch.costCeiling]
+      );
+      return { ok: true, version: cas.rows[0]!.version };
+    });
   }
 
   // ── Identity bindings (per-platform CRUD) ────────────────────────────────────

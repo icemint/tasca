@@ -142,6 +142,7 @@ export function createCoordination(
     // additionally CSRF-gated (double-submit) inside the handler.
     writeApi: {
       store,
+      identity,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
