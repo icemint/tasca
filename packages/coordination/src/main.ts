@@ -34,22 +34,17 @@ import {
 import { createExecution } from '@tasca/execution';
 import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { PgIdentityRepository } from '@tasca/identity';
-import { parseInstallationEvent, type AdapterEvent, type VerifiedEvent } from '@tasca/contracts';
+import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
-import type {
-  StatusReporter,
-  WebhookVerifier,
-  RawWebhook,
-  VerifiedWebhook,
-  Logger,
-} from './ports';
+import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { RepoProvisioner, TaskContentSource } from './orchestrate';
 import { GitAppRepoProvisioner } from './repo-provisioner';
 import { shortcutVerifier } from './shortcut-verifier';
+import { githubVerifier } from './github-verifier';
 
 /** Minimal console logger with structured context (JSON line per event). */
 const logger: Logger = {
@@ -98,32 +93,6 @@ async function applySchema(pool: Pool): Promise<void> {
   for (const ddl of statements) {
     await pool.query(ddl);
   }
-}
-
-/**
- * The webhook verifier wired from the real GitHub adapter. HMAC-SHA-256 verify
- * over the raw body (X-Hub-Signature-256, sha256= prefix); the idempotency key is
- * the `X-GitHub-Delivery` HEADER (GitHub puts no dedupe id in the body); parse
- * maps issues.assigned + issue_comment mentions ∩ registered github agent ids →
- * AdapterEvents. `registeredGitHubIds` is a boot-time snapshot of the active
- * github bindings (numeric ids for assignment + lowercased logins for mentions);
- * a roster change requires a worker restart, like the Shortcut verifier.
- */
-function githubVerifier(secret: string, registeredGitHubIds: ReadonlySet<string>): WebhookVerifier {
-  const adapter = new GitHubAdapter({ webhookSecret: secret });
-  return {
-    verify(raw: RawWebhook): VerifiedWebhook | null {
-      const v = adapter.verifyWebhook(raw.rawBody, raw.headers);
-      if (!v.ok) return null;
-      // GitHub's per-delivery id is a header, not a body field.
-      const delivery = raw.headers['x-github-delivery'] ?? raw.headers['X-GitHub-Delivery'];
-      if (!delivery) return null;
-      return { platform: 'github', externalEventId: String(delivery), payload: v };
-    },
-    parse(verified: VerifiedWebhook): AdapterEvent[] {
-      return adapter.parseEvent(verified.payload as VerifiedEvent, registeredGitHubIds);
-    },
-  };
 }
 
 /** A verifier that rejects everything — used until a platform's secret is set. */
@@ -214,7 +183,7 @@ async function main(): Promise<void> {
 
   // GitHub verifier is optional: absent secret → the /webhooks/github route 404s
   // (flags OFF until configured), it does not reject-all on the shortcut path.
-  const ghVerifier = githubSecret ? githubVerifier(githubSecret, registeredGitHubIds) : undefined;
+  const ghVerifier = githubSecret ? githubVerifier(githubSecret, registeredGitHubIds, logger) : undefined;
   if (!githubSecret) {
     logger.info?.('GITHUB_WEBHOOK_SECRET unset — /webhooks/github disabled');
   }
