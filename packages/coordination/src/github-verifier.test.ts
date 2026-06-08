@@ -40,7 +40,33 @@ describe('githubVerifier.parse (intake diagnostic)', () => {
     expect(events).toEqual([
       { type: 'task.assigned', platform: 'github', externalStoryId: 'roadhero/agentic-playground#7', agentExternalId: ELVIS_ID, repoHint: 'roadhero/agentic-playground' },
     ]);
-    expect(lines[0]!.context).toMatchObject({ action: 'assigned', assigneeId: ELVIS_ID, assigneeInSet: true, matched: 1 });
+    expect(lines[0]!.context).toMatchObject({
+      action: 'assigned',
+      assigneeId: ELVIS_ID,
+      assigneeInSet: true,
+      matched: 1,
+      schemaOk: true,
+      repoResolved: true,
+    });
+  });
+
+  it('a schema-failing assigned payload yields matched:0 and names the failing field (the real contradiction)', () => {
+    // Reproduces "assigneeInSet:true, matched:0": the id IS in the set, but the
+    // payload fails GitHubWebhookSchema (here the assignee has no `login`, which
+    // GitHubUserSchema requires), so parseEvent returns [] BEFORE the assignee match.
+    const { logger, lines } = recordingLogger();
+    const events = githubVerifier(SECRET, REGISTERED, logger).parse(
+      verified({
+        action: 'assigned',
+        repository: REPO,
+        issue: { number: 7 },
+        assignee: { id: 291630881 }, // missing required `login`
+      })
+    );
+    expect(events).toEqual([]);
+    const ctx = lines[0]!.context as Record<string, unknown>;
+    expect(ctx).toMatchObject({ action: 'assigned', assigneeInSet: true, matched: 0, schemaOk: false });
+    expect(String(ctx.schemaError)).toMatch(/login/); // names the offending field
   });
 
   it('an UNKNOWN assignee id yields no events and logs assigneeInSet:false (the mismatch is visible)', () => {
