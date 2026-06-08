@@ -165,6 +165,22 @@ export interface CoordinationStore {
     breakerThreshold: number
   ): Promise<{ failureCount: number; tripped: boolean }>;
 
+  /**
+   * Like recordFailureAndTransition, but ONLY when the task is still in a live
+   * post-claim state (`executing`/`claimed`). Used by the reaper to finalize a
+   * runner-FAILED job: because the reaper's claimFinished lease is at-least-once (a
+   * job can be re-leased after a crash / a failed markReaped), a blind increment
+   * would DOUBLE-COUNT the breaker. Guarding on the post-claim status makes it
+   * idempotent — the first finalize transitions the task out of `executing`, so a
+   * re-finalize matches no rows and is a no-op. `acted` is false on that no-op.
+   * (The in-process path keeps recordFailureAndTransition: it must also count
+   * PRE-claim failures, where the task is still `routable`.)
+   */
+  recordRunnerFailure(
+    taskId: string,
+    breakerThreshold: number
+  ): Promise<{ acted: boolean; failureCount: number; tripped: boolean }>;
+
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
   recordRoutingDecision(input: {
     taskId: string;
@@ -454,6 +470,28 @@ export class PgCoordinationStore implements CoordinationStore {
     return { failureCount: row.failure_count, tripped: row.status === 'needs_attention' };
   }
 
+  async recordRunnerFailure(
+    taskId: string,
+    breakerThreshold: number
+  ): Promise<{ acted: boolean; failureCount: number; tripped: boolean }> {
+    // Same atomic increment+transition as recordFailureAndTransition, but fenced to a
+    // live post-claim status so a re-finalized job can't double-count the breaker.
+    const res = await this.db.query<{ failure_count: number; status: string }>(
+      `UPDATE task
+          SET failure_count = failure_count + 1,
+              status     = CASE WHEN failure_count + 1 >= $2 THEN 'needs_attention' ELSE 'routable' END,
+              claimed_by = CASE WHEN failure_count + 1 >= $2 THEN claimed_by ELSE NULL END,
+              version    = version + 1,
+              updated_at = now()
+        WHERE id = $1 AND status IN ('executing','claimed')
+       RETURNING failure_count, status`,
+      [taskId, breakerThreshold]
+    );
+    if (res.rowCount !== 1) return { acted: false, failureCount: 0, tripped: false };
+    const row = res.rows[0]!;
+    return { acted: true, failureCount: row.failure_count, tripped: row.status === 'needs_attention' };
+  }
+
   async recordRoutingDecision(input: {
     taskId: string;
     tierEstimate: TierEstimate;
@@ -474,8 +512,12 @@ export class PgCoordinationStore implements CoordinationStore {
   }
 
   async recordPullRequest(input: { taskId: string; url: string }): Promise<void> {
+    // Idempotent on (task_id, url): a re-finalize (reaper at-least-once) is a no-op
+    // rather than a duplicate PR row — the hard storage-layer guarantee behind the
+    // reaper's read-then-write check.
     await this.db.query(
-      `INSERT INTO pull_request (id, task_id, url) VALUES ($1,$2,$3)`,
+      `INSERT INTO pull_request (id, task_id, url) VALUES ($1,$2,$3)
+       ON CONFLICT (task_id, url) DO NOTHING`,
       [randomUUID(), input.taskId, input.url]
     );
   }

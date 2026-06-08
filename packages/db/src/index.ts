@@ -6,4 +6,6 @@ export {
   type DispatchQueue,
   type DispatchJob,
   type DispatchJobInput,
+  type FinishedJob,
+  type SweepResult,
 } from './dispatch-queue';

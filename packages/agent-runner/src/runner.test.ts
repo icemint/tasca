@@ -24,8 +24,10 @@ class FakeQueue implements DispatchQueue {
     this.renewed.push({ id, fence });
     return Promise.resolve(true);
   }
-  complete(id: string, fence: number): Promise<boolean> {
+  completedResults: Array<{ id: string; fence: number; result?: Record<string, unknown> }> = [];
+  complete(id: string, fence: number, result?: Record<string, unknown>): Promise<boolean> {
     this.completed.push({ id, fence });
+    this.completedResults.push({ id, fence, ...(result ? { result } : {}) });
     return Promise.resolve(true);
   }
   release(id: string, fence: number): Promise<boolean> {
@@ -38,6 +40,16 @@ class FakeQueue implements DispatchQueue {
   }
   reclaimExpired(): Promise<number> {
     return Promise.resolve(0);
+  }
+  // Reaper-side methods — unused by the runner, present to satisfy the interface.
+  sweepExpired(): Promise<{ reclaimed: number; failedOver: number }> {
+    return Promise.resolve({ reclaimed: 0, failedOver: 0 });
+  }
+  claimFinished(): Promise<never[]> {
+    return Promise.resolve([]);
+  }
+  markReaped(): Promise<void> {
+    return Promise.resolve();
   }
 }
 

@@ -139,7 +139,9 @@ export function createRunner(opts: RunnerOptions): Runner {
       token = await opts.broker.mintRepoToken(payload.repoRef);
       const outcome = await opts.execute(job, payload as DispatchPayload, token);
       if (outcome.ok) {
-        logIfLost(await opts.queue.complete(job.id, job.fence), 'complete');
+        // The result (e.g. the PR url) rides into the QUEUE so the reaper — coordination
+        // side — can record it + finalize; the runner never touches coordination tables.
+        logIfLost(await opts.queue.complete(job.id, job.fence, outcome.result), 'complete');
       } else if (outcome.retry) {
         logIfLost(await opts.queue.release(job.id, job.fence, { delaySeconds: retryDelay }), 'release');
       } else {

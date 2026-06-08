@@ -387,8 +387,14 @@ async function main(): Promise<void> {
       githubWriteback: githubWritebackEnabled ? 'enabled' : 'disabled',
       webhooks: webhookSecret ? 'verifying' : 'rejecting (no secret)',
       auth: authHandler ? 'enabled' : 'disabled',
+      dispatch: coordination.reaper ? 'queue (reaper on)' : 'in-process',
     });
   });
+
+  // The reaper finalizes runner-completed jobs + sweeps dead claims — present only when
+  // split dispatch is on (TASCA_DISPATCH_MODE=queue). It writes coordination tables
+  // (the runner cannot), so it lives in the worker, not the runner.
+  coordination.reaper?.start();
 
   // Last-resort host guards (the server + post-ack work handle their own errors;
   // these catch anything that still escapes, log it, and let the platform decide).
@@ -403,9 +409,14 @@ async function main(): Promise<void> {
     logger.info?.('shutting down', { signal });
     if (authSweep) clearInterval(authSweep);
     server.close(() => {
-      void Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve()]).then(() =>
-        process.exit(0)
-      );
+      void (async () => {
+        // Stop the reaper FIRST and await its in-flight tick — it owns DB work, so its
+        // finalize must not race a closing pool (use-after-close). Only then tear down
+        // the pool + the rest.
+        await (coordination.reaper?.stop() ?? Promise.resolve());
+        await Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve()]);
+        process.exit(0);
+      })();
     });
     // Hard cap so a hung connection can't block the rollout forever.
     setTimeout(() => process.exit(0), 10_000).unref();

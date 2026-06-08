@@ -48,6 +48,22 @@ export interface AgentDirectory {
   principalIdFor(agentId: string): Promise<string | null>;
 }
 
+/** The narrow slice of OrchestrationDeps the finalize seam needs — also what the reaper
+ *  (which finalizes a runner-completed job out of band) supplies. */
+export interface FinalizeDeps {
+  store: CoordinationStore;
+  status: StatusReporter;
+  audit: AuditSink;
+  logger?: Logger;
+}
+
+/** The event fields finalize/audit actually read — so a caller (e.g. the reaper) that
+ *  only has the dispatch payload can finalize without fabricating a whole AdapterEvent. */
+export interface FinalizeEvent {
+  platform: AdapterEvent['platform'];
+  externalStoryId: string;
+}
+
 /** Append-only audit seam (the @tasca/identity audit trail). */
 export interface AuditSink {
   record(input: {
@@ -608,13 +624,18 @@ function runAgentToCompletion(
  * left-behind status (e.g. still 'executing') is cosmetic and reconciles on a
  * later delivery, never a duplicated customer PR.
  */
-async function finalizeDispatch(
-  deps: OrchestrationDeps,
+export async function finalizeDispatch(
+  deps: FinalizeDeps,
   taskId: string,
-  event: AdapterEvent,
+  event: FinalizeEvent,
   agentId: string,
   principalId: string | null,
-  prUrl: string
+  prUrl: string,
+  // The CUSTOMER-FACING post + its audits must fire at most once. The reaper finalizes
+  // at-least-once (a job can be re-leased after a crash / failed markReaped), so it
+  // passes false on a re-finalize (PR already recorded) to suppress a duplicate
+  // 'PR opened' comment. In-process callers (single finalize) keep the default true.
+  firstFinalize = true
 ): Promise<void> {
   const safe = async (step: string, fn: () => Promise<void>): Promise<void> => {
     try {
@@ -629,35 +650,42 @@ async function finalizeDispatch(
     }
   };
 
-  await safe('audit.pr.create', () =>
-    audit(deps, principalId, agentId, event, { action: 'pr.create', target: taskId, payload: { url: prUrl } })
-  );
-  await safe('status.post', () =>
-    deps.status.postStatus({
-      platform: event.platform,
-      externalStoryId: event.externalStoryId,
-      agentId,
-      state: 'in_review',
-      comment: 'PR opened',
-      prUrl,
-    })
-  );
+  // setStatus is idempotent (in_review→in_review is rejected + swallowed), so it always
+  // runs to reconcile a left-behind 'executing'. The post + audits are additive
+  // (a second 'PR opened' comment hits the customer), so they're gated on first finalize.
+  if (firstFinalize) {
+    await safe('audit.pr.create', () =>
+      audit(deps, principalId, agentId, event, { action: 'pr.create', target: taskId, payload: { url: prUrl } })
+    );
+    await safe('status.post', () =>
+      deps.status.postStatus({
+        platform: event.platform,
+        externalStoryId: event.externalStoryId,
+        agentId,
+        state: 'in_review',
+        comment: 'PR opened',
+        prUrl,
+      })
+    );
+  }
   await safe('set.in_review', () => deps.store.setStatus(taskId, 'in_review'));
-  await safe('audit.status.post', () =>
-    audit(deps, principalId, agentId, event, {
-      action: 'status.post',
-      target: taskId,
-      payload: { state: 'in_review', prUrl },
-    })
-  );
+  if (firstFinalize) {
+    await safe('audit.status.post', () =>
+      audit(deps, principalId, agentId, event, {
+        action: 'status.post',
+        target: taskId,
+        payload: { state: 'in_review', prUrl },
+      })
+    );
+  }
 }
 
 /** Best-effort audit append — skipped (not failed) when no principal resolves. */
 async function audit(
-  deps: OrchestrationDeps,
+  deps: Pick<OrchestrationDeps, 'audit'>,
   principalId: string | null,
   agentId: string,
-  event: AdapterEvent,
+  event: { platform: AdapterEvent['platform'] },
   entry: { action: string; target?: string; payload?: Record<string, unknown> }
 ): Promise<void> {
   if (!principalId) return;

@@ -15,6 +15,7 @@ import { PgCoordinationStore } from './store';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
+import { makeReaper, type Reaper } from './reaper';
 import type { SessionInfo } from './read-api';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -111,6 +112,9 @@ export interface Coordination {
   deps: CoordinationServerDeps;
   /** Create (not start) the node:http server bound to these deps. */
   createServer(): ReturnType<typeof createCoordinationServer>;
+  /** The split-dispatch reaper — present ONLY when the dispatch queue is enabled. The
+   *  host starts/stops it: it finalizes runner-completed jobs + sweeps dead claims. */
+  reaper?: Reaper;
 }
 
 /**
@@ -126,6 +130,9 @@ export function createCoordination(
   const identity = new PgIdentityRepository(input.pool);
   const directory = new IdentityAgentDirectory(identity, input.agentIds);
   const audit = new IdentityAuditSink(identity);
+  // One queue instance shared by the dispatch path (enqueue/cancel) and the reaper
+  // (sweep/finalize) so they operate on the same table wiring.
+  const dispatchQueue = input.dispatchQueueEnabled ? new PgDispatchQueue(input.pool) : undefined;
 
   const deps: CoordinationServerDeps = {
     store,
@@ -158,7 +165,7 @@ export function createCoordination(
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
-    ...(input.dispatchQueueEnabled ? { dispatchQueue: new PgDispatchQueue(input.pool) } : {}),
+    ...(dispatchQueue ? { dispatchQueue } : {}),
     ...(input.dispatchFallbackMs !== undefined ? { dispatchFallbackMs: input.dispatchFallbackMs } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
@@ -166,8 +173,21 @@ export function createCoordination(
     ...(input.logger !== undefined ? { logger: input.logger } : {}),
   };
 
+  const reaper = dispatchQueue
+    ? makeReaper({
+        queue: dispatchQueue,
+        store,
+        status: input.status,
+        audit,
+        principalIdFor: (agentId) => directory.principalIdFor(agentId),
+        ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
+        ...(input.logger !== undefined ? { logger: input.logger } : {}),
+      })
+    : undefined;
+
   return {
     deps,
     createServer: () => createCoordinationServer(deps),
+    ...(reaper ? { reaper } : {}),
   };
 }

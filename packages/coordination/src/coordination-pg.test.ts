@@ -300,6 +300,31 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(afterSecond?.failureCount).toBe(2);
   });
 
+  it('recordRunnerFailure: idempotent — acts once from executing, then no-ops (no breaker double-count)', async () => {
+    // The reaper finalizes a runner-FAILED job at-least-once (re-leased after a crash /
+    // failed markReaped). recordRunnerFailure must count the breaker exactly once.
+    const task = await store.getOrCreateTask({ externalStoryId: 'sc-runner-fail', platform: 'shortcut', repoRef: '/r' });
+    await pool.query(`UPDATE task SET status='executing', claimed_by=$2 WHERE id=$1`, [task.id, agentId]);
+
+    // First finalize: task is executing → acts, increments, transitions out of executing.
+    const first = await store.recordRunnerFailure(task.id, 2);
+    expect(first).toEqual({ acted: true, failureCount: 1, tripped: false });
+    expect((await store.getTask(task.id))?.status).toBe('routable');
+
+    // Re-finalize the SAME job: task no longer executing → NO-OP, count stays 1.
+    const again = await store.recordRunnerFailure(task.id, 2);
+    expect(again.acted).toBe(false);
+    expect((await store.getTask(task.id))?.failureCount).toBe(1); // not double-counted
+  });
+
+  it('recordPullRequest is idempotent on (task_id, url): a re-finalize does not duplicate the PR', async () => {
+    const task = await store.getOrCreateTask({ externalStoryId: 'sc-pr-idem', platform: 'shortcut', repoRef: '/r' });
+    const url = 'https://github.com/icemint/tasca/pull/123';
+    await store.recordPullRequest({ taskId: task.id, url });
+    await store.recordPullRequest({ taskId: task.id, url }); // re-finalize
+    expect(await store.listPullRequestsForTask(task.id)).toHaveLength(1);
+  });
+
   it('auto-recover: a failed attempt resets the SAME task to routable and re-wins the CAS (real Postgres)', async () => {
     // The headline §6.14 fix. First delivery fails in execution (spawn exit 1) →
     // task reset to routable, claim cleared, failure_count 1. Re-delivering the

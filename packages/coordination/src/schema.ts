@@ -121,7 +121,11 @@ CREATE TABLE IF NOT EXISTS pull_request (
   state      text NOT NULL DEFAULT 'open' CHECK (state IN ('open','merged','closed')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS pull_request_task_idx ON pull_request (task_id);`;
+CREATE INDEX IF NOT EXISTS pull_request_task_idx ON pull_request (task_id);
+-- Makes recordPullRequest idempotent at the storage layer (ON CONFLICT DO NOTHING):
+-- the reaper's at-least-once finalize, or two reapers in a lease-overrun window, can
+-- re-record the SAME (task, url) without inserting a duplicate PR row.
+CREATE UNIQUE INDEX IF NOT EXISTS pull_request_task_url_uidx ON pull_request (task_id, url);`;
 
 /**
  * All coordination DDL in dependency order. `task` must exist first (it is the
