@@ -7,7 +7,11 @@
 import { Pool } from 'pg';
 import { PgDispatchQueue } from '@tasca/db';
 import { brokerClient } from '@tasca/broker';
-import { createRunner, type ExecuteJob } from './runner';
+import { createExecution } from '@tasca/execution';
+import path from 'node:path';
+import os from 'node:os';
+import { createRunner } from './runner';
+import { makeRunnerExecute } from './execute';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -18,35 +22,37 @@ function requireEnv(name: string): string {
   return v;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const databaseUrl = requireEnv('DATABASE_URL');
   const brokerSocket = requireEnv('TASCA_BROKER_SOCKET');
   const runnerId = process.env.TASCA_RUNNER_ID ?? `runner-${process.pid}`;
+  const reposDir = process.env.TASCA_REPOS_DIR ?? path.join(os.tmpdir(), 'tasca-repos');
 
   const pool = new Pool({ connectionString: databaseUrl });
   const queue = new PgDispatchQueue(pool);
   const broker = brokerClient({ socketPath: brokerSocket });
 
-  // Placeholder execute: the real clone/worktree/spawn/openPr wiring (using the scoped
-  // token for git auth via the ExecutionPort) lands with the enqueue slice. Until then
-  // the runner boots + claims — proving the queue + broker plumbing — and defers any
-  // job. No job is enqueued before that slice, so the placeholder never actually runs.
-  const execute: ExecuteJob = async (job, payload) => {
-    console.log('agent-runner: claimed a job (execution not yet wired)', {
-      jobId: job.id,
-      repoRef: payload.repoRef,
-    });
-    return { ok: false, retry: true, error: 'execution not yet wired' };
-  };
+  // The execution toolchain (PTY agent spawn, git, gh) — the SAME ExecutionPort the
+  // worker uses, so spawnAgent's env scrub (#230) carries over to the runner.
+  const execution = createExecution();
+  try {
+    await execution.initDb();
+  } catch (err) {
+    console.error('agent-runner: execution store init failed', { err: String(err) });
+  }
+
+  // The real execute: clone (scoped-token env-auth) → spawn → commit → openPr.
+  const execute = makeRunnerExecute({ execution, reposDir, logger: console });
 
   const runner = createRunner({ queue, broker, execute, runnerId, logger: console });
   runner.start();
+  console.log('agent-runner: started', { runnerId, reposDir });
 
   const shutdown = (): void => {
     void (async () => {
       console.log('agent-runner: shutting down');
       await runner.stop();
-      await pool.end().catch(() => {});
+      await Promise.allSettled([pool.end(), execution.close()]);
       process.exit(0);
     })();
   };
@@ -54,4 +60,7 @@ function main(): void {
   process.on('SIGINT', shutdown);
 }
 
-main();
+main().catch((err) => {
+  console.error('agent-runner: failed to start', { err: err instanceof Error ? err.message : String(err) });
+  process.exit(1);
+});

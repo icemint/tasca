@@ -15,16 +15,27 @@ export interface RunnerLogger {
 }
 
 /** What coordination enqueues — what the runner needs to execute. Opaque to the queue
- *  (jsonb); the runner validates the fields it uses. */
+ *  (jsonb); mirrors coordination's DispatchPayload. The runner validates repoRef. */
 export interface DispatchPayload {
   /** owner/repo for the task — the runner asks the broker for a token scoped to it. */
   repoRef: string;
+  /** Internal task id (the agent PTY id). */
+  taskId: string;
+  /** The source story id (used for the worktree label + PR title). */
+  externalStoryId: string;
+  /** The agent prompt (the real story content). */
+  prompt: string;
+  /** Deterministic PR head branch (idempotent re-drive). */
+  headBranch: string;
   [k: string]: unknown;
 }
 
 /** The outcome of executing one job. `retry:true` releases the job for another attempt
- *  (transient); `retry:false` fails it terminally. */
-export type ExecuteOutcome = { ok: true } | { ok: false; retry: boolean; error: string };
+ *  (transient); `retry:false` fails it terminally. On success `result` carries what the
+ *  reaper needs to finalize (e.g. the PR url) — the runner writes back to the QUEUE only. */
+export type ExecuteOutcome =
+  | { ok: true; result?: Record<string, unknown> }
+  | { ok: false; retry: boolean; error: string };
 
 /** Run ONE dispatched job with a freshly-minted scoped token. Injected — the real
  *  implementation (clone/worktree/spawn/openPr via the ExecutionPort, using `token`

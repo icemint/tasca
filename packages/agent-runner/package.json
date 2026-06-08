@@ -12,6 +12,7 @@
   "dependencies": {
     "@tasca/db": "workspace:*",
     "@tasca/broker": "workspace:*",
+    "@tasca/execution": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {

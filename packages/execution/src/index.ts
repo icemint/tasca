@@ -28,3 +28,12 @@ export { makeSecretStore } from './secret-store.js';
 export type { SecretStore, SecretBackend, MakeSecretStoreOptions } from './secret-store.js';
 
 export { openPr } from './open-pr.js';
+
+export {
+  prepareScopedWorktree,
+  gitAuthEnv,
+  redactToken,
+  type PrepareWorktreeInput,
+  type PreparedWorktree,
+  type GitRunner,
+} from './prepare-worktree.js';
