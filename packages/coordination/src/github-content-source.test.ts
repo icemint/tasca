@@ -61,6 +61,30 @@ describe('makeGitHubContentSource', () => {
     expect(fb.calls).toHaveLength(0); // github path did not delegate
   });
 
+  it('tolerates a null body / missing title / missing labels (empty issue)', async () => {
+    const appClient = {
+      async getInstallationToken() {
+        return { token: 'tok-xyz' };
+      },
+      async request() {
+        return { body: null }; // no title, null body (GitHub allows), no labels
+      },
+    };
+    const source = makeGitHubContentSource({
+      appClient,
+      getInstallationIdForOwner: async () => 'inst-1',
+      fallback: recordingFallback().source,
+    });
+
+    const task = await source.fetch(githubEvent);
+
+    expect(task).toEqual({
+      title: githubEvent.externalStoryId, // title falls back to the story id
+      body: '', // null body → ''
+      labels: [],
+    });
+  });
+
   it('delegates a non-github event to the fallback', async () => {
     const fb = recordingFallback();
     const appClient = {

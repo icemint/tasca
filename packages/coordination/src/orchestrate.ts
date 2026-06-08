@@ -100,9 +100,16 @@ export interface OrchestrationDeps {
   breakerThreshold?: number;
   /** Per-project concurrency limit for the dispatch gate. */
   perProjectLimit?: number;
+  /** Max wall-clock for one agent run before it's killed + the task fails; default 600000ms. */
+  agentTimeoutMs?: number;
   /** Structured logger; used to surface best-effort finalize failures (never throws). */
   logger?: Logger;
 }
+
+/** Default agent-run timeout (10 min) — a hung agent is killed so the breaker fires. */
+const DEFAULT_AGENT_TIMEOUT_MS = 600_000;
+/** Above this prompt length the issue body is capped (see buildClaudeCommand); we log it. */
+const PROMPT_TRUNCATE_THRESHOLD = 60_000;
 
 export type OrchestrationOutcome =
   | { kind: 'dispatched'; taskId: string; agentId: string; prUrl: string }
@@ -122,6 +129,7 @@ export async function orchestrateTaskAssigned(
 ): Promise<OrchestrationOutcome> {
   const breakerThreshold = deps.breakerThreshold ?? 2;
   const perProjectLimit = deps.perProjectLimit ?? 1;
+  const agentTimeoutMs = deps.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
 
   // §6.4 — ingest: get-or-create the task for this story (routable, v0 on first
   // delivery; the existing row on re-delivery / re-assignment). Re-driving the
@@ -273,11 +281,20 @@ export async function orchestrateTaskAssigned(
       'Implement the task below: make the necessary code changes and commit them with a clear message. ' +
       'Make only the changes the task requires.\n\n' +
       `Task: ${content.title}\n\n${content.body}`;
-    await runAgentToCompletion(deps.execution, {
-      id: task.id,
-      cwd: worktree.path,
-      prompt,
-    });
+    // buildClaudeCommand caps the prompt to fit the OS arg limit; surface it so an
+    // operator knows a long issue's tail (often the acceptance criteria) was cut.
+    if (prompt.length > PROMPT_TRUNCATE_THRESHOLD) {
+      deps.logger?.info?.('coordination: agent prompt truncated to fit', {
+        taskId: task.id,
+        promptChars: prompt.length,
+        capChars: PROMPT_TRUNCATE_THRESHOLD,
+      });
+    }
+    await runAgentToCompletion(
+      deps.execution,
+      { id: task.id, cwd: worktree.path, prompt },
+      agentTimeoutMs
+    );
 
     // Verify a real change landed BEFORE opening a PR — never open an empty PR.
     // Stage + commit whatever the agent left, then check the worktree HEAD is
@@ -395,18 +412,42 @@ function deterministicHeadBranch(externalStoryId: string): string {
  */
 function runAgentToCompletion(
   execution: ExecutionPort,
-  input: { id: string; cwd: string; prompt: string }
+  input: { id: string; cwd: string; prompt: string },
+  timeoutMs: number
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const handle = execution.spawnAgent(input);
+    let settled = false;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    // A hung agent (never exits, never errors) would otherwise leave the task in
+    // `executing` forever — the breaker only fires on a throw — and leak the PTY +
+    // worktree + concurrency slot. Kill it and fail so the catch records it.
+    const timer = setTimeout(() => {
+      finish(() => {
+        try {
+          execution.killAgent(input.id);
+        } catch {
+          // best-effort reap; we're failing the run regardless
+        }
+        reject(new ExecutionError('spawn', `agent run timed out after ${timeoutMs}ms`));
+      });
+    }, timeoutMs);
+    (timer as { unref?: () => void }).unref?.();
     handle.onError((err) => {
       const code = (err as { code?: string }).code;
-      if (code === 'EIO' || code === 'EPIPE') resolve();
-      else reject(err);
+      // EIO/EPIPE on the PTY master during child teardown is a benign Linux race;
+      // treat it as success and let commitAgentWork be the source of truth.
+      if (code === 'EIO' || code === 'EPIPE') finish(resolve);
+      else finish(() => reject(err));
     });
     handle.onExit((code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`agent exited with code ${code}`));
+      if (code === 0) finish(resolve);
+      else finish(() => reject(new Error(`agent exited with code ${code}`)));
     });
   });
 }

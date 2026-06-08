@@ -229,6 +229,23 @@ describe('createExecution — typed error wrapping', () => {
     expect(capturedCommand).toContain("'--allowedTools'");
   });
 
+  it('spawnAgent prefers prompt over command when both are given', () => {
+    let capturedCommand: string | undefined;
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: (opts) => {
+          capturedCommand = opts.command;
+          return fakePty().handle;
+        },
+      }),
+    });
+
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi', prompt: 'do the thing' });
+
+    expect(capturedCommand).toContain("'claude' '-p'");
+    expect(capturedCommand).not.toContain('echo hi');
+  });
+
   it('spawnAgent with neither command nor prompt throws ExecutionError kind "spawn"', () => {
     const port = createExecution({ servicesOverride: fakeServices({}) });
     let thrown: unknown;
@@ -276,12 +293,23 @@ describe('commitAgentWork', () => {
       git
     );
     expect(res.changed).toBe(true);
+    // The commit carries an inline committer identity so it works off a fresh clone
+    // with no configured user.name/user.email.
     expect(calls).toEqual([
       ['add', '-A'],
       ['status', '--porcelain'],
-      ['commit', '-m', 'Tasca: x'],
+      ['-c', 'user.name=Tasca Agent', '-c', 'user.email=agent@tasca.dev', 'commit', '-m', 'Tasca: x'],
       ['rev-list', '--count', 'origin/main..HEAD'],
     ]);
+  });
+
+  it('with an empty baseRef and a clean tree, counts commits ahead of upstream (agent self-committed)', async () => {
+    // The agent committed its own work → tree is clean → didCommit is false, so
+    // detection falls back to `@{u}..HEAD`; a real change is still reported.
+    const { git, calls } = fakeGit({ status: '', 'rev-list': '1\n' });
+    const res = await commitAgentWorkImpl({ cwd: '/wt', message: 'm', baseRef: '' }, git);
+    expect(res.changed).toBe(true);
+    expect(calls.some((c) => c[0] === 'rev-list' && c[2] === '@{u}..HEAD')).toBe(true);
   });
 
   it('reports changed=false when the worktree HEAD is not ahead of baseRef', async () => {

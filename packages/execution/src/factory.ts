@@ -282,13 +282,27 @@ export async function commitAgentWorkImpl(
     const { stdout: status } = await git(['status', '--porcelain'], cwd);
     let didCommit = false;
     if (status.trim() !== '') {
-      await git(['commit', '-m', message], cwd);
+      // A fresh clone has no committer identity (no global ~/.gitconfig in the
+      // container), so `git commit` would abort with "Please tell me who you are".
+      // Supply it inline (env-overridable) so the commit works off ANY clone.
+      const name = process.env.TASCA_GIT_AUTHOR_NAME ?? 'Tasca Agent';
+      const email = process.env.TASCA_GIT_AUTHOR_EMAIL ?? 'agent@tasca.dev';
+      await git(['-c', `user.name=${name}`, '-c', `user.email=${email}`, 'commit', '-m', message], cwd);
       didCommit = true;
     }
     if (!baseRef) {
-      // No base ref to count ahead of (no-provisioner path): a real change is
-      // one this call actually committed.
-      return { changed: didCommit };
+      // No explicit base to count ahead of (no-provisioner path). A real change is
+      // one this call committed OR — if the agent committed on its own, leaving a
+      // clean tree — the branch being ahead of its upstream. Missing upstream → 0.
+      if (didCommit) return { changed: true };
+      let aheadOfUpstream = 0;
+      try {
+        const { stdout } = await git(['rev-list', '--count', '@{u}..HEAD'], cwd);
+        aheadOfUpstream = Number(stdout.trim()) || 0;
+      } catch {
+        // no upstream configured — treat as not-ahead
+      }
+      return { changed: aheadOfUpstream > 0 };
     }
     const { stdout: count } = await git(['rev-list', '--count', `${baseRef}..HEAD`], cwd);
     return { changed: Number(count.trim()) > 0 };

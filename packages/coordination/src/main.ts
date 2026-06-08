@@ -146,6 +146,7 @@ async function main(): Promise<void> {
   const dbFile = process.env.EMDASH_DB_FILE;
   const breakerThreshold = numericEnv('TASCA_BREAKER_THRESHOLD');
   const perProjectLimit = numericEnv('TASCA_PER_PROJECT_LIMIT');
+  const agentTimeoutMs = numericEnv('TASCA_AGENT_TIMEOUT_MS');
 
   const pool = new Pool({ connectionString: databaseUrl });
 
@@ -339,6 +340,7 @@ async function main(): Promise<void> {
     ...(verifySession ? { verifySession } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
+    ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
   });
 
   const server = coordination.createServer();

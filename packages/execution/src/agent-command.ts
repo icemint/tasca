@@ -16,6 +16,15 @@ export function shellQuote(s: string): string {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
+// SECURITY (known, tracked): the prompt is built from the attacker-controlled
+// issue title/body, and this allowlist grants Bash (+ Read) — so a prompt-injection
+// could instruct the agent to read the installation token that clone-on-dispatch
+// persists in the worktree's .git/config and exfiltrate it. shellQuote closes the
+// command-injection layer, but NOT this prompt→agent→secret path. The real fix is
+// credential isolation (don't persist the token where the agent can read it / run
+// the agent without git creds) — a separate hardening, deferred. Until then this is
+// only safe for TRUSTED repos (single-tenant self-hosting); do not enable for
+// untrusted multi-tenant issue authors. Override per deployment via allowedTools.
 /** Default tool allowlist for an autonomous run (read + edit + shell + search). */
 export const DEFAULT_AGENT_ALLOWED_TOOLS = 'Read,Edit,Write,Bash,Glob,Grep';
 

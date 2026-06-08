@@ -134,15 +134,15 @@ class FakeClaimPort implements ClaimPort {
   }
 }
 
-function fakeHandle(opts: { exitCode?: number; error?: Error }): AgentProcessHandle {
+function fakeHandle(opts: { exitCode?: number; error?: Error; hang?: boolean }): AgentProcessHandle {
   return {
     pid: 1234,
     onData() {},
     onExit(listener) {
-      if (!opts.error) queueMicrotask(() => listener(opts.exitCode ?? 0));
+      if (!opts.hang && !opts.error) queueMicrotask(() => listener(opts.exitCode ?? 0));
     },
     onError(listener) {
-      if (opts.error) queueMicrotask(() => listener(opts.error!));
+      if (!opts.hang && opts.error) queueMicrotask(() => listener(opts.error!));
     },
     kill() {},
   };
@@ -162,10 +162,13 @@ class FakeExecution implements ExecutionPort {
   /** Distinct PRs actually opened (keyed by head) — a duplicate would bump this past 1. */
   distinctPrs = 0;
   private readonly openedHeads = new Map<string, string>();
+  /** Agent ids passed to killAgent (the timeout path reaps via this). */
+  killed: string[] = [];
   constructor(
     private readonly behavior: {
       spawnExitCode?: number;
       spawnError?: Error;
+      spawnHang?: boolean;
       prError?: Error;
       commitChanged?: boolean;
     } = {}
@@ -188,9 +191,12 @@ class FakeExecution implements ExecutionPort {
     return fakeHandle({
       ...(this.behavior.spawnExitCode !== undefined ? { exitCode: this.behavior.spawnExitCode } : {}),
       ...(this.behavior.spawnError !== undefined ? { error: this.behavior.spawnError } : {}),
+      ...(this.behavior.spawnHang ? { hang: true } : {}),
     });
   }
-  killAgent(_id: string): void {}
+  killAgent(id: string): void {
+    this.killed.push(id);
+  }
   async commitAgentWork(input: CommitAgentWorkInput): Promise<CommitAgentWorkResult> {
     this.commitCalls += 1;
     this.commitInputs.push(input);
@@ -719,5 +725,46 @@ describe('orchestrateTaskAssigned — failure observability', () => {
     expect(failLog, 'a dispatch-failed log line should be emitted').toBeDefined();
     expect(failLog!.context).toMatchObject({ stage: 'worktree', taskId: outcome.taskId });
     expect(String(failLog!.context!.error)).toMatch(/git worktree add exploded/);
+  });
+});
+
+describe('orchestrateTaskAssigned — agent run robustness', () => {
+  it('treats a benign EIO PTY-teardown error as success (proceeds to commit + PR)', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution({
+      spawnError: Object.assign(new Error('pty teardown'), { code: 'EIO' }),
+    });
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    expect(execution.prCalls).toBe(1);
+  });
+
+  it('a non-EIO spawn error fails the dispatch (breaker), no PR', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution({
+      spawnError: Object.assign(new Error('spawn boom'), { code: 'ENOENT' }),
+    });
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() })
+    );
+    expect(outcome.kind).toBe('failed');
+    expect(execution.prCalls).toBe(0);
+  });
+
+  it('kills a hung agent after the timeout and fails the dispatch (no stranded task, no PR)', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution({ spawnHang: true });
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+      agentTimeoutMs: 20,
+    };
+    const outcome = await orchestrateTaskAssigned(EVENT, deps);
+    expect(outcome.kind).toBe('failed');
+    expect(execution.killed.length).toBeGreaterThan(0); // reaped via killAgent
+    expect(execution.prCalls).toBe(0);
   });
 });
