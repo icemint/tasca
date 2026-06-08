@@ -290,11 +290,20 @@ export async function orchestrateTaskAssigned(
         capChars: PROMPT_TRUNCATE_THRESHOLD,
       });
     }
-    await runAgentToCompletion(
+    const agentRun = await runAgentToCompletion(
       deps.execution,
       { id: task.id, cwd: worktree.path, prompt },
       agentTimeoutMs
     );
+    // Always surface what the agent did — its exit code + output tail — so a
+    // no-diff run (below) is diagnosable: did it edit nothing, hit an auth error,
+    // run in the wrong place, find no usable tools?
+    deps.logger?.info?.('coordination: agent run complete', {
+      taskId: task.id,
+      exitCode: agentRun.exitCode,
+      outputChars: agentRun.outputTail.length,
+      outputTail: agentRun.outputTail,
+    });
 
     // Verify a real change landed BEFORE opening a PR — never open an empty PR.
     // Stage + commit whatever the agent left, then check the worktree HEAD is
@@ -410,13 +419,32 @@ function deterministicHeadBranch(externalStoryId: string): string {
  * on the on-disk commit (verified by commitAgentWork) as the source of truth.
  * Any other onError is a real failure.
  */
+/** What an agent run produced: its exit code (null on a benign EIO/EPIPE teardown)
+ *  and the tail of its terminal output — captured so a no-diff / failed run is
+ *  diagnosable (did the agent edit nothing, hit an auth error, find no tools?). */
+interface AgentRunResult {
+  exitCode: number | null;
+  outputTail: string;
+}
+
+/** Cap on captured agent output; we keep only the last of a long run for the log. */
+const AGENT_OUTPUT_TAIL_CHARS = 4000;
+
 function runAgentToCompletion(
   execution: ExecutionPort,
   input: { id: string; cwd: string; prompt: string },
   timeoutMs: number
-): Promise<void> {
+): Promise<AgentRunResult> {
   return new Promise((resolve, reject) => {
     const handle = execution.spawnAgent(input);
+    // Capture the agent's terminal output (the PTY merges stdout+stderr) so a run
+    // is not a black box: keep only the tail to bound memory + the log line.
+    let output = '';
+    handle.onData((chunk) => {
+      output += chunk;
+      if (output.length > AGENT_OUTPUT_TAIL_CHARS) output = output.slice(-AGENT_OUTPUT_TAIL_CHARS);
+    });
+    const tail = (): string => output.slice(-1000);
     let settled = false;
     const finish = (fn: () => void): void => {
       if (settled) return;
@@ -434,7 +462,7 @@ function runAgentToCompletion(
         } catch {
           // best-effort reap; we're failing the run regardless
         }
-        reject(new ExecutionError('spawn', `agent run timed out after ${timeoutMs}ms`));
+        reject(new ExecutionError('spawn', `agent run timed out after ${timeoutMs}ms; output: ${tail()}`));
       });
     }, timeoutMs);
     (timer as { unref?: () => void }).unref?.();
@@ -442,12 +470,14 @@ function runAgentToCompletion(
       const code = (err as { code?: string }).code;
       // EIO/EPIPE on the PTY master during child teardown is a benign Linux race;
       // treat it as success and let commitAgentWork be the source of truth.
-      if (code === 'EIO' || code === 'EPIPE') finish(resolve);
+      if (code === 'EIO' || code === 'EPIPE') finish(() => resolve({ exitCode: null, outputTail: output }));
       else finish(() => reject(err));
     });
     handle.onExit((code) => {
-      if (code === 0) finish(resolve);
-      else finish(() => reject(new Error(`agent exited with code ${code}`)));
+      if (code === 0) finish(() => resolve({ exitCode: 0, outputTail: output }));
+      // A non-zero exit carries the output tail so the failure log shows what the
+      // agent said (auth error, no tools, …), not just the bare code.
+      else finish(() => reject(new ExecutionError('spawn', `agent exited with code ${code}; output: ${tail()}`)));
     });
   });
 }

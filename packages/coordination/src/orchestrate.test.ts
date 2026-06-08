@@ -134,10 +134,12 @@ class FakeClaimPort implements ClaimPort {
   }
 }
 
-function fakeHandle(opts: { exitCode?: number; error?: Error; hang?: boolean }): AgentProcessHandle {
+function fakeHandle(opts: { exitCode?: number; error?: Error; hang?: boolean; output?: string }): AgentProcessHandle {
   return {
     pid: 1234,
-    onData() {},
+    onData(listener) {
+      if (opts.output) queueMicrotask(() => listener(opts.output!));
+    },
     onExit(listener) {
       if (!opts.hang && !opts.error) queueMicrotask(() => listener(opts.exitCode ?? 0));
     },
@@ -169,6 +171,7 @@ class FakeExecution implements ExecutionPort {
       spawnExitCode?: number;
       spawnError?: Error;
       spawnHang?: boolean;
+      spawnOutput?: string;
       prError?: Error;
       commitChanged?: boolean;
     } = {}
@@ -192,6 +195,7 @@ class FakeExecution implements ExecutionPort {
       ...(this.behavior.spawnExitCode !== undefined ? { exitCode: this.behavior.spawnExitCode } : {}),
       ...(this.behavior.spawnError !== undefined ? { error: this.behavior.spawnError } : {}),
       ...(this.behavior.spawnHang ? { hang: true } : {}),
+      ...(this.behavior.spawnOutput !== undefined ? { output: this.behavior.spawnOutput } : {}),
     });
   }
   killAgent(id: string): void {
@@ -766,5 +770,34 @@ describe('orchestrateTaskAssigned — agent run robustness', () => {
     expect(outcome.kind).toBe('failed');
     expect(execution.killed.length).toBeGreaterThan(0); // reaped via killAgent
     expect(execution.prCalls).toBe(0);
+  });
+});
+
+describe('orchestrateTaskAssigned — agent output observability', () => {
+  it('captures the agent output tail + exit code and logs it (so a no-diff run is diagnosable)', async () => {
+    const store = new FakeStore();
+    const lines: Array<{ message: string; context?: Record<string, unknown> }> = [];
+    const logger = {
+      error: () => {},
+      info: (message: string, context?: Record<string, unknown>) =>
+        lines.push({ message, ...(context ? { context } : {}) }),
+    };
+    // Agent ran (exit 0) + said something, but produced no diff → no-changes.
+    const execution = new FakeExecution({
+      spawnOutput: 'I inspected README.md and found no typo in the heading.',
+      commitChanged: false,
+    });
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+      logger,
+    };
+
+    const outcome = await orchestrateTaskAssigned(EVENT, deps);
+
+    expect(outcome.kind).toBe('failed'); // the no-changes guard fired
+    const runLog = lines.find((l) => l.message === 'coordination: agent run complete');
+    expect(runLog, 'the agent run output should be logged before the no-changes throw').toBeDefined();
+    expect(runLog!.context).toMatchObject({ exitCode: 0 });
+    expect(String(runLog!.context!.outputTail)).toContain('no typo');
   });
 });
