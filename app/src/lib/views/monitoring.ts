@@ -6,7 +6,7 @@
 import { getTasks } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, platTag, tierTag, taskRef, esc } from '../ui';
+import { I, platTag, tierTag, taskRef, esc, roControl } from '../ui';
 import type { TaskStatus, TaskSummary } from '../contract';
 
 // Pipeline columns, in flow order. needs_attention/failed surface in the rail.
@@ -61,7 +61,7 @@ function attentionRail(tasks: TaskSummary[]): string {
       (t) =>
         `<div class="escrow"><a class="esc-task" href="/tasks?id=${encodeURIComponent(t.id)}">${taskRef(t.id)}<span class="esc-title">${esc(t.externalStoryId)}</span></a>
         <span class="esc-reason">${t.failureCount} ${t.failureCount === 1 ? 'failed attempt' : 'failed attempts'} · awaiting review</span>
-        <span class="esc-act"><button class="ictl amber" disabled aria-disabled="true" title="Coming soon">Re-tier</button><button class="ictl" disabled aria-disabled="true" title="Coming soon">Escalate</button></span></div>`
+        <span class="esc-act">${roControl('Re-tier', { cls: 'ictl amber' })}${roControl('Escalate')}</span></div>`
     )
     .join('');
   return `<div class="pcard esc-rail" style="margin-top:24px"><div class="pc-h">Needs attention <span class="pc-h-r mono dim">${attn.length}</span></div>${rows}</div>`;
@@ -71,7 +71,10 @@ export async function loadMonitoring(): Promise<LoadResult> {
   const res = await getTasks({ limit: 200 });
   return fromResult(res, (tasks) => {
     const head = `<div class="roster-head"><div><h1>Monitoring</h1><div class="sub">Live pipeline across every connected platform</div></div>
-      <span class="live-dot big">Live</span></div>`;
+      <div class="head-actions">
+        <button class="ictl" type="button" data-act="refresh" aria-label="Refresh the pipeline">Refresh</button>
+        <span class="live-dot big" role="status" aria-label="Live — refreshes on demand">Live</span>
+      </div></div>`;
 
     if (!tasks.length) {
       return {

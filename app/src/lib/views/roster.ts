@@ -6,7 +6,7 @@
 import { getAgents } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, avatar, vendorChip, statePill, tierRamp, pct, taskRef, esc } from '../ui';
+import { I, avatar, vendorChip, statePill, tierRamp, pct, taskRef, esc, roControl, RO_GATE_PROVISION } from '../ui';
 import type { Agent } from '../contract';
 
 function healthStrip(agents: Agent[]): string {
@@ -49,7 +49,7 @@ export async function loadRoster(): Promise<LoadResult> {
   return fromResult(res, (agents) => {
     const head = `<div class="roster-head">
         <div><h1>Your team</h1><div class="sub"><b>${agents.length}</b> ${agents.length === 1 ? 'agent' : 'agents'} · <b>${agents.filter((a) => a.state !== 'idle').length}</b> active</div></div>
-        <button class="btn-add" disabled aria-disabled="true" title="Coming soon">${I.plus} Add agent</button></div>`;
+        ${roControl('Add agent', { icon: I.plus, cls: 'btn-add', gate: RO_GATE_PROVISION })}</div>`;
 
     if (!agents.length) {
       return {

@@ -65,15 +65,23 @@ export async function mount(el: HTMLElement, load: () => Promise<LoadResult>): P
       return;
     }
     el.innerHTML = result.html;
-    // Empty and ok both render their html; callers wire any in-content actions.
+    // Empty and ok both render their html; wire any in-content refresh control
+    // (a view can include a `data-act="refresh"` button to re-run its read).
+    wireAction(el, 'refresh', run);
   };
 
   await run();
 }
 
 function wireRetry(el: HTMLElement, run: () => Promise<void>): void {
-  const btn = el.querySelector<HTMLButtonElement>('[data-act="retry"]');
-  if (btn) btn.addEventListener('click', () => void run());
+  wireAction(el, 'retry', run);
+}
+
+/** Wire every `[data-act="<act>"]` button in `el` to re-run the island. */
+function wireAction(el: HTMLElement, act: string, run: () => Promise<void>): void {
+  el.querySelectorAll<HTMLButtonElement>(`[data-act="${act}"]`).forEach((btn) =>
+    btn.addEventListener('click', () => void run())
+  );
 }
 
 /** Read the `?id=` query param (used by the detail pages). */
