@@ -576,7 +576,7 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
     const provisioner: RepoProvisioner = {
       async ensureLocalRepo(repoRef) {
         seen.push(repoRef);
-        return '/local/checkout';
+        return { path: '/local/checkout', defaultBranch: 'trunk' };
       },
     };
     const deps: OrchestrationDeps = {
@@ -589,9 +589,10 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
     expect(outcome.kind).toBe('dispatched');
     // (a) the provisioner saw the raw slug
     expect(seen).toEqual(['acme/widgets']);
-    // (b) reserveWorktree got the provisioned local path, not the slug
+    // (b) reserveWorktree got the provisioned local path + `origin/<defaultBranch>`
+    //     as the base ref (so it never hits Emdash's per-project-settings lookup).
     expect(execution.reserveInputs).toEqual([
-      { repoPath: '/local/checkout', taskLabel: 'gh-story-1', projectId: 'gh-story-1' },
+      { repoPath: '/local/checkout', taskLabel: 'gh-story-1', projectId: 'gh-story-1', baseRef: 'origin/trunk' },
     ]);
   });
 

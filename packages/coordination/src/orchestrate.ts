@@ -64,14 +64,24 @@ export interface TaskContentSource {
   fetch(event: AdapterEvent): Promise<TaskInput>;
 }
 
+/** A provisioned local checkout: the filesystem path + the repo's default branch. */
+export interface ProvisionedRepo {
+  /** Local clone path, for reserveWorktree's repoPath. */
+  path: string;
+  /** The clone's default branch (e.g. `main`) — passed as the worktree base ref so
+   *  reserveWorktree branches off `origin/<defaultBranch>` instead of looking up
+   *  per-project settings the headless flow never created. */
+  defaultBranch: string;
+}
+
 /**
  * Ensures a local checkout of a repo (identified by an `owner/repo` ref) exists
- * with an authenticated `origin`, returning its filesystem path so reserveWorktree
- * can take a worktree from it. Throws on failure (no installation, clone error) —
- * the forward-path catch treats that like any dispatch failure (feeds the breaker).
+ * with an authenticated `origin`, returning its path + default branch so
+ * reserveWorktree can take a worktree from it. Throws on failure (no installation,
+ * clone error) — the forward-path catch treats that like any dispatch failure.
  */
 export interface RepoProvisioner {
-  ensureLocalRepo(repoRef: string): Promise<string>;
+  ensureLocalRepo(repoRef: string): Promise<ProvisionedRepo>;
 }
 
 export interface OrchestrationDeps {
@@ -230,16 +240,27 @@ export async function orchestrateTaskAssigned(
 
     // Provision a local checkout for the worktree. A GitHub event's repoHint is an
     // `owner/repo` slug, not a local path; the provisioner clones/fetches it (auth'd)
-    // and returns the path. No provisioner (or no repoRef) → use repoRef as-is.
-    const repoPath = repoRef
-      ? deps.provisioner
-        ? await deps.provisioner.ensureLocalRepo(repoRef)
-        : repoRef
-      : '.';
+    // and returns the path + default branch. We pass `origin/<defaultBranch>` as the
+    // worktree base ref so reserveWorktree branches off the freshly-fetched remote
+    // default — NOT via Emdash's per-project settings lookup, which the headless
+    // clone-on-dispatch flow never populates ("Project settings not found").
+    // No provisioner (or no repoRef) → use repoRef as-is, no base ref override.
+    let repoPath = '.';
+    let baseRef: string | undefined;
+    if (repoRef) {
+      if (deps.provisioner) {
+        const provisioned = await deps.provisioner.ensureLocalRepo(repoRef);
+        repoPath = provisioned.path;
+        baseRef = `origin/${provisioned.defaultBranch}`;
+      } else {
+        repoPath = repoRef;
+      }
+    }
     const worktree = await deps.execution.reserveWorktree({
       repoPath,
       taskLabel: event.externalStoryId,
       projectId: event.externalStoryId,
+      ...(baseRef ? { baseRef } : {}),
     });
 
     // §6.10 — spawn the agent over a PTY; await its exit before opening the PR.

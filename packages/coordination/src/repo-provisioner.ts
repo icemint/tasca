@@ -38,7 +38,7 @@ import { promisify } from 'node:util';
 import { mkdir, rename, rm, access } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import type { RepoProvisioner } from './orchestrate';
+import type { RepoProvisioner, ProvisionedRepo } from './orchestrate';
 
 const execFileAsync = promisify(execFile);
 
@@ -62,14 +62,14 @@ export interface RepoProvisionerDeps {
   store: { getInstallationIdForOwner(owner: string): Promise<string | null> };
   /** Filesystem root under which clones live as `<reposDir>/<owner>/<repo>`. */
   reposDir: string;
-  /** Git runner (argv form). Default: execFile('git', args, opts) with token redaction. */
-  git?: (args: string[], opts?: { cwd?: string }) => Promise<void>;
+  /** Git runner (argv form) returning stdout. Default: execFile('git', …) with token redaction. */
+  git?: (args: string[], opts?: { cwd?: string }) => Promise<string>;
   /** `.git` existence probe. Default: fs.access-based. */
   exists?: (p: string) => Promise<boolean>;
 }
 
 export class GitAppRepoProvisioner implements RepoProvisioner {
-  private readonly git: (args: string[], opts?: { cwd?: string }) => Promise<void>;
+  private readonly git: (args: string[], opts?: { cwd?: string }) => Promise<string>;
   private readonly exists: (p: string) => Promise<boolean>;
   /** Per-`owner/repo` promise chain: serializes provisioning of the same repo. */
   private readonly chain = new Map<string, Promise<unknown>>();
@@ -79,7 +79,8 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
       deps.git ??
       (async (args, opts) => {
         try {
-          await execFileAsync('git', args, opts ?? {});
+          const { stdout } = await execFileAsync('git', args, opts ?? {});
+          return stdout;
         } catch (err) {
           // execFile's rejection echoes the full argv (incl. the auth URL); redact
           // the token before it propagates into the breaker's error log.
@@ -98,13 +99,13 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
       });
   }
 
-  async ensureLocalRepo(repoRef: string): Promise<string> {
+  async ensureLocalRepo(repoRef: string): Promise<ProvisionedRepo> {
     const { owner, repo } = parseRef(repoRef); // validates BEFORE any token mint
     return this.withRepoLock(`${owner}/${repo}`, () => this.provision(owner, repo));
   }
 
   /** Resolve installation → mint token → clone-or-refresh. Runs under the per-repo lock. */
-  private async provision(owner: string, repo: string): Promise<string> {
+  private async provision(owner: string, repo: string): Promise<ProvisionedRepo> {
     const installationId = await this.deps.store.getInstallationIdForOwner(owner);
     if (installationId === null) {
       throw new Error('no GitHub App installation for owner ' + owner);
@@ -120,7 +121,7 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
       // and fetch the latest refs so the worktree branches off current state.
       await this.git(['-C', localPath, 'remote', 'set-url', 'origin', authUrl]);
       await this.git(['-C', localPath, 'fetch', '--prune', 'origin']);
-      return localPath;
+      return { path: localPath, defaultBranch: await this.detectDefaultBranch(localPath) };
     }
 
     // No usable checkout. Clear any leftover first — a crash mid-clone can leave a
@@ -138,7 +139,23 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
       await rm(tmp, { recursive: true, force: true }).catch(() => {});
       throw err;
     }
-    return localPath;
+    return { path: localPath, defaultBranch: await this.detectDefaultBranch(localPath) };
+  }
+
+  /**
+   * The clone's default branch (what HEAD points at after a fresh clone, i.e. the
+   * remote's default). Orchestrate passes `origin/<this>` as the worktree base ref,
+   * bypassing Emdash's per-project-settings lookup.
+   */
+  private async detectDefaultBranch(localPath: string): Promise<string> {
+    const out = (await this.git(['-C', localPath, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    if (!out || out === 'HEAD') {
+      // Detached HEAD (shouldn't happen on a fresh clone) — fall back to the remote's
+      // advertised default via origin/HEAD.
+      const sym = (await this.git(['-C', localPath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
+      return sym.replace(/^origin\//, '') || 'main';
+    }
+    return out;
   }
 
   /**
