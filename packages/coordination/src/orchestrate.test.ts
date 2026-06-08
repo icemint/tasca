@@ -22,7 +22,7 @@ import {
   type Worktree,
 } from '@tasca/execution';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
-import type { CoordinationStore } from './store';
+import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
 import type { AgentDirectory, AuditSink, RepoProvisioner, TaskContentSource } from './orchestrate';
 import type { MatchCandidate } from '@tasca/routing';
@@ -106,6 +106,16 @@ class FakeStore implements CoordinationStore {
       throw new Error('pull_request INSERT failed (connection dropped)');
     }
     this.pullRequests.push(input);
+  }
+  // human write-API (unused by these orchestration tests)
+  async escalateTask(): Promise<TaskWriteOutcome> {
+    return { ok: false, reason: 'not_found' };
+  }
+  async overrideTierEstimate(): Promise<TaskWriteOutcome> {
+    return { ok: false, reason: 'not_found' };
+  }
+  async reassignTask(): Promise<TaskWriteOutcome> {
+    return { ok: false, reason: 'not_found' };
   }
   // read-side
   async listTasks() { return []; }

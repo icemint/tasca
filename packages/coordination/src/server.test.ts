@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus, TierEstimate } from '@tasca/domain';
-import type { CoordinationStore } from './store';
+import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { WebhookVerifier, RawWebhook, VerifiedWebhook, StatusReporter, Logger } from './ports';
 import type {
   AgentDirectory,
@@ -69,6 +69,9 @@ class CountingStore implements CoordinationStore {
   }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
+  async escalateTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async overrideTierEstimate(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async reassignTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() { return null; }
   // read-side (unused by the webhook/intake tests)
