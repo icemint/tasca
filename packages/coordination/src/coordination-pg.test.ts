@@ -48,6 +48,9 @@ const okExecution: ExecutionPort = {
   async openPr(): Promise<OpenPrResult> {
     return { url: 'https://github.com/icemint/tasca/pull/7' };
   },
+  async commitAgentWork() {
+    return { changed: true };
+  },
   async close() {},
 };
 

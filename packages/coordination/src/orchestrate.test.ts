@@ -15,6 +15,8 @@ import {
   type ExecutionPort,
   type OpenPrInput,
   type OpenPrResult,
+  type CommitAgentWorkInput,
+  type CommitAgentWorkResult,
   type ReserveWorktreeInput,
   type SpawnAgentInput,
   type Worktree,
@@ -150,12 +152,24 @@ class FakeExecution implements ExecutionPort {
   spawnCalls = 0;
   prCalls = 0;
   reserveCalls = 0;
+  commitCalls = 0;
   /** Records each reserveWorktree input so a test can assert the resolved repoPath. */
   reserveInputs: ReserveWorktreeInput[] = [];
+  /** Records each spawnAgent input so a test can assert the prompt was passed. */
+  spawnInputs: SpawnAgentInput[] = [];
+  /** Records each commitAgentWork input. */
+  commitInputs: CommitAgentWorkInput[] = [];
   /** Distinct PRs actually opened (keyed by head) — a duplicate would bump this past 1. */
   distinctPrs = 0;
   private readonly openedHeads = new Map<string, string>();
-  constructor(private readonly behavior: { spawnExitCode?: number; spawnError?: Error; prError?: Error } = {}) {}
+  constructor(
+    private readonly behavior: {
+      spawnExitCode?: number;
+      spawnError?: Error;
+      prError?: Error;
+      commitChanged?: boolean;
+    } = {}
+  ) {}
   async initDb() {}
   async reserveWorktree(input: ReserveWorktreeInput): Promise<Worktree> {
     // Mirror the vendored WorktreeService: a fresh, RANDOM-suffixed local branch
@@ -168,14 +182,20 @@ class FakeExecution implements ExecutionPort {
       repoPath: input.repoPath,
     };
   }
-  spawnAgent(_input: SpawnAgentInput): AgentProcessHandle {
+  spawnAgent(input: SpawnAgentInput): AgentProcessHandle {
     this.spawnCalls += 1;
+    this.spawnInputs.push(input);
     return fakeHandle({
       ...(this.behavior.spawnExitCode !== undefined ? { exitCode: this.behavior.spawnExitCode } : {}),
       ...(this.behavior.spawnError !== undefined ? { error: this.behavior.spawnError } : {}),
     });
   }
   killAgent(_id: string): void {}
+  async commitAgentWork(input: CommitAgentWorkInput): Promise<CommitAgentWorkResult> {
+    this.commitCalls += 1;
+    this.commitInputs.push(input);
+    return { changed: this.behavior.commitChanged ?? true };
+  }
   async openPr(input: OpenPrInput): Promise<OpenPrResult> {
     this.prCalls += 1;
     if (this.behavior.prError) throw this.behavior.prError;
@@ -299,6 +319,12 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
 
     // execution + PR
     expect(execution.spawnCalls).toBe(1);
+    // The agent is spawned with the REAL story content as a prompt (not a bare command).
+    expect(execution.spawnInputs[0]!.prompt).toContain('Fix the thing');
+    expect(execution.spawnInputs[0]!.prompt).toContain('a short task');
+    expect(execution.spawnInputs[0]!.command).toBeUndefined();
+    // The change was committed + verified before the PR.
+    expect(execution.commitCalls).toBe(1);
     expect(execution.prCalls).toBe(1);
     expect(store.pullRequests).toEqual([{ taskId: outcome.taskId, url: outcome.prUrl }]);
 
@@ -421,6 +447,22 @@ describe('orchestrateTaskAssigned — failure path → auto-recover → breaker 
     );
     expect(exec.spawnCalls).toBe(1);
     expect(outcome.kind).toBe('failed');
+    expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('routable');
+  });
+
+  it('agent run with NO committed change → failed, and openPr is NOT called (no empty PR)', async () => {
+    const store = new FakeStore();
+    const exec = new FakeExecution({ spawnExitCode: 0, commitChanged: false });
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution: exec, status: new FakeStatus(), audit: new FakeAudit() })
+    );
+    expect(exec.spawnCalls).toBe(1);
+    expect(exec.commitCalls).toBe(1);
+    // No diff → fail BEFORE openPr; no PR opened, no PR recorded.
+    expect(exec.prCalls).toBe(0);
+    expect(outcome.kind).toBe('failed');
+    expect(store.pullRequests).toHaveLength(0);
     expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('routable');
   });
 
@@ -658,6 +700,9 @@ describe('orchestrateTaskAssigned — failure observability', () => {
       killAgent() {},
       async openPr(): Promise<OpenPrResult> {
         return { url: 'unreached' };
+      },
+      async commitAgentWork(): Promise<CommitAgentWorkResult> {
+        return { changed: true };
       },
       async close() {},
     };

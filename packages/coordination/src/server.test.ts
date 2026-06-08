@@ -87,6 +87,7 @@ const noopExecution: ExecutionPort = {
   },
   killAgent() {},
   async openPr() { return { url: 'https://example/pr/1' }; },
+  async commitAgentWork() { return { changed: true }; },
   async close() {},
 };
 

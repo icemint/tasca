@@ -43,6 +43,7 @@ import { COORDINATION_SCHEMA_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { RepoProvisioner, TaskContentSource } from './orchestrate';
 import { GitAppRepoProvisioner } from './repo-provisioner';
+import { makeGitHubContentSource } from './github-content-source';
 import { shortcutVerifier } from './shortcut-verifier';
 import { githubVerifier } from './github-verifier';
 
@@ -212,6 +213,10 @@ async function main(): Promise<void> {
   let statusReporter: StatusReporter = gatedStatusReporter;
   let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
   let provisioner: RepoProvisioner | undefined;
+  // Default content source derives a TaskInput from the event id; with the App
+  // env present we fetch the REAL issue title/body for github events (so the
+  // agent prompt is the actual story), delegating non-github to the default.
+  let content: TaskContentSource = eventContentSource;
   if (githubWritebackEnabled) {
     const store = new PgCoordinationStore(pool);
     const identity = new PgIdentityRepository(pool);
@@ -255,6 +260,14 @@ async function main(): Promise<void> {
     const reposDir = process.env.TASCA_REPOS_DIR ?? path.join(os.tmpdir(), 'tasca-repos');
     provisioner = new GitAppRepoProvisioner({ appClient, store, reposDir });
     logger.info?.('repo provisioning enabled', { reposDir });
+
+    // Real issue content for the agent prompt (github events): fetch title/body
+    // via the installation token; non-github events fall back to the id-derived source.
+    content = makeGitHubContentSource({
+      appClient,
+      getInstallationIdForOwner: (owner) => store.getInstallationIdForOwner(owner),
+      fallback: eventContentSource,
+    });
   } else {
     logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
   }
@@ -316,7 +329,7 @@ async function main(): Promise<void> {
     execution,
     status: statusReporter,
     verifier,
-    content: eventContentSource,
+    content,
     agentIds,
     logger,
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),

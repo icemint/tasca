@@ -21,12 +21,14 @@
  *   - `pr-create` — openPr: `gh pr create` failed (NOT the idempotent
  *                   "already exists" path, which returns the existing PR).
  *   - `pr-parse`  — openPr: `gh` succeeded but no PR URL could be parsed.
+ *   - `commit`    — commitAgentWork: a git stage/commit/rev-list failed.
+ *   - `no-changes`— the agent run produced no committed change (caller-raised).
  */
 export class ExecutionError extends Error {
-  readonly kind: 'worktree' | 'spawn' | 'push' | 'pr-create' | 'pr-parse';
+  readonly kind: 'worktree' | 'spawn' | 'push' | 'pr-create' | 'pr-parse' | 'commit' | 'no-changes';
 
   constructor(
-    kind: 'worktree' | 'spawn' | 'push' | 'pr-create' | 'pr-parse',
+    kind: 'worktree' | 'spawn' | 'push' | 'pr-create' | 'pr-parse' | 'commit' | 'no-changes',
     message: string,
     options?: { cause?: unknown }
   ) {
@@ -78,8 +80,20 @@ export interface AgentProcessHandle {
 export interface SpawnAgentInput {
   /** Stable id for the lifecycle PTY (used for bookkeeping/kill). */
   id: string;
-  /** The shell command to run (e.g. the provider CLI argv joined). */
-  command: string;
+  /**
+   * The shell command to run (e.g. the provider CLI argv joined). Ignored when
+   * `prompt` is set. One of `command` / `prompt` must be provided.
+   */
+  command?: string;
+  /**
+   * When set, the factory builds a non-interactive `claude` command from this
+   * prompt (POSIX-quoted, injection-safe) and `command` is ignored. The prompt
+   * is the only attacker-controlled value here; it is single-quoted, never
+   * interpolated into the shell.
+   */
+  prompt?: string;
+  /** Tool allowlist for the built `claude` command (only used with `prompt`). */
+  allowedTools?: string;
   /** Working directory — normally a reserved worktree path. */
   cwd: string;
   /** Extra environment for the spawned process (merged over the parent env). */
@@ -114,6 +128,26 @@ export interface OpenPrInput {
 export interface OpenPrResult {
   /** The created PR URL (parsed from `gh` stdout). */
   url: string;
+}
+
+/** Parameters for committing whatever the agent left in the worktree. */
+export interface CommitAgentWorkInput {
+  /** Worktree directory to stage + commit in. */
+  cwd: string;
+  /** Commit message used when there are staged changes. */
+  message: string;
+  /**
+   * Base ref the committed work is compared against to decide `changed`. When
+   * empty (`''`), `changed` falls back to whether THIS call made a commit (the
+   * no-base path, where there is no base ref to count ahead of).
+   */
+  baseRef: string;
+}
+
+/** Result of a commit-agent-work attempt. */
+export interface CommitAgentWorkResult {
+  /** Whether a real change landed on the worktree HEAD (see CommitAgentWorkInput.baseRef). */
+  changed: boolean;
 }
 
 /**
@@ -173,6 +207,18 @@ export interface ExecutionPort {
    *   preserved as `cause` where one exists.
    */
   openPr(input: OpenPrInput): Promise<OpenPrResult>;
+
+  /**
+   * Stage all changes in `cwd`, commit them (with `message`) if anything is
+   * staged, and report whether a real change landed on the worktree HEAD:
+   * `changed = (HEAD is ahead of baseRef)`, or — when `baseRef` is empty — whether
+   * this call made a commit. Used to fail the dispatch BEFORE openPr when the
+   * agent produced no diff (no empty PRs).
+   *
+   * @rejects {ExecutionError} kind `'commit'` on any git failure (the original
+   *   error is preserved as `cause`).
+   */
+  commitAgentWork(input: CommitAgentWorkInput): Promise<CommitAgentWorkResult>;
 
   /**
    * Release resources: kill every still-live agent handle (best-effort), then

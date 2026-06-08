@@ -264,11 +264,37 @@ export async function orchestrateTaskAssigned(
     });
 
     // §6.10 — spawn the agent over a PTY; await its exit before opening the PR.
+    // The prompt is the REAL story content fetched above (content.fetch), so the
+    // agent has the actual task — not just the id. The body is attacker-controlled;
+    // it reaches the shell only through the POSIX-quoted claude command the factory
+    // builds from `prompt`.
+    const prompt =
+      'You are an autonomous software engineer working in a fresh checkout of this repository. ' +
+      'Implement the task below: make the necessary code changes and commit them with a clear message. ' +
+      'Make only the changes the task requires.\n\n' +
+      `Task: ${content.title}\n\n${content.body}`;
     await runAgentToCompletion(deps.execution, {
       id: task.id,
-      command: 'claude',
       cwd: worktree.path,
+      prompt,
     });
+
+    // Verify a real change landed BEFORE opening a PR — never open an empty PR.
+    // Stage + commit whatever the agent left, then check the worktree HEAD is
+    // ahead of the base. `baseRef` is only set on the provisioner path; on the
+    // no-provisioner path it's undefined, so pass '' (commitAgentWork then bases
+    // `changed` on whether this call committed, not a rev-list count).
+    const work = await deps.execution.commitAgentWork({
+      cwd: worktree.path,
+      message: `Tasca: ${event.externalStoryId}`,
+      baseRef: baseRef ?? '',
+    });
+    if (!work.changed) {
+      throw new ExecutionError(
+        'no-changes',
+        `agent run produced no committed changes for ${event.externalStoryId}`
+      );
+    }
 
     // §6.11 — open the PR, then record it. recordPullRequest is the durable proof
     // the deliverable exists; everything after it is best-effort finalize that must
@@ -359,16 +385,25 @@ function deterministicHeadBranch(externalStoryId: string): string {
 
 /**
  * Spawn the agent over the PTY and resolve when it exits cleanly; reject on a
- * non-zero exit or a transport error. This is what turns the streaming
+ * non-zero exit or a real transport error. This is what turns the streaming
  * ExecutionPort.spawnAgent into an awaitable run step.
+ *
+ * EIO/EPIPE on the PTY master fd during child teardown is a benign Linux race
+ * (the slave closes before the final read settles); treat it as success and rely
+ * on the on-disk commit (verified by commitAgentWork) as the source of truth.
+ * Any other onError is a real failure.
  */
 function runAgentToCompletion(
   execution: ExecutionPort,
-  input: { id: string; command: string; cwd: string }
+  input: { id: string; cwd: string; prompt: string }
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const handle = execution.spawnAgent(input);
-    handle.onError((err) => reject(err));
+    handle.onError((err) => {
+      const code = (err as { code?: string }).code;
+      if (code === 'EIO' || code === 'EPIPE') resolve();
+      else reject(err);
+    });
     handle.onExit((code) => {
       if (code === 0) resolve();
       else reject(new Error(`agent exited with code ${code}`));

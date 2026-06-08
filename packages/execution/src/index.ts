@@ -15,10 +15,14 @@ export type {
   SpawnAgentInput,
   OpenPrInput,
   OpenPrResult,
+  CommitAgentWorkInput,
+  CommitAgentWorkResult,
 } from './port.js';
 
 export { createExecution } from './factory.js';
 export type { CreateExecutionOptions, VendorServices } from './factory.js';
+
+export { buildClaudeCommand, shellQuote, DEFAULT_AGENT_ALLOWED_TOOLS } from './agent-command.js';
 
 export { makeSecretStore } from './secret-store.js';
 export type { SecretStore, SecretBackend, MakeSecretStoreOptions } from './secret-store.js';
