@@ -82,9 +82,27 @@ export interface ProvisionedRepo {
  */
 export interface RepoProvisioner {
   ensureLocalRepo(repoRef: string): Promise<ProvisionedRepo>;
+  /**
+   * Create an isolated worktree for one task off the provisioned local clone,
+   * returning its path + branch + base ref. The provisioner owns worktree creation
+   * (rather than ExecutionPort.reserveWorktree) because the clone's origin is
+   * tokenless — the vendored worktree path would `git fetch origin` + push, which a
+   * tokenless origin can't authenticate. Branches off `origin/<defaultBranch>`.
+   */
+  createWorktree(
+    repoRef: string,
+    taskLabel: string
+  ): Promise<{ path: string; branch: string; baseRef: string }>;
   /** A current installation token for the repo's owner — used to auth `gh pr create`
-   *  (the worktree origin authenticates the git push, but gh needs its own token). */
+   *  AND the env-auth'd `git push` in open-pr (the tokenless origin can't auth it). */
   tokenForRepo(repoRef: string): Promise<string>;
+  /**
+   * Reclaim a worktree created by createWorktree: remove the worktree dir + its
+   * branch + prune stale admin entries. Best-effort (never throws) — called once a
+   * dispatch terminates (success OR failure) so re-drives don't accumulate worktrees
+   * and branches without bound under the worker's repos dir.
+   */
+  removeWorktree(repoRef: string, worktreePath: string, branch: string): Promise<void>;
 }
 
 export interface OrchestrationDeps {
@@ -161,6 +179,10 @@ export async function orchestrateTaskAssigned(
   // not errors, so they `return` and bypass the catch.
   let winnerAgentId: string | null = null;
   let principalId: string | null = null;
+  // Set only on the provisioner path, so the finally can reclaim the worktree +
+  // branch the provisioner created once the dispatch terminates (success OR failure)
+  // — without it, every dispatch and every re-drive leaks a worktree under reposDir.
+  let provisionedWorktree: { path: string; branch: string } | undefined;
   try {
     // §6.5 — estimate tier (heuristics + one budgeted/cached classifier call),
     // then persist it (inspectable).
@@ -249,30 +271,29 @@ export async function orchestrateTaskAssigned(
     // §6.9-13 — dispatch → worktree + agent → PR → status-back.
     await deps.store.setStatus(task.id, 'executing');
 
-    // Provision a local checkout for the worktree. A GitHub event's repoHint is an
-    // `owner/repo` slug, not a local path; the provisioner clones/fetches it (auth'd)
-    // and returns the path + default branch. We pass `origin/<defaultBranch>` as the
-    // worktree base ref so reserveWorktree branches off the freshly-fetched remote
-    // default — NOT via Emdash's per-project settings lookup, which the headless
-    // clone-on-dispatch flow never populates ("Project settings not found").
-    // No provisioner (or no repoRef) → use repoRef as-is, no base ref override.
-    let repoPath = '.';
+    // Provision a worktree for the agent run. A GitHub event's repoHint is an
+    // `owner/repo` slug, not a local path. With a provisioner we ensure the
+    // (tokenless-origin) local clone exists, then have the PROVISIONER create the
+    // worktree — NOT ExecutionPort.reserveWorktree, whose vendored path would
+    // `git fetch origin` + pushOnCreate against an origin we can no longer
+    // authenticate. The provisioner branches off `origin/<defaultBranch>` and
+    // returns that as the base ref. Without a provisioner (Stage-1 single-checkout /
+    // tests) we keep reserveWorktree, repoRef used as-is and no base-ref override.
+    let worktree: { path: string; branch: string };
     let baseRef: string | undefined;
-    if (repoRef) {
-      if (deps.provisioner) {
-        const provisioned = await deps.provisioner.ensureLocalRepo(repoRef);
-        repoPath = provisioned.path;
-        baseRef = `origin/${provisioned.defaultBranch}`;
-      } else {
-        repoPath = repoRef;
-      }
+    if (repoRef && deps.provisioner) {
+      await deps.provisioner.ensureLocalRepo(repoRef);
+      const created = await deps.provisioner.createWorktree(repoRef, event.externalStoryId);
+      worktree = created;
+      baseRef = created.baseRef;
+      provisionedWorktree = { path: created.path, branch: created.branch };
+    } else {
+      worktree = await deps.execution.reserveWorktree({
+        repoPath: repoRef ?? '.',
+        taskLabel: event.externalStoryId,
+        projectId: event.externalStoryId,
+      });
     }
-    const worktree = await deps.execution.reserveWorktree({
-      repoPath,
-      taskLabel: event.externalStoryId,
-      projectId: event.externalStoryId,
-      ...(baseRef ? { baseRef } : {}),
-    });
 
     // §6.10 — spawn the agent over a PTY; await its exit before opening the PR.
     // The prompt is the REAL story content fetched above (content.fetch), so the
@@ -397,6 +418,18 @@ export async function orchestrateTaskAssigned(
       return { kind: 'needs_attention', taskId: task.id, failureCount };
     }
     return { kind: 'failed', taskId: task.id, failureCount };
+  } finally {
+    // Reclaim the provisioner-created worktree + branch on EVERY terminal path
+    // (success, failure, re-drive) so they don't accumulate without bound. Only the
+    // provisioner path sets this; reserveWorktree (no-provisioner) is unaffected.
+    // removeWorktree is best-effort and never throws, so it can't disturb the outcome.
+    if (provisionedWorktree && repoRef && deps.provisioner) {
+      await deps.provisioner.removeWorktree(
+        repoRef,
+        provisionedWorktree.path,
+        provisionedWorktree.branch
+      );
+    }
   }
 }
 

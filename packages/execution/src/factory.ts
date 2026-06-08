@@ -100,6 +100,82 @@ export interface CreateExecutionOptions {
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+// SECURITY — agent env allowlist. The agent runs attacker-influenced (prompt-injected)
+// code with Bash inside its worktree; it must NEVER inherit the worker's secrets
+// (GITHUB_APP_PRIVATE_KEY, DATABASE_URL, SHORTCUT_*, GH_TOKEN, …). Passing the full
+// process.env would let a `printenv` exfil all of them. Instead the child env is
+// built from this strict allowlist of non-secret vars the CLI genuinely needs
+// (PATH/HOME for spawning, locale/TZ for correct output, and the Anthropic auth the
+// `claude` CLI itself reads). Operators can widen it via TASCA_AGENT_ENV_PASSTHROUGH
+// (comma-separated names). Caller-supplied input.env still wins (spread last). The
+// allowlist is also enforced on the GLOBAL process.env at spawn time (see
+// spawnWithScrubbedEnv) because the vendor reads process.env directly — passing a
+// filtered `env` arg alone would not bound what the child inherits.
+const AGENT_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TERM',
+  'LANG',
+  'LANGUAGE',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'TMPDIR',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CONFIG_DIR',
+];
+
+// The vendor's PTY control flag — read INSIDE startLifecyclePty (not a secret).
+// Preserved through the scrub below so an operator's PTY toggle still takes effect.
+const VENDOR_CONTROL_ENV = ['EMDASH_DISABLE_PTY'];
+
+/**
+ * SECURITY — the env allowlist must be enforced on the GLOBAL process.env, not just
+ * the `env` we hand the vendor. The vendored `startLifecyclePty` reads process.env
+ * DIRECTLY: its happy path pulls SSH_AUTH_SOCK + the X11/Wayland display vars from
+ * it, and its node-pty-unavailable fallback spreads the ENTIRE process.env underneath
+ * our `env`. (Under de-Electronized Node the native node-pty binding often fails to
+ * load, so that fallback — the full-process.env leak — is the LIKELY production path.)
+ * Passing a filtered `env` arg therefore can't bound what reaches the agent.
+ *
+ * So we transiently reduce process.env to `allowedKeys` for the duration of the
+ * SYNCHRONOUS spawn, then restore it. startLifecyclePty does no awaiting before it
+ * forks the child (node-pty/child_process snapshot env during the spawn call), so on
+ * Node's single thread nothing but the child being created ever observes the reduced
+ * env. Restoration runs in `finally`, so a throwing spawn still restores.
+ */
+function spawnWithScrubbedEnv<T>(allowedKeys: Set<string>, spawn: () => T): T {
+  const removed: Array<[string, string]> = [];
+  for (const key of Object.keys(process.env)) {
+    if (allowedKeys.has(key)) continue;
+    const value = process.env[key];
+    if (value !== undefined) removed.push([key, value]);
+    delete process.env[key];
+  }
+  try {
+    return spawn();
+  } finally {
+    for (const [key, value] of removed) process.env[key] = value;
+  }
+}
+
+// SECURITY RESIDUALS — what the spawn-time env scrub does NOT close (Phase-2, ops):
+//   1. The vendor runs the command via a LOGIN+INTERACTIVE shell (`$SHELL -ilc …`), so
+//      the worker user's profiles (/etc/profile, ~/.bashrc, ~/.zprofile, …) are sourced
+//      INSIDE the agent — any `export SECRET=…` there re-enters the env after the scrub,
+//      and the agent's Bash can read those rc files directly. Run the agent as a
+//      DEDICATED unprivileged user with empty profiles (the multi-tenant deploy target),
+//      not as the worker user.
+//   2. Same-user exposure: the agent shares the worker user's HOME and could read a
+//      concurrent dispatch's git-child env via /proc. Closing both needs a
+//      separate-user / network-egress sandbox per agent.
+// The scrub closes the in-process env leak (the worker's OWN secrets in process.env);
+// these residuals are host/deployment boundaries, tracked for the Phase-2 sandbox.
+
 function defaultVendorRoot(): string {
   // src/factory.ts -> ../vendor/emdash
   return path.join(HERE, '..', 'vendor', 'emdash');
@@ -188,19 +264,39 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
         throw new ExecutionError('spawn', 'spawnAgent requires command or prompt');
       }
 
+      // Build the child env from the allowlist (NOT the full process.env), so no
+      // inherited worker secret reaches the prompt-injectable agent. Operators can
+      // extend it via TASCA_AGENT_ENV_PASSTHROUGH; caller-supplied input.env wins.
+      const passthrough = (process.env.TASCA_AGENT_ENV_PASSTHROUGH ?? '')
+        .split(',')
+        .map((n) => n.trim())
+        .filter((n) => n !== '');
+      const allowedNames = [...AGENT_ENV_ALLOWLIST, ...passthrough];
+      const agentEnv: Record<string, string> = {};
+      for (const name of allowedNames) {
+        const value = process.env[name];
+        if (value !== undefined) agentEnv[name] = value;
+      }
+      Object.assign(agentEnv, input.env ?? {});
+      // The scrub keeps exactly the allowlist (so the vendor's process.env reads —
+      // happy-path SSH_AUTH_SOCK/display + fallback's full spread — can only surface
+      // allowlisted vars) plus the vendor's own PTY control flag.
+      const scrubKeep = new Set([...allowedNames, ...VENDOR_CONTROL_ENV]);
+
       let handle: VendorPtyHandle;
       try {
         // startLifecyclePty can throw SYNCHRONOUSLY (before any handle exists,
-        // so the failure can't be delivered via onError) — wrap it.
-        handle = getServices().ptyManager.startLifecyclePty({
-          id: input.id,
-          command,
-          cwd: input.cwd,
-          // Merge over the parent env (PATH/HOME/...) per the ExecutionPort
-          // contract — passing only input.env strips PATH and breaks CLI spawns
-          // (exit 127, command not found).
-          env: { ...process.env, ...(input.env ?? {}) } as Record<string, string>,
-        });
+        // so the failure can't be delivered via onError) — wrap it. The spawn runs
+        // under spawnWithScrubbedEnv so the vendor cannot re-add a worker secret
+        // (or SSH_AUTH_SOCK) from the global process.env it reads directly.
+        handle = spawnWithScrubbedEnv(scrubKeep, () =>
+          getServices().ptyManager.startLifecyclePty({
+            id: input.id,
+            command,
+            cwd: input.cwd,
+            env: agentEnv,
+          })
+        );
       } catch (err) {
         throw new ExecutionError('spawn', `spawnAgent failed for ${input.id}: ${errMessage(err)}`, {
           cause: err,

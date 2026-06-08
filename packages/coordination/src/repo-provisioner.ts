@@ -1,14 +1,20 @@
-// Clone-on-dispatch: turn a GitHub `owner/repo` slug into a local checkout with
-// an authenticated `origin`, so reserveWorktree (which runs `git worktree add`
-// against a LOCAL repo and pushes to `origin`) has a real filesystem repo to work
-// from. A GitHub event's repoHint is a slug, not a path; without this the worktree
-// step fails on every github-originated dispatch.
+// Clone-on-dispatch: turn a GitHub `owner/repo` slug into a local checkout with a
+// TOKENLESS `origin`, plus a worktree for one task's execution, so the dispatch
+// loop has a real filesystem repo to work from. A GitHub event's repoHint is a
+// slug, not a path; without this the worktree step fails on every
+// github-originated dispatch.
 //
 // Mechanism (pure shell via execFile — argv, never a shell string):
 //   1. mint an installation token for the slug's owner
-//   2. embed it in an https `origin` URL
-//   3. clone (first time, atomically) or set-url + fetch --prune (subsequent)
-//      under reposDir, serialized per owner/repo
+//   2. clone (first time, atomically) or set-url + fetch --prune (subsequent)
+//      under reposDir, serialized per owner/repo, with origin = the TOKENLESS
+//      `https://github.com/<owner>/<repo>.git`
+//   3. authenticate the network git calls (clone/fetch) by injecting an
+//      Authorization header into that ONE child via env (githubAuthEnv), never argv
+//      or persisted config
+//   4. create the task worktree LOCALLY (`git worktree add`), bypassing the vendor
+//      worktree path that would `git fetch origin` + pushOnCreate (which the
+//      tokenless origin cannot authenticate)
 //
 // CONCURRENCY: dispatches are detached (server.ts queueMicrotask) and the
 // orchestrator's gate keys on the story, not the repo, so two stories targeting
@@ -19,19 +25,23 @@
 // half-populated localPath that `git clone` would later refuse — the dispatch loop
 // re-drives on failure, so a non-self-healing clone would wedge the repo forever.
 //
-// SECURITY — token in logs: the origin URL embeds the installation token, and
-// execFile's rejection carries the full argv, so an unwrapped git failure would
-// leak the token into the breaker's error log. Every git call is wrapped to
-// REDACT the token from any thrown error before it propagates.
+// SECURITY — token in logs: even though the origin URL is now tokenless, the
+// auth header is supplied via env and execFile's rejection can echo the environment;
+// every git call stays wrapped to REDACT any `x-access-token:<secret>` form from a
+// thrown error before it propagates into the breaker's error log.
 //
-// SECURITY — token at rest: `git clone`/`git remote set-url` persist the token
-// into <localPath>/.git/config. This is a DELIBERATE exception to
-// GitHubAppClient's in-memory-only posture: the downstream worktree push and
-// open-pr's `git push origin` authenticate via that stored origin URL, so the
-// credential has to live there. We mitigate by creating reposDir mode 0700 (owner
-// only) and re-minting a fresh short-lived (~1h) token on every existing-checkout
-// dispatch. In production set TASCA_REPOS_DIR to a dedicated private volume rather
-// than the shared tmp root.
+// SECURITY — token NOT at rest, NOT reachable by the agent: the credential is
+// provided per-invocation via env-auth (an http.extraheader injected through
+// GIT_CONFIG_* into the single clone/fetch child), so it is NEVER persisted into
+// <localPath>/.git/config and the worktree the agent runs in carries no token in
+// any git config it can read. We also create the worktree ourselves (no vendored
+// `git fetch`/pushOnCreate), so no authenticated origin is needed downstream — the
+// PR push authenticates via its own env-auth in open-pr. We create reposDir mode
+// 0700 (owner only) and re-mint a fresh short-lived (~1h) token per dispatch.
+// RESIDUAL: a same-user process could read a concurrent git child's env via /proc;
+// closing that requires a separate-user / egress sandbox (Phase 2, ops). In
+// production set TASCA_REPOS_DIR to a dedicated private volume, not the shared tmp
+// root.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -53,6 +63,47 @@ export function redactToken(message: string): string {
 }
 
 /**
+ * Env that authenticates ONE git child (clone/fetch) against github.com via an
+ * http.extraheader, without putting the token in argv or persisting it into
+ * .git/config. `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` inject
+ * config into the process for that invocation only (gone when the child exits), so
+ * the credential never reaches the worktree the agent runs in. Exported for the
+ * unit test + reuse by the open-pr push (which keeps its own local copy — execution
+ * must not import @tasca packages).
+ */
+export function githubAuthEnv(token: string): Record<string, string> {
+  return {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`,
+  };
+}
+
+/**
+ * The production git runner: `execFile('git', …)` returning stdout, with token
+ * redaction on failure. `env` is merged OVER process.env for the one invocation
+ * (env-auth). Exported (and used as the default `git` runner) so a test can prove the
+ * wrapper WIRES redactToken on a real token-bearing argv — the only remaining way a
+ * token could surface, since production now keeps the token out of argv entirely.
+ */
+export async function defaultGitRunner(
+  args: string[],
+  opts?: { cwd?: string; env?: Record<string, string> }
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', args, {
+      ...(opts?.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
+    });
+    return stdout;
+  } catch (err) {
+    // execFile's rejection echoes the full argv (incl. any auth URL); redact the
+    // token before it propagates into the breaker's error log.
+    throw new Error(redactToken(err instanceof Error ? err.message : String(err)));
+  }
+}
+
+/**
  * The minimal structural deps GitAppRepoProvisioner needs, typed against shapes
  * (not the concrete GitHubAppClient / store classes) so tests inject fakes. The
  * real wiring passes the @tasca/adapters GitHubAppClient + the coordination store.
@@ -62,31 +113,21 @@ export interface RepoProvisionerDeps {
   store: { getInstallationIdForOwner(owner: string): Promise<string | null> };
   /** Filesystem root under which clones live as `<reposDir>/<owner>/<repo>`. */
   reposDir: string;
-  /** Git runner (argv form) returning stdout. Default: execFile('git', …) with token redaction. */
-  git?: (args: string[], opts?: { cwd?: string }) => Promise<string>;
+  /** Git runner (argv form) returning stdout. Default: execFile('git', …) with token
+   *  redaction. `env` is merged OVER process.env for the one invocation (env-auth). */
+  git?: (args: string[], opts?: { cwd?: string; env?: Record<string, string> }) => Promise<string>;
   /** `.git` existence probe. Default: fs.access-based. */
   exists?: (p: string) => Promise<boolean>;
 }
 
 export class GitAppRepoProvisioner implements RepoProvisioner {
-  private readonly git: (args: string[], opts?: { cwd?: string }) => Promise<string>;
+  private readonly git: (args: string[], opts?: { cwd?: string; env?: Record<string, string> }) => Promise<string>;
   private readonly exists: (p: string) => Promise<boolean>;
   /** Per-`owner/repo` promise chain: serializes provisioning of the same repo. */
   private readonly chain = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: RepoProvisionerDeps) {
-    this.git =
-      deps.git ??
-      (async (args, opts) => {
-        try {
-          const { stdout } = await execFileAsync('git', args, opts ?? {});
-          return stdout;
-        } catch (err) {
-          // execFile's rejection echoes the full argv (incl. the auth URL); redact
-          // the token before it propagates into the breaker's error log.
-          throw new Error(redactToken(err instanceof Error ? err.message : String(err)));
-        }
-      });
+    this.git = deps.git ?? defaultGitRunner;
     this.exists =
       deps.exists ??
       (async (p) => {
@@ -126,14 +167,18 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
     const { token } = await this.deps.appClient.getInstallationToken(installationId);
 
     const localPath = path.join(this.deps.reposDir, owner, repo);
-    const authUrl =
-      'https://x-access-token:' + token + '@github.com/' + owner + '/' + repo + '.git';
+    // The origin URL is TOKENLESS — the credential is never persisted into
+    // .git/config (so the agent's worktree can't read it). It is supplied to the
+    // single network git child via env-auth (an http.extraheader).
+    const originUrl = 'https://github.com/' + owner + '/' + repo + '.git';
+    const authEnv = githubAuthEnv(token);
 
     if (await this.exists(path.join(localPath, '.git'))) {
-      // Existing checkout: re-point origin to a fresh auth URL (the token rotates)
-      // and fetch the latest refs so the worktree branches off current state.
-      await this.git(['-C', localPath, 'remote', 'set-url', 'origin', authUrl]);
-      await this.git(['-C', localPath, 'fetch', '--prune', 'origin']);
+      // Existing checkout: re-point origin to the tokenless URL (in case an older
+      // build embedded a token) and fetch the latest refs via env-auth so the
+      // worktree branches off current state.
+      await this.git(['-C', localPath, 'remote', 'set-url', 'origin', originUrl]);
+      await this.git(['-C', localPath, 'fetch', '--prune', 'origin'], { env: authEnv });
       return { path: localPath, defaultBranch: await this.detectDefaultBranch(localPath) };
     }
 
@@ -146,13 +191,95 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
     await mkdir(path.dirname(localPath), { recursive: true, mode: 0o700 });
     const tmp = `${localPath}.tmp-${randomBytes(6).toString('hex')}`;
     try {
-      await this.git(['clone', authUrl, tmp]);
+      await this.git(['clone', originUrl, tmp], { env: authEnv });
       await rename(tmp, localPath);
     } catch (err) {
       await rm(tmp, { recursive: true, force: true }).catch(() => {});
       throw err;
     }
     return { path: localPath, defaultBranch: await this.detectDefaultBranch(localPath) };
+  }
+
+  /**
+   * Create an isolated worktree for one task off the local clone, returning its
+   * path + branch + base ref. We do this ourselves (LOCAL `git worktree add`, no
+   * auth) instead of the vendored worktree service, which would `git fetch origin`
+   * + pushOnCreate — both need an authenticated origin, which we deliberately no
+   * longer have (the origin is tokenless so the agent can't read a credential from
+   * .git/config). The branch is created off `origin/<defaultBranch>` already fetched
+   * by ensureLocalRepo. Runs under the per-repo lock so it can't race a concurrent
+   * provision (set-url/fetch) of the same clone.
+   */
+  async createWorktree(
+    repoRef: string,
+    taskLabel: string
+  ): Promise<{ path: string; branch: string; baseRef: string }> {
+    const { owner, repo } = parseRef(repoRef);
+    return this.withRepoLock(`${owner}/${repo}`, async () => {
+      const localPath = path.join(this.deps.reposDir, owner, repo);
+      if (!(await this.exists(path.join(localPath, '.git')))) {
+        throw new Error('createWorktree: repo not provisioned: ' + repoRef);
+      }
+      const defaultBranch = await this.detectDefaultBranch(localPath);
+      const slug =
+        taskLabel
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 80) || 'task';
+      const branch = `tasca-wt/${slug}-${randomBytes(4).toString('hex')}`;
+      const worktreePath = path.join(
+        this.deps.reposDir,
+        owner,
+        `${repo}.worktrees`,
+        `${slug}-${randomBytes(4).toString('hex')}`
+      );
+      await mkdir(path.dirname(worktreePath), { recursive: true, mode: 0o700 });
+      // LOCAL branch off the already-fetched remote default — no network, no auth.
+      await this.git([
+        '-C',
+        localPath,
+        'worktree',
+        'add',
+        '--no-track',
+        '-b',
+        branch,
+        worktreePath,
+        `origin/${defaultBranch}`,
+      ]);
+      return { path: worktreePath, branch, baseRef: `origin/${defaultBranch}` };
+    });
+  }
+
+  /**
+   * Reclaim a worktree + its branch once a dispatch terminates, so re-drives and
+   * completed runs don't accumulate worktrees/branches without bound under reposDir
+   * (inode/disk exhaustion + ref bloat on a long-lived worker). Best-effort: every
+   * step is independently swallowed and the whole method never rejects — a failure to
+   * clean up MUST NOT fail or re-drive the dispatch. Runs under the per-repo lock so
+   * it can't race a concurrent provision/createWorktree on the same clone's .git dir.
+   */
+  async removeWorktree(repoRef: string, worktreePath: string, branch: string): Promise<void> {
+    try {
+      const { owner, repo } = parseRef(repoRef);
+      const localPath = path.join(this.deps.reposDir, owner, repo);
+      await this.withRepoLock(`${owner}/${repo}`, async () => {
+        // `worktree remove --force` drops the checkout even with a dirty tree; `prune`
+        // then clears the admin entry if the dir was already gone; `branch -D` removes
+        // the per-attempt branch. Each is independent — a missing worktree/branch
+        // (e.g. `worktree add` failed mid-way) must not block reclaiming the rest.
+        for (const args of [
+          ['-C', localPath, 'worktree', 'remove', '--force', worktreePath],
+          ['-C', localPath, 'worktree', 'prune'],
+          ['-C', localPath, 'branch', '-D', branch],
+        ]) {
+          await this.git(args).catch(() => undefined);
+        }
+        // Also remove the worktree dir if `git worktree remove` left it (rare).
+        await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+      });
+    } catch {
+      // Never throw from cleanup — the dispatch outcome is already decided.
+    }
   }
 
   /**

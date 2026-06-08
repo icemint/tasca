@@ -208,9 +208,12 @@ class FakeExecution implements ExecutionPort {
   }
   /** The `token` passed on the most recent openPr (for asserting auth threading). */
   lastOpenPrToken: string | undefined;
+  /** The full input of the most recent openPr (for asserting cwd/branch threading). */
+  lastOpenPrInput: OpenPrInput | undefined;
   async openPr(input: OpenPrInput): Promise<OpenPrResult> {
     this.prCalls += 1;
     this.lastOpenPrToken = input.token;
+    this.lastOpenPrInput = input;
     if (this.behavior.prError) throw this.behavior.prError;
     // Model GitHub: one open PR per head branch. A repeated head returns the
     // existing PR (idempotent); a NEW head opens a new PR.
@@ -624,17 +627,26 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
     repoHint: 'acme/widgets',
   };
 
-  it('provisions the slug to a local path, which reserveWorktree then uses', async () => {
+  it('provisions the slug, then the PROVISIONER creates the worktree (NOT reserveWorktree)', async () => {
     const store = new FakeStore();
     const execution = new FakeExecution();
-    const seen: string[] = [];
+    const ensured: string[] = [];
+    const worktreeArgs: Array<{ repoRef: string; taskLabel: string }> = [];
+    const removed: Array<{ repoRef: string; path: string; branch: string }> = [];
     const provisioner: RepoProvisioner = {
       async ensureLocalRepo(repoRef) {
-        seen.push(repoRef);
+        ensured.push(repoRef);
         return { path: '/local/checkout', defaultBranch: 'trunk' };
+      },
+      async createWorktree(repoRef, taskLabel) {
+        worktreeArgs.push({ repoRef, taskLabel });
+        return { path: '/wt', branch: 'tasca-wt/x', baseRef: 'origin/trunk' };
       },
       async tokenForRepo() {
         return 'ghs_install_token';
+      },
+      async removeWorktree(repoRef, path, branch) {
+        removed.push({ repoRef, path, branch });
       },
     };
     const deps: OrchestrationDeps = {
@@ -645,15 +657,24 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
     const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, deps);
 
     expect(outcome.kind).toBe('dispatched');
-    // (a) the provisioner saw the raw slug
-    expect(seen).toEqual(['acme/widgets']);
-    // (b) reserveWorktree got the provisioned local path + `origin/<defaultBranch>`
-    //     as the base ref (so it never hits Emdash's per-project-settings lookup).
-    expect(execution.reserveInputs).toEqual([
-      { repoPath: '/local/checkout', taskLabel: 'gh-story-1', projectId: 'gh-story-1', baseRef: 'origin/trunk' },
-    ]);
-    // (c) openPr got the installation token (so `gh pr create` can authenticate).
-    expect(execution.lastOpenPrToken).toBe('ghs_install_token');
+    // (a) the local clone was ensured, then the worktree created — both with the slug.
+    expect(ensured).toEqual(['acme/widgets']);
+    expect(worktreeArgs).toEqual([{ repoRef: 'acme/widgets', taskLabel: 'gh-story-1' }]);
+    // (b) ExecutionPort.reserveWorktree is BYPASSED on the provisioner path (the
+    //     vendored worktree path would fetch/push against the now-tokenless origin).
+    expect(execution.reserveCalls).toBe(0);
+    // (c) the agent ran in, and the PR was opened from, the provisioner's worktree.
+    expect(execution.spawnInputs[0]!.cwd).toBe('/wt');
+    expect(execution.commitInputs[0]).toMatchObject({ cwd: '/wt', baseRef: 'origin/trunk' });
+    // (d) openPr used the provisioner worktree path + branch + the installation token.
+    expect(execution.lastOpenPrInput).toMatchObject({
+      cwd: '/wt',
+      branch: 'tasca-wt/x',
+      token: 'ghs_install_token',
+    });
+    // (e) the provisioner's worktree is reclaimed after the dispatch terminates, so
+    //     dispatches/re-drives don't leak worktrees + branches under reposDir.
+    expect(removed).toEqual([{ repoRef: 'acme/widgets', path: '/wt', branch: 'tasca-wt/x' }]);
   });
 
   it('a provisioning failure feeds the breaker (failed → needs_attention)', async () => {
@@ -662,8 +683,14 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
       async ensureLocalRepo() {
         throw new Error('no GitHub App installation for owner acme');
       },
+      async createWorktree() {
+        throw new Error('no GitHub App installation for owner acme');
+      },
       async tokenForRepo() {
         throw new Error('no GitHub App installation for owner acme');
+      },
+      async removeWorktree() {
+        // never reached — ensureLocalRepo throws before a worktree exists
       },
     };
     const deps = () => ({

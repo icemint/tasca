@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile, access } from 'node:fs/promises';
-import { GitAppRepoProvisioner, redactToken, type RepoProvisionerDeps } from './repo-provisioner';
+import {
+  GitAppRepoProvisioner,
+  redactToken,
+  githubAuthEnv,
+  defaultGitRunner,
+  type RepoProvisionerDeps,
+} from './repo-provisioner';
 
 // ── Per-test scratch dir ──────────────────────────────────────────────────────
 // The provisioner does REAL fs (mkdir/rename/rm) even when `git` is faked, so each
@@ -28,17 +34,19 @@ const pathExists = async (p: string): Promise<boolean> => {
 };
 
 /**
- * Records every git argv. A faked `git clone <url> <dest>` creates `<dest>/.git`
- * so the production atomic-clone's real `rename(tmp, localPath)` succeeds without
- * touching the network. Optional `delay` yields the event loop inside each call so
- * concurrency (interleaving vs serialization) is observable.
+ * Records every git argv (and the per-call env). A faked `git clone <url> <dest>`
+ * creates `<dest>/.git` so the production atomic-clone's real `rename(tmp, localPath)`
+ * succeeds without touching the network. Optional `delay` yields the event loop
+ * inside each call so concurrency (interleaving vs serialization) is observable.
  */
 function makeGit(opts: { delay?: boolean } = {}) {
   const calls: string[][] = [];
+  const envs: Array<Record<string, string> | undefined> = [];
   let inFlight = 0;
   let maxInFlight = 0;
-  const git = async (args: string[]): Promise<string> => {
+  const git: NonNullable<RepoProvisionerDeps['git']> = async (args, runOpts) => {
     calls.push(args);
+    envs.push(runOpts?.env);
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
     if (opts.delay) await new Promise((r) => setTimeout(r, 0));
@@ -48,8 +56,18 @@ function makeGit(opts: { delay?: boolean } = {}) {
     if (args.includes('rev-parse')) return 'main\n';
     return '';
   };
-  return { git, calls, maxInFlight: () => maxInFlight };
+  return {
+    git,
+    calls,
+    envs,
+    /** The env recorded for the first call matching `subcommand` (clone/fetch/...). */
+    envFor: (subcommand: string) => envs[calls.findIndex((c) => c.includes(subcommand))],
+    maxInFlight: () => maxInFlight,
+  };
 }
+
+/** The extraheader value env-auth injects for TOKEN (base64 of x-access-token:TOKEN). */
+const EXTRAHEADER = `Authorization: Basic ${Buffer.from('x-access-token:' + TOKEN).toString('base64')}`;
 
 function makeDeps(opts: {
   exists: (p: string) => Promise<boolean>;
@@ -77,14 +95,14 @@ function makeDeps(opts: {
   return { deps, tokenCalls: () => tokenCalls };
 }
 
-const authUrl = (owner: string, repo: string, token = TOKEN) =>
-  `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
+/** The TOKENLESS origin URL the provisioner now clones/sets — no embedded credential. */
+const originUrl = (owner: string, repo: string) => `https://github.com/${owner}/${repo}.git`;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
   it('.git absent → clones atomically (temp dir + rename) and returns the final path', async () => {
-    const { git, calls } = makeGit();
+    const { git, calls, envFor } = makeGit();
     const local = path.join(REPOS_DIR, 'acme', 'widgets');
     const { deps } = makeDeps({ git, exists: async () => false });
 
@@ -93,7 +111,11 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(result.path).toBe(local);
     expect(result.defaultBranch).toBe('main');
     expect(calls[0]![0]).toBe('clone');
-    expect(calls[0]![1]).toBe(authUrl('acme', 'widgets'));
+    // The origin URL is TOKENLESS — no credential is persisted into .git/config.
+    expect(calls[0]![1]).toBe(originUrl('acme', 'widgets'));
+    expect(calls[0]![1]).not.toContain('x-access-token:');
+    // The credential is carried via env-auth (extraheader) on the clone child only.
+    expect(envFor('clone')?.GIT_CONFIG_VALUE_0).toBe(EXTRAHEADER);
     // Clones into a temp sibling, never directly into the published path…
     expect(calls[0]![2]).toMatch(new RegExp(`^${local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-`));
     // …then renames into place: the final path is the complete checkout.
@@ -102,8 +124,8 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(calls.some((c) => c.includes('rev-parse'))).toBe(true);
   });
 
-  it('.git present → set-url origin then fetch --prune (no clone)', async () => {
-    const { git, calls } = makeGit();
+  it('.git present → set-url tokenless origin then fetch --prune (env-auth, no clone)', async () => {
+    const { git, calls, envFor } = makeGit();
     const local = path.join(REPOS_DIR, 'acme', 'widgets');
     const { deps } = makeDeps({ git, exists: async () => true });
 
@@ -112,10 +134,13 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(result.path).toBe(local);
     expect(result.defaultBranch).toBe('main');
     expect(calls).toEqual([
-      ['-C', local, 'remote', 'set-url', 'origin', authUrl('acme', 'widgets')],
+      ['-C', local, 'remote', 'set-url', 'origin', originUrl('acme', 'widgets')],
       ['-C', local, 'fetch', '--prune', 'origin'],
       ['-C', local, 'rev-parse', '--abbrev-ref', 'HEAD'],
     ]);
+    // set-url carries no credential; fetch authenticates via env-auth.
+    expect(calls[0]!.join(' ')).not.toContain('x-access-token:');
+    expect(envFor('fetch')?.GIT_CONFIG_VALUE_0).toBe(EXTRAHEADER);
   });
 
   it('a leftover non-empty dir without .git self-heals (rm + reclone), not wedged', async () => {
@@ -134,13 +159,32 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(await pathExists(path.join(local, 'partial.txt'))).toBe(false); // leftover cleared
   });
 
-  it('the origin URL embeds the installation token', async () => {
-    const { git, calls } = makeGit();
+  it('the origin URL is TOKENLESS and the token is carried via env-auth only', async () => {
+    const { git, calls, envFor } = makeGit();
     const { deps } = makeDeps({ git, exists: async () => false });
 
     await new GitAppRepoProvisioner(deps).ensureLocalRepo('acme/widgets');
 
-    expect(calls[0]![1]).toBe(`https://x-access-token:${TOKEN}@github.com/acme/widgets.git`);
+    // No credential anywhere in the clone argv (so none lands in .git/config)…
+    expect(calls[0]![1]).toBe('https://github.com/acme/widgets.git');
+    expect(calls[0]!.join(' ')).not.toContain('x-access-token:');
+    // …it is supplied to the clone child as an http.extraheader via env-auth.
+    expect(envFor('clone')).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+      GIT_CONFIG_VALUE_0: EXTRAHEADER,
+    });
+  });
+
+  it('githubAuthEnv builds a single-entry extraheader carrying the basic auth token', () => {
+    const env = githubAuthEnv(TOKEN);
+    expect(env).toEqual({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from('x-access-token:' + TOKEN).toString('base64')}`,
+    });
+    // The raw token is base64-wrapped, never present verbatim.
+    expect(JSON.stringify(env)).not.toContain(TOKEN);
   });
 
   it.each(['nope', 'a/b/c', '../etc', 'owner/', '/repo', '', 'a/..', './x', 'x/.', '../..'])(
@@ -166,18 +210,20 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('redactToken scrubs the token from a message echoing the auth URL', () => {
-    const leaky = `Command failed: git clone ${authUrl('acme', 'widgets')} /var/tasca-repos/acme/widgets`;
+  it('redactToken scrubs the token from a message echoing an auth URL (defense-in-depth)', () => {
+    // The origin is now tokenless, but the redaction guard stays as defense against
+    // any legacy/other path that still embeds a token in a URL.
+    const leaky = `Command failed: git clone https://x-access-token:${TOKEN}@github.com/acme/widgets.git /var/tasca-repos/acme/widgets`;
     const safe = redactToken(leaky);
     expect(safe).not.toContain(TOKEN);
     expect(safe).toContain('x-access-token:***@');
   });
 
-  it('the REAL default git wrapper redacts the token from an execFile rejection', async () => {
+  it('the REAL default git wrapper rejects (env-auth) WITHOUT leaking the token', async () => {
     // No injected `git` → the production execFile wrapper runs. exists:()=>true takes
-    // the set-url branch; localPath does not exist, so real `git -C <missing> ...`
-    // fails fast (no network) and execFile's rejection carries the full argv — incl.
-    // the auth URL. This is the ONLY test that exercises the actual leak guard.
+    // the set-url + fetch branch; localPath does not exist, so real `git -C <missing>
+    // ...` fails fast (no network). The token is now carried in env (not argv), so the
+    // rejection must not leak it — and the redaction guard scrubs any URL form too.
     const { deps } = makeDeps({ exists: async () => true }); // note: git NOT injected
 
     const err = await new GitAppRepoProvisioner(deps).ensureLocalRepo('acme/widgets').then(
@@ -187,7 +233,30 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
 
     expect(err).not.toBeNull();
     expect(err).not.toContain(TOKEN);
-    expect(err).toContain('x-access-token:***@');
+  });
+
+  it('the default git wrapper REDACTS a token that surfaces in a failing git argv (wiring proof)', async () => {
+    // Production keeps the token out of argv, so the line above can only prove the
+    // negative (no token present to leak). This proves the POSITIVE: the production
+    // wrapper actually invokes redactToken. Force an offline git failure whose argv
+    // carries an x-access-token URL and assert the propagated message is the REDACTED
+    // form — deleting the redactToken call in defaultGitRunner makes this fail.
+    const leakyUrl = `https://x-access-token:${TOKEN}@github.com/acme/widgets.git`;
+    const err = await defaultGitRunner([
+      '-C',
+      '/nonexistent-tasca-redact-test-xyz',
+      'remote',
+      'set-url',
+      'origin',
+      leakyUrl,
+    ]).then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e))
+    );
+
+    expect(err).not.toBeNull();
+    expect(err).not.toContain(TOKEN);
+    expect(err).toContain('x-access-token:***@'); // the wrapper redacted the argv leak
   });
 
   it('serializes concurrent provisioning of the SAME owner/repo (no interleave)', async () => {
@@ -229,5 +298,54 @@ describe('GitAppRepoProvisioner.tokenForRepo', () => {
     const { deps, tokenCalls } = makeDeps({ exists: async () => true });
     await expect(new GitAppRepoProvisioner(deps).tokenForRepo('nope')).rejects.toThrow(/invalid repoRef/);
     expect(tokenCalls()).toBe(0);
+  });
+});
+
+describe('GitAppRepoProvisioner.createWorktree', () => {
+  it('adds a LOCAL worktree off origin/<defaultBranch> and returns path/branch/baseRef', async () => {
+    const { git, calls } = makeGit();
+    const local = path.join(REPOS_DIR, 'acme', 'widgets');
+    const { deps } = makeDeps({ git, exists: async () => true }); // clone `.git` present
+
+    const result = await new GitAppRepoProvisioner(deps).createWorktree('acme/widgets', 'gh-story-1');
+
+    // Branch + worktree path carry the sanitized label slug + a random suffix.
+    expect(result.branch).toMatch(/^tasca-wt\/gh-story-1-[0-9a-f]{8}$/);
+    expect(result.baseRef).toBe('origin/main');
+    expect(result.path).toMatch(
+      new RegExp(`^${path.join(local + '.worktrees', 'gh-story-1-').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[0-9a-f]{8}$`)
+    );
+
+    // The worktree is added LOCALLY (no env-auth needed) off the fetched default.
+    const add = calls.find((c) => c.includes('worktree'))!;
+    expect(add).toEqual([
+      '-C',
+      local,
+      'worktree',
+      'add',
+      '--no-track',
+      '-b',
+      result.branch,
+      result.path,
+      'origin/main',
+    ]);
+  });
+
+  it('throws when the repo is not provisioned (no .git)', async () => {
+    const { git, calls } = makeGit();
+    const { deps } = makeDeps({ git, exists: async () => false });
+    await expect(
+      new GitAppRepoProvisioner(deps).createWorktree('acme/widgets', 'gh-story-1')
+    ).rejects.toThrow(/createWorktree: repo not provisioned: acme\/widgets/);
+    expect(calls.some((c) => c.includes('worktree'))).toBe(false);
+  });
+
+  it('rejects an invalid slug before any git', async () => {
+    const { git, calls } = makeGit();
+    const { deps } = makeDeps({ git, exists: async () => true });
+    await expect(
+      new GitAppRepoProvisioner(deps).createWorktree('nope', 'gh-story-1')
+    ).rejects.toThrow(/invalid repoRef/);
+    expect(calls).toHaveLength(0);
   });
 });
