@@ -87,24 +87,52 @@ export function createRunner(opts: RunnerOptions): Runner {
       return true;
     }
 
+    let token: RepoToken | null = null;
+
     // Keep the lease alive while execute runs so a long task isn't reclaimed and
-    // double-dispatched (the queue's fence makes a late write safe, but renewing
-    // avoids the wasted second run).
+    // double-dispatched. A lost lease (renew returns false) or a task outliving its
+    // scoped GitHub token (~1h, fixed) are both LOGGED — a silent double-dispatch or a
+    // silent dead-token git-auth failure is exactly what a security-sensitive lifecycle
+    // must keep visible.
     const heartbeat = setInterval(() => {
-      void opts.queue.renewLease(job.id, job.fence, leaseSeconds).catch(() => {});
+      if (token && Date.now() >= token.expiresAt) {
+        opts.logger?.error?.('runner: task outlived its scoped token; stopping renewal for a fresh-token retry', {
+          jobId: job.id,
+        });
+        clearInterval(heartbeat);
+        return;
+      }
+      void opts.queue
+        .renewLease(job.id, job.fence, leaseSeconds)
+        .then((ok) => {
+          if (ok === false) {
+            opts.logger?.error?.('runner: lost the lease before renew (reclaimed by another runner)', {
+              jobId: job.id,
+              fence: job.fence,
+            });
+          }
+        })
+        .catch(() => {});
     }, Math.max(1000, Math.floor((leaseSeconds * 1000) / 2)));
     (heartbeat as { unref?: () => void }).unref?.();
 
-    let token: RepoToken | null = null;
+    // Log a write that was FENCED OUT (false) — the lease lapsed and another runner
+    // re-claimed the job, so this is the observable signal that a double-dispatch
+    // happened (tolerable under the queue's at-least-once + idempotency contract, but
+    // never silent).
+    const logIfLost = (ok: boolean, at: string): void => {
+      if (!ok) opts.logger?.error?.(`runner: lost the lease before ${at} (job reclaimed by another runner)`, { jobId: job.id, fence: job.fence });
+    };
+
     try {
       token = await opts.broker.mintRepoToken(payload.repoRef);
       const outcome = await opts.execute(job, payload as DispatchPayload, token);
       if (outcome.ok) {
-        await opts.queue.complete(job.id, job.fence);
+        logIfLost(await opts.queue.complete(job.id, job.fence), 'complete');
       } else if (outcome.retry) {
-        await opts.queue.release(job.id, job.fence, { delaySeconds: retryDelay });
+        logIfLost(await opts.queue.release(job.id, job.fence, { delaySeconds: retryDelay }), 'release');
       } else {
-        await opts.queue.fail(job.id, job.fence, outcome.error);
+        logIfLost(await opts.queue.fail(job.id, job.fence, outcome.error), 'fail');
       }
     } catch (err) {
       opts.logger?.error?.('runner: job threw', { jobId: job.id, err: String(err) });
@@ -112,9 +140,19 @@ export function createRunner(opts: RunnerOptions): Runner {
     } finally {
       clearInterval(heartbeat);
       // ALWAYS revoke the scoped token (even on failure) so its effective lifetime is
-      // this task, not GitHub's ~1h cap. Best-effort — a revoke failure must not throw.
+      // this task, not GitHub's ~1h cap. Best-effort: never throws (try/await/catch
+      // tolerates a synchronously-throwing injected revoke too), and a FAILED revoke is
+      // logged — the token then self-expires at the 1h cap, but that's a security event
+      // worth a signal rather than a silent degradation.
       if (token) {
-        await Promise.resolve(revoke(token.token)).catch(() => {});
+        try {
+          const ok = await revoke(token.token);
+          if (ok === false) {
+            opts.logger?.error?.('runner: token revoke failed; it self-expires at the GitHub 1h cap', { jobId: job.id });
+          }
+        } catch (err) {
+          opts.logger?.error?.('runner: token revoke threw', { jobId: job.id, err: String(err) });
+        }
       }
     }
     return true;

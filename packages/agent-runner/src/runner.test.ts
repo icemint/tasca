@@ -124,6 +124,43 @@ describe('agent-runner — the claim → scoped token → execute → revoke lif
   });
 });
 
+describe('agent-runner — observability of the security-relevant failure signals', () => {
+  it('logs when a token revoke FAILS (the token then self-expires at the 1h cap — never silent)', async () => {
+    const queue = new FakeQueue();
+    queue.jobs = [job()];
+    const { broker } = brokerThatMints();
+    const errors: string[] = [];
+    const runner = createRunner({
+      queue,
+      broker,
+      execute: async () => ({ ok: true }),
+      runnerId: 'r',
+      revoke: async () => false, // revoke failed
+      logger: { error: (m) => errors.push(m) },
+    });
+    await runner.runOnce();
+    expect(errors.some((m) => /revoke failed/.test(m))).toBe(true);
+  });
+
+  it('logs when a write is FENCED OUT (lease lost → another runner reclaimed the job)', async () => {
+    const queue = new FakeQueue();
+    queue.jobs = [job()];
+    queue.complete = async () => false; // fenced out: we lost the lease mid-execute
+    const { broker } = brokerThatMints();
+    const errors: string[] = [];
+    const runner = createRunner({
+      queue,
+      broker,
+      execute: async () => ({ ok: true }),
+      runnerId: 'r',
+      revoke: async () => {},
+      logger: { error: (m) => errors.push(m) },
+    });
+    await runner.runOnce();
+    expect(errors.some((m) => /lost the lease before complete/.test(m))).toBe(true);
+  });
+});
+
 describe('agent-runner — lease heartbeat keeps a long task alive', () => {
   it('renews the lease while a slow execute runs (so it is not reclaimed)', async () => {
     const queue = new FakeQueue();

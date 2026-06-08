@@ -38,9 +38,6 @@ importers:
       '@tasca/db':
         specifier: workspace:*
         version: link:../db
-      '@tasca/domain':
-        specifier: workspace:*
-        version: link:../domain
       pg:
         specifier: ^8.13.1
         version: 8.21.0
@@ -48,6 +45,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.0
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
 
   packages/auth:
     dependencies:
