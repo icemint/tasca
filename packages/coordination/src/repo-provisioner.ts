@@ -104,8 +104,9 @@ export class GitAppRepoProvisioner implements RepoProvisioner {
     return this.withRepoLock(`${owner}/${repo}`, () => this.provision(owner, repo));
   }
 
-  /** A fresh installation token for the repo's owner (cached + re-minted by the App
-   *  client). Used to auth `gh pr create`; throws when no installation exists. */
+  /** A current installation token for the repo's owner (the App client returns its
+   *  in-memory cached one while still valid, re-minting near expiry). Used to auth
+   *  `gh pr create`; throws when no installation exists. */
   async tokenForRepo(repoRef: string): Promise<string> {
     const { owner } = parseRef(repoRef);
     const installationId = await this.deps.store.getInstallationIdForOwner(owner);
