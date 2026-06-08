@@ -8,9 +8,9 @@ import { serveBroker, brokerClient, type BrokerServerHandle, type RepoTokenMinte
 const sockPath = () => `/tmp/tb-${randomBytes(6).toString('hex')}.sock`;
 
 let servers: BrokerServerHandle[] = [];
-async function start(mint: RepoTokenMinter): Promise<string> {
+async function start(mint: RepoTokenMinter, idleTimeoutMs?: number): Promise<string> {
   const socketPath = sockPath();
-  servers.push(await serveBroker({ socketPath, mint }));
+  servers.push(await serveBroker({ socketPath, mint, ...(idleTimeoutMs ? { idleTimeoutMs } : {}) }));
   return socketPath;
 }
 afterEach(async () => {
@@ -95,6 +95,50 @@ describe('robustness', () => {
     const raw = await rawExchange(socketPath, 'not json\n');
     expect(raw).toContain('invalid request');
     expect(called).toBe(false);
+  });
+
+  it('mints EXACTLY ONCE even when the request arrives split across two writes (no double-issuance)', async () => {
+    let mints = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const socketPath = await start(async (r) => {
+      mints++;
+      await gate; // hold the first mint open so a 2nd data event could race it
+      return { token: `t-${r}`, expiresAt: 1 };
+    });
+    // Send the request body, then the newline, as two separate writes — and another
+    // line after — all before the first mint resolves.
+    const sock = connect(socketPath);
+    await new Promise<void>((res) => sock.on('connect', () => res()));
+    sock.write('{"repoRef":"o/a"}');
+    await new Promise((r) => setTimeout(r, 30));
+    sock.write('\n{"repoRef":"o/b"}\n'); // completes the 1st line + a pipelined 2nd
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    sock.destroy();
+    expect(mints).toBe(1); // the split/ pipelined writes did NOT mint a second token
+  });
+
+  it('drops an idle connection that never completes a request (no fd exhaustion)', async () => {
+    const socketPath = await start(async () => ({ token: 't', expiresAt: 1 }), 300); // short idle timeout
+    // Connect and send NOTHING. The server's idle timeout must proactively respond
+    // and close. (Consume data so the socket flows and emits 'close'.)
+    const result = await new Promise<string>((res) => {
+      const sock = connect(socketPath);
+      let buf = '';
+      sock.setEncoding('utf8');
+      sock.on('error', () => {});
+      sock.on('data', (c: string) => {
+        buf += c;
+      });
+      sock.on('close', () => res(buf));
+      setTimeout(() => {
+        sock.destroy();
+        res(buf);
+      }, 1500);
+    });
+    expect(result).toContain('timeout'); // server proactively closed the idle connection
   });
 
   it('survives a failing request and serves the next one', async () => {

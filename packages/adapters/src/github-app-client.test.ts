@@ -124,6 +124,35 @@ describe('GitHubAppClient.getInstallationToken (POST shape + cache)', () => {
     expect(JSON.parse(captured!.init.body as string)).toEqual(scope); // scoped to one repo + minimal perms
   });
 
+  it('mintScopedToken REJECTS an empty repositories[] (which GitHub treats as ALL repos)', async () => {
+    const client = new GitHubAppClient({
+      appId: APP_ID,
+      privateKey,
+      fetchImpl: (async () => tokenResponse('x', '2026-01-01T01:00:00Z')) as unknown as typeof fetch,
+      now: () => 1_700_000_000_000,
+    });
+    await expect(client.mintScopedToken('77', { repositories: [], permissions: { contents: 'read' } })).rejects.toThrow(
+      /repositories must be non-empty/
+    );
+  });
+
+  it('mintScopedToken falls back to the minimal agent permission set when none is given (never empty)', async () => {
+    let captured: RequestInit | undefined;
+    const client = new GitHubAppClient({
+      appId: APP_ID,
+      privateKey,
+      fetchImpl: (async (_u: unknown, init?: RequestInit) => {
+        captured = init;
+        return tokenResponse('x', '2026-01-01T01:00:00Z');
+      }) as unknown as typeof fetch,
+      now: () => 1_700_000_000_000,
+    });
+    await client.mintScopedToken('77', { repositories: ['widgets'] });
+    const body = JSON.parse(captured!.body as string) as { permissions: Record<string, string> };
+    expect(body.permissions).toMatchObject({ contents: 'write', pull_requests: 'write' });
+    expect(Object.keys(body.permissions).length).toBeGreaterThan(0); // never an empty (=full) perm set
+  });
+
   it('reuses the cached token before the refresh margin (fetch called once)', async () => {
     let calls = 0;
     const fakeFetch = (async () => {

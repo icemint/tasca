@@ -19,6 +19,8 @@ export interface BrokerServerOptions {
   socketPath: string;
   /** Injected scoped-token minter — the only thing here that touches credentials. */
   mint: RepoTokenMinter;
+  /** Drop a connection that doesn't complete a request within this many ms. Default 5000. */
+  idleTimeoutMs?: number;
   logger?: BrokerLogger;
 }
 
@@ -27,6 +29,7 @@ export interface BrokerServerHandle {
 }
 
 const MAX_REQUEST_BYTES = 4096; // a request is a tiny JSON line; cap to bound memory
+const IDLE_TIMEOUT_MS = 5000; // drop a connection that doesn't complete a request promptly
 
 /** Start the broker over a unix-domain socket. Resolves once listening. */
 export async function serveBroker(options: BrokerServerOptions): Promise<BrokerServerHandle> {
@@ -36,15 +39,33 @@ export async function serveBroker(options: BrokerServerOptions): Promise<BrokerS
   const server = createServer((sock: Socket) => {
     let buf = '';
     let settled = false;
+    // EXACTLY-ONE-MINT guard: set the instant a full line is found, BEFORE dispatch,
+    // so a request split across two data events can't re-invoke mint (the `settled`
+    // flag only gates respond(), and it's still false while the first mint awaits —
+    // so without this a partial-then-rest write would mint a second live token).
+    let dispatched = false;
     sock.setEncoding('utf8');
+
+    // Idle deadline: a legitimate request is one tiny line sent immediately. A
+    // connection that connects and never completes a line is dropped, so a buggy/
+    // hostile runner can't accumulate half-open sockets in the worker process. The
+    // timer is unref'd so it never keeps the worker alive, and cleared once settled.
+    const idle = setTimeout(() => {
+      respond({ ok: false, error: 'timeout' });
+      sock.destroy();
+    }, options.idleTimeoutMs ?? IDLE_TIMEOUT_MS);
+    (idle as { unref?: () => void }).unref?.();
+    sock.on('close', () => clearTimeout(idle));
 
     const respond = (resp: BrokerResponse): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(idle);
       sock.end(JSON.stringify(resp) + '\n');
     };
 
     sock.on('data', (chunk: string) => {
+      if (dispatched) return; // one request per connection — ignore anything after
       buf += chunk;
       if (buf.length > MAX_REQUEST_BYTES) {
         respond({ ok: false, error: 'request too large' });
@@ -53,7 +74,13 @@ export async function serveBroker(options: BrokerServerOptions): Promise<BrokerS
       }
       const nl = buf.indexOf('\n');
       if (nl === -1) return; // wait for a full line
-      void handleLine(buf.slice(0, nl));
+      dispatched = true;
+      // .catch so an unexpected throw can't become an unhandledRejection that takes
+      // down the worker process the broker runs inside.
+      void handleLine(buf.slice(0, nl)).catch((err: unknown) => {
+        options.logger?.error?.('broker: handler threw', { err: String(err) });
+        respond({ ok: false, error: 'internal error' });
+      });
     });
     // A broken connection is not our problem to log loudly; ignore transport errors.
     sock.on('error', () => {});
