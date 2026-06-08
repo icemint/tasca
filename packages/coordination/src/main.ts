@@ -193,7 +193,22 @@ async function main(): Promise<void> {
   // client + an App-configured GitHubAdapter + the GitHub status reporter + the
   // install handler, and route github status-back to it. Otherwise the existing
   // gated no-op stays injected (no-op write-back) — github intake still works.
-  const githubWritebackEnabled = Boolean(githubAppId && githubAppPrivateKey && githubSecret);
+  let githubWritebackEnabled = Boolean(githubAppId && githubAppPrivateKey && githubSecret);
+  // Presence != usable: decode-check the App key up front (offline) so a mangled PEM
+  // disables write-back + clone-on-dispatch LOUDLY at boot, instead of failing as a
+  // cryptic OpenSSL `DECODER routines::unsupported` at the first dispatch.
+  if (githubWritebackEnabled) {
+    try {
+      new GitHubAppClient({ appId: githubAppId, privateKey: githubAppPrivateKey }).validateSigningKey();
+    } catch (err) {
+      logger.error(
+        'github write-back + clone-on-dispatch DISABLED — App private key failed to decode ' +
+          '(fix GITHUB_APP_PRIVATE_KEY: use real newlines, or base64-encode the whole PEM)',
+        { err: err instanceof Error ? err.message : String(err) }
+      );
+      githubWritebackEnabled = false;
+    }
+  }
   let statusReporter: StatusReporter = gatedStatusReporter;
   let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
   let provisioner: RepoProvisioner | undefined;

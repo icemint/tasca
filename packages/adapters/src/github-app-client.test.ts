@@ -153,3 +153,45 @@ describe('GitHubAppClient.getInstallationToken (POST shape + cache)', () => {
     await expect(client.getInstallationToken('77')).rejects.toThrow(/403/);
   });
 });
+
+describe('GitHubAppClient — private key normalization + boot decode-check', () => {
+  /** Re-sign + verify against the pair's public key to prove the key actually works. */
+  function signsAndVerifies(key: string): boolean {
+    const client = new GitHubAppClient({ appId: APP_ID, privateKey: key });
+    const { signingInput, signature } = decodeJwt(client.mintAppJwt());
+    return createVerify('RSA-SHA256').update(signingInput).verify(publicKey, signature);
+  }
+
+  it('accepts a PEM whose newlines were escaped to literal \\n (env mangling)', () => {
+    const escaped = privateKey.replace(/\n/g, '\\n');
+    expect(escaped).toContain('\\n'); // sanity: this is the mangled form
+    expect(signsAndVerifies(escaped)).toBe(true);
+  });
+
+  it('accepts a base64-encoded PEM (single-line env value)', () => {
+    const b64 = Buffer.from(privateKey, 'utf8').toString('base64');
+    expect(b64).not.toContain('BEGIN');
+    expect(signsAndVerifies(b64)).toBe(true);
+  });
+
+  it('accepts a PKCS#1 key as well as PKCS#8 (format-agnostic)', () => {
+    const pkcs1 = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    });
+    expect(pkcs1.privateKey).toContain('BEGIN RSA PRIVATE KEY');
+    const client = new GitHubAppClient({ appId: APP_ID, privateKey: pkcs1.privateKey });
+    const { signingInput, signature } = decodeJwt(client.mintAppJwt());
+    expect(createVerify('RSA-SHA256').update(signingInput).verify(pkcs1.publicKey, signature)).toBe(true);
+  });
+
+  it('validateSigningKey passes for a good key', () => {
+    expect(() => new GitHubAppClient({ appId: APP_ID, privateKey }).validateSigningKey()).not.toThrow();
+  });
+
+  it('validateSigningKey throws an actionable error for a mangled/garbage key', () => {
+    const client = new GitHubAppClient({ appId: APP_ID, privateKey: '-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----' });
+    expect(() => client.validateSigningKey()).toThrow(/failed to decode\/sign — check GITHUB_APP_PRIVATE_KEY/);
+  });
+});

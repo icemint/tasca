@@ -33,7 +33,12 @@ const REQUEST_TIMEOUT_MS = 8000;
 export interface GitHubAppClientConfig {
   /** The numeric GitHub App id (as a string or number). */
   appId: string | number;
-  /** The App's RSA private key, PEM-encoded (`-----BEGIN RSA PRIVATE KEY-----`). */
+  /**
+   * The App's RSA private key, PEM-encoded. Accepts PKCS#1 (`BEGIN RSA PRIVATE
+   * KEY`, GitHub's download) or PKCS#8 (`BEGIN PRIVATE KEY`). Env-mangled forms are
+   * tolerated: literal `\n` escapes are restored to newlines, and a base64-encoded
+   * PEM (no header) is decoded — see normalizePrivateKey.
+   */
   privateKey: string;
   /** REST v3 base override (tests). Defaults to the public GitHub API. */
   apiBase?: string;
@@ -48,6 +53,29 @@ export interface InstallationToken {
   token: string;
   /** Absolute expiry as epoch ms (parsed from GitHub's `expires_at`). */
   expiresAt: number;
+}
+
+/**
+ * Normalize a PEM private key sourced from an env var. Env/secret stores routinely
+ * mangle multi-line PEMs two ways: escaping newlines as the literal characters
+ * `\n`, or (when the store can't hold newlines at all) base64-encoding the whole
+ * PEM onto one line. OpenSSL rejects both with `DECODER routines::unsupported`.
+ * Restore literal `\n` to real newlines, and base64-decode a key that has no PEM
+ * header. Format (PKCS#1 `BEGIN RSA PRIVATE KEY` vs PKCS#8 `BEGIN PRIVATE KEY`) is
+ * NOT touched — node:crypto accepts both; only the transport corruption is undone.
+ */
+export function normalizePrivateKey(raw: string): string {
+  let key = raw.trim();
+  if (key.includes('\\n')) key = key.replace(/\\n/g, '\n');
+  if (!key.includes('-----BEGIN')) {
+    try {
+      const decoded = Buffer.from(key, 'base64').toString('utf8').trim();
+      if (decoded.includes('-----BEGIN')) key = decoded;
+    } catch {
+      // leave as-is; the signer (and the boot decode-check) will report it clearly
+    }
+  }
+  return key;
 }
 
 /** base64url-encode a Buffer or UTF-8 string (no padding), per JWS. */
@@ -79,7 +107,10 @@ export class GitHubAppClient {
       throw new Error('GitHubAppClient: privateKey (PEM) is required');
     }
     this.appId = String(config.appId);
-    this.privateKey = config.privateKey;
+    // Undo env-transport corruption (escaped newlines / base64) before the PEM
+    // reaches OpenSSL. validateSigningKey() (or the first sign) surfaces a key that
+    // still won't decode.
+    this.privateKey = normalizePrivateKey(config.privateKey);
     this.apiBase = (config.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.fetchImpl = config.fetchImpl ?? fetch;
     this.now = config.now ?? Date.now;
@@ -102,6 +133,23 @@ export class GitHubAppClient {
     const signingInput = `${header}.${payload}`;
     const signature = createSign('RSA-SHA256').update(signingInput).sign(this.privateKey);
     return `${signingInput}.${base64url(signature)}`;
+  }
+
+  /**
+   * Decode-check the configured private key by signing a throwaway JWT. Cheap and
+   * offline (no network) — call once at boot so a mangled/garbage PEM fails LOUDLY
+   * at startup with an actionable message, instead of as a cryptic OpenSSL
+   * `DECODER routines::unsupported` at the first dispatch. Throws on failure.
+   */
+  validateSigningKey(): void {
+    try {
+      this.mintAppJwt();
+    } catch (err) {
+      throw new Error(
+        'GitHubAppClient: private key failed to decode/sign — check GITHUB_APP_PRIVATE_KEY ' +
+          `(newlines or format): ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 
   /**
