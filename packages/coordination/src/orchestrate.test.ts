@@ -206,8 +206,11 @@ class FakeExecution implements ExecutionPort {
     this.commitInputs.push(input);
     return { changed: this.behavior.commitChanged ?? true };
   }
+  /** The `token` passed on the most recent openPr (for asserting auth threading). */
+  lastOpenPrToken: string | undefined;
   async openPr(input: OpenPrInput): Promise<OpenPrResult> {
     this.prCalls += 1;
+    this.lastOpenPrToken = input.token;
     if (this.behavior.prError) throw this.behavior.prError;
     // Model GitHub: one open PR per head branch. A repeated head returns the
     // existing PR (idempotent); a NEW head opens a new PR.
@@ -630,6 +633,9 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
         seen.push(repoRef);
         return { path: '/local/checkout', defaultBranch: 'trunk' };
       },
+      async tokenForRepo() {
+        return 'ghs_install_token';
+      },
     };
     const deps: OrchestrationDeps = {
       ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
@@ -646,12 +652,17 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
     expect(execution.reserveInputs).toEqual([
       { repoPath: '/local/checkout', taskLabel: 'gh-story-1', projectId: 'gh-story-1', baseRef: 'origin/trunk' },
     ]);
+    // (c) openPr got the installation token (so `gh pr create` can authenticate).
+    expect(execution.lastOpenPrToken).toBe('ghs_install_token');
   });
 
   it('a provisioning failure feeds the breaker (failed → needs_attention)', async () => {
     const store = new FakeStore();
     const failing: RepoProvisioner = {
       async ensureLocalRepo() {
+        throw new Error('no GitHub App installation for owner acme');
+      },
+      async tokenForRepo() {
         throw new Error('no GitHub App installation for owner acme');
       },
     };

@@ -210,3 +210,24 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
     expect(maxInFlight()).toBe(2); // distinct keys run in parallel
   });
 });
+
+describe('GitAppRepoProvisioner.tokenForRepo', () => {
+  it('mints the installation token for the slug owner', async () => {
+    const { deps } = makeDeps({ exists: async () => true });
+    const token = await new GitAppRepoProvisioner(deps).tokenForRepo('acme/widgets');
+    expect(token).toBe(TOKEN);
+  });
+
+  it('throws when no installation exists for the owner', async () => {
+    const { deps } = makeDeps({ exists: async () => true, installationId: null });
+    await expect(new GitAppRepoProvisioner(deps).tokenForRepo('acme/widgets')).rejects.toThrow(
+      /no GitHub App installation for owner acme/
+    );
+  });
+
+  it('rejects an invalid slug before minting', async () => {
+    const { deps, tokenCalls } = makeDeps({ exists: async () => true });
+    await expect(new GitAppRepoProvisioner(deps).tokenForRepo('nope')).rejects.toThrow(/invalid repoRef/);
+    expect(tokenCalls()).toBe(0);
+  });
+});

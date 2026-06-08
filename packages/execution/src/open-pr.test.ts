@@ -151,3 +151,29 @@ describe('openPr', () => {
     expect(await openPr(input, exec)).toEqual({ url: PR1 });
   });
 });
+
+describe('openPr — gh auth token (GH_TOKEN)', () => {
+  function capturingExec(calls: Array<{ file: string; env?: NodeJS.ProcessEnv | undefined }>): ExecFn {
+    return async (file, args, opts) => {
+      calls.push({ file, env: opts.env });
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        return { stdout: `${PR1}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+  }
+
+  it('passes the token to gh as GH_TOKEN, but NOT to git push (push uses origin)', async () => {
+    const calls: Array<{ file: string; env?: NodeJS.ProcessEnv | undefined }> = [];
+    const res = await openPr({ ...input, token: 'ghs_install_token' }, capturingExec(calls));
+    expect(res).toEqual({ url: PR1 });
+    expect(calls.find((c) => c.file === 'gh')?.env?.GH_TOKEN).toBe('ghs_install_token');
+    expect(calls.find((c) => c.file === 'git')?.env).toBeUndefined();
+  });
+
+  it('omits GH_TOKEN when no token is given (ambient gh auth)', async () => {
+    const calls: Array<{ file: string; env?: NodeJS.ProcessEnv | undefined }> = [];
+    await openPr(input, capturingExec(calls));
+    expect(calls.find((c) => c.file === 'gh')?.env).toBeUndefined();
+  });
+});

@@ -26,7 +26,7 @@ const execFileAsync = promisify(execFile);
 export type ExecFn = (
   file: string,
   args: string[],
-  opts: { cwd: string }
+  opts: { cwd: string; env?: NodeJS.ProcessEnv }
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const PR_URL_RE = /https?:\/\/\S+/;
@@ -67,8 +67,14 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
     });
   }
 
-  // 2. gh pr create. Use a temp body file so multiline Markdown is preserved
-  //    exactly (the vendored handler does the same).
+  // 2. gh pr create. `gh` authenticates from GH_TOKEN (it does NOT read the git
+  //    origin credential the push used), so pass the installation token there when
+  //    provided. Scoped to the gh processes only.
+  const ghOpts: { cwd: string; env?: NodeJS.ProcessEnv } = input.token
+    ? { cwd, env: { ...process.env, GH_TOKEN: input.token } }
+    : { cwd };
+  // Use a temp body file so multiline Markdown is preserved exactly (the vendored
+  // handler does the same).
   const ghArgs = ['pr', 'create', '--title', title, '--head', head];
   if (input.base) {
     ghArgs.push('--base', input.base);
@@ -89,7 +95,7 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
   try {
     let out: string;
     try {
-      const { stdout, stderr } = await exec('gh', ghArgs, { cwd });
+      const { stdout, stderr } = await exec('gh', ghArgs, ghOpts);
       out = `${stdout ?? ''}\n${stderr ?? ''}`;
     } catch (err) {
       // Idempotency: GitHub rejects a second open PR for the same head branch, so
@@ -102,7 +108,7 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
           cause: err,
         });
       }
-      const existing = await existingPrUrl(exec, cwd, head);
+      const existing = await existingPrUrl(exec, head, ghOpts);
       if (existing) return { url: existing };
       // "already exists" but we couldn't read it back — surface as a pr-create failure.
       throw new ExecutionError('pr-create', `open-pr: gh pr create reported an existing PR but it could not be read back: ${msg.trim()}`, {
@@ -135,12 +141,16 @@ function errText(err: unknown): string {
 }
 
 /** Look up the URL of the existing open PR for `branch` (the idempotency fallback). */
-async function existingPrUrl(exec: ExecFn, cwd: string, branch: string): Promise<string | null> {
+async function existingPrUrl(
+  exec: ExecFn,
+  branch: string,
+  ghOpts: { cwd: string; env?: NodeJS.ProcessEnv }
+): Promise<string | null> {
   try {
     const { stdout } = await exec(
       'gh',
       ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--jq', '.[0].url // empty'],
-      { cwd }
+      ghOpts
     );
     const url = (stdout ?? '').trim().match(PR_URL_RE);
     return url ? url[0] : null;

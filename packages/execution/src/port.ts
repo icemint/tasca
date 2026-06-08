@@ -122,6 +122,14 @@ export interface OpenPrInput {
   base?: string;
   /** Remote to push to (defaults to `origin`). */
   remote?: string;
+  /**
+   * Auth token for `gh pr create`, passed as GH_TOKEN to the gh process only. The
+   * git PUSH authenticates via the worktree's `origin` URL (clone-on-dispatch
+   * embeds an installation token there), but `gh` does NOT read that — so without
+   * this it fails "GH_TOKEN ... not set". An App installation token here opens the
+   * PR as `app[bot]`. Absent → gh falls back to ambient auth.
+   */
+  token?: string;
 }
 
 /** Result of an open-PR attempt. */
