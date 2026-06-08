@@ -54,11 +54,11 @@ const nav = [
         <span class="onb-mark" set:html={MARK} /><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
       </a>
       <div class="topbar-right">
+        <span class="ro-badge" title="Read-only console — Tasca is in read-only mode today; agent and task actions arrive with the write API">Read-only</span>
         <span class="theme-seg" role="group" aria-label="Theme">
-          <button data-t="dark" type="button" aria-label="Dark theme">Dark</button>
-          <button data-t="light" type="button" aria-label="Light theme">Light</button>
+          <button data-t="dark" type="button" aria-label="Dark theme" aria-pressed="true">Dark</button>
+          <button data-t="light" type="button" aria-label="Light theme" aria-pressed="false">Light</button>
         </span>
-        <span class="icon-btn" id="topbar-user" aria-hidden="true" set:html={I.kebab} />
       </div>
     </header>
     <div class="app-body">
@@ -78,7 +78,11 @@ const nav = [
   <script>
     function syncTheme(t: string) {
       document.documentElement.setAttribute('data-theme', t);
-      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => {
+        const on = b.dataset.t === t;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
     }
     let t = 'dark';
     try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}

@@ -125,3 +125,34 @@ export function money(v: number | null): string {
 }
 
 export const agentVendor = (a: Agent): Vendor | string => a.vendor;
+
+// ── read-only controls ────────────────────────────────────────────────────────
+// Tasca is a READ-ONLY console today. Every mutating control renders through this
+// one helper so the story is coherent (not stray "Coming soon" labels): a visible,
+// clearly-disabled button with a consistent affordance and an HONEST reason. Two
+// honest categories:
+//   - default ("soon")  — the action ships with the write API (not yet built).
+//   - gated             — blocked by a specific decision/operator step today; pass
+//                         the reason so the tooltip + a11y label say so plainly.
+export const RO_SOON = 'Read-only console — this action arrives with the write API';
+/** Provisioning an agent identity is an operator-run step today (the provisioning
+ *  CLI + a platform machine account), not a one-click UI action yet. */
+export const RO_GATE_PROVISION = 'Agent provisioning is operator-run today';
+/** Connecting/repairing a platform involves an OAuth / App-install step run by an
+ *  operator today; the in-app setup flow is not enabled yet. */
+export const RO_GATE_SETUP = 'Platform setup is operator-run today';
+
+/** Render a mutating control in the read-only console: visible-but-disabled, with a
+ *  consistent class hook (`.ro-ctl` + `data-ro`) and an honest reason surfaced to
+ *  both sighted users (title) and assistive tech (aria-label). `cls` is the full
+ *  base class list so each call keeps its existing styling (ictl / btn-add / …). */
+export function roControl(
+  label: string,
+  opts: { icon?: string; cls?: string; gate?: string } = {}
+): string {
+  const reason = opts.gate ?? RO_SOON;
+  const cls = `${opts.cls ?? 'ictl'} ro-ctl`;
+  const kind = opts.gate ? 'gated' : 'soon';
+  const body = `${opts.icon ? opts.icon + ' ' : ''}${esc(label)}`;
+  return `<button class="${cls}" type="button" disabled aria-disabled="true" data-ro="${kind}" aria-label="${esc(label)} — ${esc(reason)}" title="${esc(reason)}">${body}</button>`;
+}

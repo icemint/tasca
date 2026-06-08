@@ -6,7 +6,7 @@
 import { getTask } from '../api';
 import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, tierTag, taskRef, platTag, esc } from '../ui';
+import { I, tierTag, taskRef, platTag, esc, roControl } from '../ui';
 import type { PullRequest, RoutingCandidate, RoutingDecision, TaskDetail } from '../contract';
 
 function candidate(c: RoutingCandidate, rank: number, winner: string | null): string {
@@ -62,8 +62,8 @@ export async function loadTask(): Promise<LoadResult> {
             <div class="vh-meta"><span class="mono dim">${t.repoRef ? esc(t.repoRef) : '—'}</span><span class="branch-tag">${esc(t.status)}</span>${t.claimedBy ? `<span class="mono dim">claimed by ${esc(t.claimedBy)}</span>` : ''}</div>
           </div></div>
           <div class="vh-actions">
-            <button class="ictl" disabled aria-disabled="true" title="Coming soon">Reassign</button>
-            <button class="ictl amber" disabled aria-disabled="true" title="Coming soon">Escalate</button>
+            ${roControl('Reassign')}
+            ${roControl('Escalate', { cls: 'ictl amber' })}
           </div>
         </div></div>`;
 

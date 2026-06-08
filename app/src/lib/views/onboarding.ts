@@ -5,7 +5,7 @@
 
 import { getConnections } from '../api';
 import { fromResult, type LoadResult } from '../mount';
-import { I, PLATFORM_LABEL, esc } from '../ui';
+import { I, PLATFORM_LABEL, esc, roControl, RO_GATE_SETUP } from '../ui';
 import type { ConnectionPlatform, Platform } from '../contract';
 
 const PLATFORMS: Platform[] = ['shortcut', 'github', 'linear'];
@@ -19,8 +19,8 @@ function platRow(platform: Platform, connected: ConnectionPlatform | undefined):
       <div class="onb-plat-s">${done ? `Connected · ${esc(connected!.workspaceId || 'workspace')}` : 'Not connected yet'}</div>
     </div>
     ${done
-      ? `<span class="onb-check">${I.chevron}</span>`
-      : `<button class="ictl signal is-disabled" disabled aria-disabled="true" title="Coming soon">Connect</button>`}
+      ? `<span class="onb-check" role="img" aria-label="Connected">${I.chevron}</span>`
+      : roControl('Connect', { cls: 'ictl signal', gate: RO_GATE_SETUP })}
   </div>`;
 }
 
@@ -47,8 +47,8 @@ export async function loadOnboarding(): Promise<LoadResult> {
       <div class="conn-sec-h" style="margin-top:30px"><span class="csh-t">Connect a platform</span></div>
       ${platlist}
       <div class="onb-nav">
-        <span class="mono dim">Actions unlock as setup is enabled for your workspace.</span>
-        <button class="btn-add lg is-disabled" disabled aria-disabled="true" title="Coming soon">Continue ${I.arrow}</button>
+        <span class="mono dim">This is a read-only preview. Setup actions are operator-run today.</span>
+        ${roControl('Continue', { cls: 'btn-add lg', gate: RO_GATE_SETUP })}
       </div>
     </div>`;
     return { kind: 'ok', html };

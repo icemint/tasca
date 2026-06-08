@@ -6,7 +6,7 @@
 import { getConnections } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, PLATFORM_LABEL, esc } from '../ui';
+import { I, PLATFORM_LABEL, esc, roControl, RO_GATE_SETUP } from '../ui';
 import type { ConnectionPlatform } from '../contract';
 
 const HEALTH_CLASS: Record<ConnectionPlatform['health'], string> = {
@@ -50,7 +50,7 @@ function card(c: ConnectionPlatform): string {
     </div>
     <div class="conn-foot">
       <span class="mono dim">Read-only</span>
-      <div class="conn-actions"><button class="ictl" disabled aria-disabled="true" title="Coming soon">Manage</button><button class="ictl signal" disabled aria-disabled="true" title="Coming soon">Repair</button></div>
+      <div class="conn-actions">${roControl('Manage', { gate: RO_GATE_SETUP })}${roControl('Repair', { cls: 'ictl signal', gate: RO_GATE_SETUP })}</div>
     </div>
   </div>`;
 }

@@ -52,3 +52,31 @@ jobs:
         run: pnpm -r typecheck
       - name: Test (incl. Postgres CAS proof)
         run: pnpm test
+
+  app:
+    name: app (typecheck + test + build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      # The app is a standalone package (its own lockfile, NOT a workspace member),
+      # so install/typecheck/test/build run in app/ with --ignore-workspace.
+      - name: Install
+        working-directory: app
+        run: pnpm install --frozen-lockfile --ignore-workspace
+      - name: Typecheck
+        working-directory: app
+        run: pnpm typecheck
+      - name: Test
+        working-directory: app
+        run: pnpm test
+      - name: Build
+        working-directory: app
+        run: pnpm build

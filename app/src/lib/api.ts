@@ -18,7 +18,6 @@ import type {
   Agent,
   AgentDetail,
   ConnectionsResponse,
-  RoutingDecision,
   SessionResponse,
   TaskDetail,
   TaskSummary,
@@ -102,6 +101,4 @@ export const getTasks = (params?: { status?: string; limit?: number }) => {
   return get<TaskSummary[]>(`/api/tasks${qs ? `?${qs}` : ''}`);
 };
 export const getTask = (id: string) => get<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`);
-export const getRoutingDecisions = (limit?: number) =>
-  get<RoutingDecision[]>(`/api/routing-decisions${limit !== undefined ? `?limit=${limit}` : ''}`);
 export const getConnections = () => get<ConnectionsResponse>('/api/connections');

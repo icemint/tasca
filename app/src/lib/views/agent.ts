@@ -7,7 +7,7 @@ import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
 import {
   I, avatar, vendorChip, statePill, tierRamp, tierTag, pct, money, taskRef,
-  PLATFORM_LABEL, esc,
+  PLATFORM_LABEL, esc, roControl, RO_GATE_PROVISION,
 } from '../ui';
 import type { AgentDetail, Binding, TaskSummary } from '../contract';
 
@@ -38,7 +38,7 @@ function currentWork(a: AgentDetail): string {
     return `<div class="pcard"><div class="pc-h">Current work</div>
       <div class="work-empty"><div class="we-ico">${I.roster}</div><div><div class="we-t">Idle · available to route</div>
         <div class="we-s">No active task. The routing engine assigns work matching this agent's profile.</div></div>
-        <button class="ictl signal" disabled aria-disabled="true" title="Coming soon">${I.plus} Assign a task</button></div></div>`;
+        ${roControl('Assign a task', { icon: I.plus, cls: 'ictl signal' })}</div></div>`;
   }
   return `<div class="pcard">
     <div class="pc-h">Current work <span class="pc-h-r">${statePill(a.state)}</span></div>
@@ -48,9 +48,9 @@ function currentWork(a: AgentDetail): string {
       <div class="tc-meta"><a class="ictl" href="/tasks?id=${encodeURIComponent(a.currentTaskId)}">Inspect routing ${I.arrow}</a></div>
     </div>
     <div class="ictl-row">
-      <button class="ictl" disabled aria-disabled="true" title="Coming soon">Interrupt</button>
-      <button class="ictl" disabled aria-disabled="true" title="Coming soon">Reassign</button>
-      <button class="ictl" disabled aria-disabled="true" title="Coming soon">Escalate</button>
+      ${roControl('Interrupt')}
+      ${roControl('Reassign')}
+      ${roControl('Escalate')}
     </div></div>`;
 }
 
@@ -84,9 +84,9 @@ export async function loadAgent(): Promise<LoadResult> {
             <div><div class="vh-name">${esc(a.name)}</div>
               <div class="vh-meta">${vendorChip(a.vendor)}<span class="mono dim">${esc(a.model)}</span>${statePill(a.state)}</div></div></div>
           <div class="vh-actions">
-            <button class="ictl" disabled aria-disabled="true" title="Coming soon">${I.pause} Pause</button>
-            <button class="ictl" disabled aria-disabled="true" title="Coming soon">Edit profile</button>
-            <button class="ictl" disabled aria-disabled="true" title="Coming soon">Deploy</button>
+            ${roControl('Pause', { icon: I.pause })}
+            ${roControl('Edit profile')}
+            ${roControl('Deploy', { gate: RO_GATE_PROVISION })}
           </div>
         </div></div>`;
 

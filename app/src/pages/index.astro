@@ -30,9 +30,9 @@ import { MARK, GITHUB, GOOGLE } from '../lib/icons';
       <a class="onb-brand" href="https://tasca.dev" aria-label="Tasca home">
         <span class="onb-mark" set:html={MARK} /><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
       </a>
-      <span class="theme-seg onb-theme">
-        <button data-t="dark" type="button" aria-label="Dark theme">Dark</button>
-        <button data-t="light" type="button" aria-label="Light theme">Light</button>
+      <span class="theme-seg onb-theme" role="group" aria-label="Theme">
+        <button data-t="dark" type="button" aria-label="Dark theme" aria-pressed="true">Dark</button>
+        <button data-t="light" type="button" aria-label="Light theme" aria-pressed="false">Light</button>
       </span>
     </div>
     <div class="onb-content">
@@ -73,7 +73,11 @@ import { MARK, GITHUB, GOOGLE } from '../lib/icons';
 
     function syncTheme(t: string) {
       document.documentElement.setAttribute('data-theme', t);
-      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => {
+        const on = b.dataset.t === t;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
     }
     let t = 'dark';
     try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}

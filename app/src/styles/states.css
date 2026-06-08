@@ -43,3 +43,24 @@
 .theme-switch button svg { width: 15px; height: 15px; }
 .theme-switch button[aria-pressed="true"] { color: var(--fg); background: var(--surface-3); }
 .theme-switch button:hover { color: var(--fg-2); }
+
+/* ── Read-only console affordance ──────────────────────────────────────────────
+   Tasca is a read-only console today. The topbar badge declares the stance once;
+   every mutating control routes through .ro-ctl (see ui.roControl) so the disabled
+   state reads as INTENTIONAL, not unfinished — the honest reason rides in the
+   title + aria-label. */
+.ro-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.02em;
+  color: var(--fg-4); background: var(--surface-2);
+  border: 1px dashed var(--line-2); border-radius: 999px; padding: 3px 10px; cursor: default;
+}
+.ro-badge::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--amber); opacity: 0.8;
+}
+/* Dim every read-only control so the disabled state reads as intentional — there's
+   no global :disabled rule, and bright bases (.btn-add = signal blue) otherwise look
+   clickable. Replaces the per-button .is-disabled the onboarding buttons used to carry. */
+.ro-ctl { cursor: not-allowed; opacity: var(--op-disabled); pointer-events: none; }
+.head-actions { display: inline-flex; align-items: center; gap: 10px; }

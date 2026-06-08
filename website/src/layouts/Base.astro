@@ -59,9 +59,11 @@ const ogUrl = new URL(ogImage, Astro.site);
   <script>
     function syncTheme(t: string) {
       document.documentElement.setAttribute('data-theme', t);
-      document.querySelectorAll<HTMLButtonElement>('.mtheme button').forEach((b) =>
-        b.classList.toggle('on', b.dataset.t === t)
-      );
+      document.querySelectorAll<HTMLButtonElement>('.mtheme button').forEach((b) => {
+        const on = b.dataset.t === t;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
     }
     let t = 'dark';
     try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}
