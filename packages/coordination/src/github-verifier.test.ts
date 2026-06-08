@@ -61,6 +61,18 @@ describe('githubVerifier.parse (intake diagnostic)', () => {
     expect(lines[0]!.context).toMatchObject({ action: 'opened', matched: 0 });
   });
 
+  it('an unassigned action (top-level assignee present, action≠assigned) yields no events and does NOT report assigneeInSet:true', () => {
+    // GitHub sends a top-level `assignee` on `unassigned` too; the diagnostic must
+    // not read as "in set but matched:0" — assigneeInSet/assigneeId are scoped to
+    // the `assigned` action so the action gate is the unambiguous reason.
+    const { logger, lines } = recordingLogger();
+    const events = githubVerifier(SECRET, REGISTERED, logger).parse(
+      verified({ action: 'unassigned', repository: REPO, issue: { number: 7 }, assignee: { id: 291630881, login: 'tasca-elvis' } })
+    );
+    expect(events).toEqual([]);
+    expect(lines[0]!.context).toMatchObject({ action: 'unassigned', assigneeId: null, assigneeInSet: null, matched: 0 });
+  });
+
   it('logs registeredCount so an empty roster is distinguishable', () => {
     const { logger, lines } = recordingLogger();
     githubVerifier(SECRET, new Set(), logger).parse(
