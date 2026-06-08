@@ -1,3 +1,9 @@
 // @tasca/db — Postgres (coordination store). Stage-1 slice: the claim CAS.
-export { PgClaimRepository } from './claim-repo';
-export { TASK_TABLE_DDL } from './schema';
+export { PgClaimRepository, type Queryable } from './claim-repo';
+export { TASK_TABLE_DDL, DISPATCH_JOB_DDL } from './schema';
+export {
+  PgDispatchQueue,
+  type DispatchQueue,
+  type DispatchJob,
+  type DispatchJobInput,
+} from './dispatch-queue';
