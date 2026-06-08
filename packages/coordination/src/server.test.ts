@@ -67,6 +67,9 @@ class CountingStore implements CoordinationStore {
   async recordFailureAndTransition(_id: string, threshold: number) {
     return { failureCount: 1, tripped: 1 >= threshold };
   }
+  async recordRunnerFailure(_id: string, threshold: number) {
+    return { acted: true, failureCount: 1, tripped: 1 >= threshold };
+  }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
   async escalateTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }

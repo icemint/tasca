@@ -93,6 +93,14 @@ class FakeStore implements CoordinationStore {
     t.version += 1;
     return { failureCount: t.failureCount, tripped };
   }
+  async recordRunnerFailure(taskId: string, breakerThreshold: number) {
+    const t = this.tasks.get(taskId)!;
+    if (t.status !== 'executing' && t.status !== 'claimed') {
+      return { acted: false, failureCount: t.failureCount, tripped: false };
+    }
+    const r = await this.recordFailureAndTransition(taskId, breakerThreshold);
+    return { acted: true, ...r };
+  }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() {
     return null;

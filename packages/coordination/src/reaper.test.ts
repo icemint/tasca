@@ -67,6 +67,10 @@ function fakeStore(over: Partial<CoordinationStore> = {}): { store: Coordination
       calls.failures.push(taskId);
       return { failureCount: 1, tripped: false };
     },
+    async recordRunnerFailure(taskId: string) {
+      calls.failures.push(taskId);
+      return { acted: true, failureCount: 1, tripped: false };
+    },
     async setStatus(taskId: string, status: string) {
       calls.setStatus.push([taskId, status]);
     },
@@ -106,18 +110,19 @@ describe('makeReaper — finalizes runner-completed jobs from the coordination s
     expect(reaped).toEqual(['job-1']); // deleted after finalize
   });
 
-  it('IDEMPOTENT: a DONE job whose PR is already recorded does NOT record a second one (re-tick safe)', async () => {
+  it('IDEMPOTENT: a re-finalized DONE job does NOT re-record the PR nor re-post the customer status', async () => {
     const { queue, reaped } = fakeQueue({ finished: [doneJob()] });
     const { store, calls } = fakeStore({
       async listPullRequestsForTask() {
         return [{ url: 'https://github.com/acme/widgets/pull/7' }] as never;
       },
     });
-    const { deps } = baseDeps(queue, store);
+    const { deps, status } = baseDeps(queue, store);
 
     await makeReaper(deps).tick();
 
     expect(calls.recordedPrs).toEqual([]); // not re-recorded
+    expect(status.posts).toHaveLength(0); // NO duplicate 'PR opened' to the customer
     expect(calls.setStatus).toContainEqual(['task-1', 'in_review']); // still (re)advances
     expect(reaped).toEqual(['job-1']);
   });
@@ -162,16 +167,33 @@ describe('makeReaper — finalizes runner-completed jobs from the coordination s
     expect(reaped).toEqual([]); // NOT deleted — left for retry, never lost
   });
 
-  it('a DONE job with no PR url is reaped without finalizing (anomaly, not an infinite re-lease)', async () => {
+  it('a DONE job with no PR url drives the failure path (no strand in executing), then reaps', async () => {
     const { queue, reaped } = fakeQueue({ finished: [doneJob({ result: {} })] });
     const { store, calls } = fakeStore();
-    const { deps } = baseDeps(queue, store);
+    const { deps, audits } = baseDeps(queue, store);
 
     const res = await makeReaper(deps).tick();
 
     expect(res.finalizedDone).toBe(1);
     expect(calls.recordedPrs).toEqual([]); // nothing to record
-    expect(calls.setStatus).toEqual([]); // finalize skipped
-    expect(reaped).toEqual(['job-1']); // still reaped (no infinite re-lease)
+    expect(calls.failures).toEqual(['task-1']); // breaker driven so the task can't wedge
+    expect(audits.map((a) => a.action)).toContain('task.failed');
+    expect(reaped).toEqual(['job-1']); // reaped (no infinite re-lease)
+  });
+
+  it('IDEMPOTENT: a re-finalized FAILED job (acted=false) does NOT re-count the breaker or re-audit', async () => {
+    const { queue, reaped } = fakeQueue({ finished: [failedJob()] });
+    const { store } = fakeStore({
+      async recordRunnerFailure() {
+        return { acted: false, failureCount: 0, tripped: false }; // already finalized
+      },
+    });
+    const { deps, audits } = baseDeps(queue, store);
+
+    const res = await makeReaper(deps).tick();
+
+    expect(res.finalizedFailed).toBe(1);
+    expect(audits.map((a) => a.action)).not.toContain('task.failed'); // no duplicate audit
+    expect(reaped).toEqual(['job-2']); // still reaped
   });
 });

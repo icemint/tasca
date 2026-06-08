@@ -104,8 +104,9 @@ export interface DispatchQueue {
    * Sweep expired-lease claims (a runner claimed then died): requeue those under
    * `maxAttempts` for another runner, but FAIL OVER those at/over the cap to `failed`
    * (so the reaper drives the task's breaker instead of re-dispatching forever). This
-   * is the runner-path equivalent of the in-process fallback — a dead runner can't
-   * stall its task indefinitely. Returns the split of reclaimed vs failed-over.
+   * bounds REPEATED claim-then-die — it does not (and cannot) un-stall a job requeued
+   * to a fleet with no live runner (no consumer ⇒ no progress; the reaper logs the
+   * sweep so that's observable). Returns the split of reclaimed vs failed-over.
    */
   sweepExpired(maxAttempts: number): Promise<SweepResult>;
   /**

@@ -5,9 +5,11 @@
 // radius to the queue. The reaper closes the loop from this side:
 //
 //   sweepExpired  — a runner that claimed then DIED leaves an expired lease; requeue it
-//                   for another runner, or fail it over at the attempts cap so a dead
-//                   runner can't stall its task forever (the runner-path equivalent of
-//                   the in-process fallback).
+//                   for another runner, or fail it over at the attempts cap so REPEATED
+//                   claim-then-die can't stall a task (the runner-path equivalent of the
+//                   in-process fallback). It does NOT cover a permanently empty fleet —
+//                   a requeued job with no consumer is an inherent pull-queue property,
+//                   surfaced via a sweep log rather than silently stalled.
 //   claimFinished — lease terminal jobs to THIS reaper, then finalize per their status:
 //                     done   → record the PR + status-back + advance task to in_review
 //                     failed → drive the task breaker (recordFailureAndTransition)
@@ -78,29 +80,38 @@ export function makeReaper(deps: ReaperDeps): Reaper {
     const prUrl = typeof job.result?.['prUrl'] === 'string' ? (job.result['prUrl'] as string) : null;
     if (!prUrl) {
       // A `done` job with no PR url is anomalous (the runner reports one on success).
-      // Finalize can't record a PR it doesn't have; reap it with a loud log rather than
-      // re-leasing it forever. The task's status reconciles on a later delivery.
-      deps.logger?.error('reaper: done job has no PR url; reaping without finalize', { jobId: job.id, taskId: job.taskId });
+      // Don't silently reap into a task stranded at `executing` — drive the breaker so
+      // it re-routes (below threshold) or escalates to needs_attention (a human looks).
+      deps.logger?.error('reaper: done job has no PR url; driving the failure path instead', { jobId: job.id, taskId: job.taskId });
+      await finalizeFailed(job);
       return;
     }
     const event = finalizeEvent(payload);
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : '(runner)';
     // Idempotency: if a PR is already recorded for this task (a prior tick finalized,
-    // or the in-process path did), DON'T record a second one — just (re)advance status.
+    // or the in-process path did), DON'T record a second one, and SUPPRESS the customer
+    // status-post (firstFinalize=false) — only reconcile the task status.
     const existing = await deps.store.listPullRequestsForTask(job.taskId);
-    if (existing.length === 0) {
+    const firstFinalize = existing.length === 0;
+    if (firstFinalize) {
       await deps.store.recordPullRequest({ taskId: job.taskId, url: prUrl });
     }
     const principalId = await deps.principalIdFor(agentId);
-    await finalizeDispatch(finalizeDeps, job.taskId, event, agentId, principalId, prUrl);
+    await finalizeDispatch(finalizeDeps, job.taskId, event, agentId, principalId, prUrl, firstFinalize);
   }
 
   async function finalizeFailed(job: FinishedJob): Promise<void> {
     const payload = job.payload as Partial<DispatchPayload>;
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : '(runner)';
-    // Drive the SAME breaker the in-process catch uses: increment failure + transition
-    // (below threshold → routable for a re-drive; at/over → needs_attention) atomically.
-    const { failureCount, tripped } = await deps.store.recordFailureAndTransition(job.taskId, breakerThreshold);
+    // Drive the breaker — but IDEMPOTENTLY: recordRunnerFailure only acts while the task
+    // is still in a live post-claim state, so a re-leased job (crash / failed markReaped)
+    // can't double-count the breaker (→ premature needs_attention). acted=false = already
+    // finalized; skip the audit so it isn't duplicated either.
+    const { acted, failureCount, tripped } = await deps.store.recordRunnerFailure(job.taskId, breakerThreshold);
+    if (!acted) {
+      deps.logger?.info?.('reaper: failed job already finalized (idempotent no-op)', { jobId: job.id, taskId: job.taskId });
+      return;
+    }
     const principalId = await deps.principalIdFor(agentId);
     if (principalId) {
       await deps.audit
@@ -121,10 +132,17 @@ export function makeReaper(deps: ReaperDeps): Reaper {
     const result: ReapResult = { finalizedDone: 0, finalizedFailed: 0, reclaimed: 0, failedOver: 0 };
 
     // 1. Recover dead-runner claims first, so their fail-overs surface as `failed` jobs
-    //    this same tick's finalize pass can pick up.
+    //    this same tick's finalize pass can pick up. NOTE: this bounds repeated
+    //    claim-then-die (failover at the attempts cap). It does NOT cover a job requeued
+    //    to `queued` while ALL runners are permanently absent — that's an inherent
+    //    pull-queue property (no consumer ⇒ no progress); surfacing it is logged here so
+    //    a dead fleet is observable rather than a silent stall.
     const swept = await deps.queue.sweepExpired(maxAttempts);
     result.reclaimed = swept.reclaimed;
     result.failedOver = swept.failedOver;
+    if (swept.reclaimed > 0 || swept.failedOver > 0) {
+      deps.logger?.info?.('reaper: swept dead-runner claims', { reclaimed: swept.reclaimed, failedOver: swept.failedOver });
+    }
 
     // 2. Finalize a batch of terminal jobs. Each is independent: a throw on one leaves
     //    it un-reaped (its lease lapses → re-selected next tick) without blocking others.

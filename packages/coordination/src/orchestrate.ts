@@ -630,7 +630,12 @@ export async function finalizeDispatch(
   event: FinalizeEvent,
   agentId: string,
   principalId: string | null,
-  prUrl: string
+  prUrl: string,
+  // The CUSTOMER-FACING post + its audits must fire at most once. The reaper finalizes
+  // at-least-once (a job can be re-leased after a crash / failed markReaped), so it
+  // passes false on a re-finalize (PR already recorded) to suppress a duplicate
+  // 'PR opened' comment. In-process callers (single finalize) keep the default true.
+  firstFinalize = true
 ): Promise<void> {
   const safe = async (step: string, fn: () => Promise<void>): Promise<void> => {
     try {
@@ -645,27 +650,34 @@ export async function finalizeDispatch(
     }
   };
 
-  await safe('audit.pr.create', () =>
-    audit(deps, principalId, agentId, event, { action: 'pr.create', target: taskId, payload: { url: prUrl } })
-  );
-  await safe('status.post', () =>
-    deps.status.postStatus({
-      platform: event.platform,
-      externalStoryId: event.externalStoryId,
-      agentId,
-      state: 'in_review',
-      comment: 'PR opened',
-      prUrl,
-    })
-  );
+  // setStatus is idempotent (in_review→in_review is rejected + swallowed), so it always
+  // runs to reconcile a left-behind 'executing'. The post + audits are additive
+  // (a second 'PR opened' comment hits the customer), so they're gated on first finalize.
+  if (firstFinalize) {
+    await safe('audit.pr.create', () =>
+      audit(deps, principalId, agentId, event, { action: 'pr.create', target: taskId, payload: { url: prUrl } })
+    );
+    await safe('status.post', () =>
+      deps.status.postStatus({
+        platform: event.platform,
+        externalStoryId: event.externalStoryId,
+        agentId,
+        state: 'in_review',
+        comment: 'PR opened',
+        prUrl,
+      })
+    );
+  }
   await safe('set.in_review', () => deps.store.setStatus(taskId, 'in_review'));
-  await safe('audit.status.post', () =>
-    audit(deps, principalId, agentId, event, {
-      action: 'status.post',
-      target: taskId,
-      payload: { state: 'in_review', prUrl },
-    })
-  );
+  if (firstFinalize) {
+    await safe('audit.status.post', () =>
+      audit(deps, principalId, agentId, event, {
+        action: 'status.post',
+        target: taskId,
+        payload: { state: 'in_review', prUrl },
+      })
+    );
+  }
 }
 
 /** Best-effort audit append — skipped (not failed) when no principal resolves. */
