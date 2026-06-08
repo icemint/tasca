@@ -30,6 +30,25 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/agent-runner:
+    dependencies:
+      '@tasca/broker':
+        specifier: workspace:*
+        version: link:../broker
+      '@tasca/db':
+        specifier: workspace:*
+        version: link:../db
+      pg:
+        specifier: ^8.13.1
+        version: 8.21.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.0
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
+
   packages/auth:
     dependencies:
       pg:
