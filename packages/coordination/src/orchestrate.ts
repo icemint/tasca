@@ -82,6 +82,9 @@ export interface ProvisionedRepo {
  */
 export interface RepoProvisioner {
   ensureLocalRepo(repoRef: string): Promise<ProvisionedRepo>;
+  /** A current installation token for the repo's owner — used to auth `gh pr create`
+   *  (the worktree origin authenticates the git push, but gh needs its own token). */
+  tokenForRepo(repoRef: string): Promise<string>;
 }
 
 export interface OrchestrationDeps {
@@ -331,11 +334,18 @@ export async function orchestrateTaskAssigned(
     // re-drive ever reaches openPr again (e.g. recordPullRequest failed to commit
     // before the row landed), it pushes to the SAME head and `gh pr create` returns
     // the existing PR instead of opening a second one on the customer repo.
+    // `gh pr create` (inside openPr) needs its own token — the worktree origin
+    // authenticates the git push, but gh doesn't read that. Obtain a current
+    // installation token for the owner (the App client returns its cached one while
+    // still valid); absent provisioner → gh falls back to ambient auth.
+    const prToken =
+      repoRef && deps.provisioner ? await deps.provisioner.tokenForRepo(repoRef) : undefined;
     const pr = await deps.execution.openPr({
       cwd: worktree.path,
       branch: worktree.branch,
       headBranch: deterministicHeadBranch(event.externalStoryId),
       title: `Tasca: ${event.externalStoryId}`,
+      ...(prToken ? { token: prToken } : {}),
     });
     await deps.store.recordPullRequest({ taskId: task.id, url: pr.url });
 

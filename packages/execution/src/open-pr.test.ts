@@ -151,3 +151,50 @@ describe('openPr', () => {
     expect(await openPr(input, exec)).toEqual({ url: PR1 });
   });
 });
+
+describe('openPr — gh auth token (GH_TOKEN)', () => {
+  type Call = { file: string; args: string[]; env?: NodeJS.ProcessEnv | undefined };
+  function capturingExec(calls: Call[], opts: { createAlreadyExists?: boolean } = {}): ExecFn {
+    return async (file, args, execOpts) => {
+      calls.push({ file, args, env: execOpts.env });
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'create') {
+        if (opts.createAlreadyExists) {
+          throw Object.assign(new Error('exists'), { stderr: 'already exists' });
+        }
+        return { stdout: `${PR1}\n`, stderr: '' };
+      }
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+        return { stdout: `${PR1}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+  }
+
+  it('passes the token to gh as GH_TOKEN, but NOT to git push (push uses origin)', async () => {
+    const calls: Call[] = [];
+    const res = await openPr({ ...input, token: 'ghs_install_token' }, capturingExec(calls));
+    expect(res).toEqual({ url: PR1 });
+    expect(calls.find((c) => c.file === 'gh')?.env?.GH_TOKEN).toBe('ghs_install_token');
+    expect(calls.find((c) => c.file === 'git')?.env).toBeUndefined();
+  });
+
+  it('threads the token to the idempotency fallback (gh pr list) on "already exists"', async () => {
+    // The re-drive / idempotent path is the whole reason this change exists, so the
+    // fallback's gh pr list MUST also be authenticated.
+    const calls: Call[] = [];
+    const res = await openPr(
+      { ...input, token: 'ghs_install_token' },
+      capturingExec(calls, { createAlreadyExists: true })
+    );
+    expect(res).toEqual({ url: PR1 });
+    const listCall = calls.find((c) => c.file === 'gh' && c.args[1] === 'list');
+    expect(listCall, 'the idempotency fallback should run').toBeDefined();
+    expect(listCall?.env?.GH_TOKEN).toBe('ghs_install_token');
+  });
+
+  it('omits GH_TOKEN when no token is given (ambient gh auth)', async () => {
+    const calls: Call[] = [];
+    await openPr(input, capturingExec(calls));
+    expect(calls.find((c) => c.file === 'gh')?.env).toBeUndefined();
+  });
+});
