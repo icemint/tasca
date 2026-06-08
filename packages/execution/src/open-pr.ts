@@ -31,6 +31,21 @@ export type ExecFn = (
 
 const PR_URL_RE = /https?:\/\/\S+/;
 
+// Authenticate the `git push` against github.com via an http.extraheader injected
+// through env, never argv — the worktree origin is now TOKENLESS (the provisioner
+// no longer persists a credential into .git/config, so the agent can't read one),
+// so the push has no stored credential to use. GIT_CONFIG_* applies the header to
+// this one child only. Kept local (the @tasca/coordination helper is the same shape,
+// but execution must NOT import @tasca packages — port.ts §1.3 boundary).
+function gitAuthEnv(token: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from('x-access-token:' + token).toString('base64')}`,
+  };
+}
+
 // Branch/remote names are derived from task labels (port.ts) — i.e. influenced
 // input. execFile already defeats shell injection, but git/gh still parse argv:
 // a value starting with '-' would be read as an OPTION (--exec=, --receive-pack=).
@@ -53,14 +68,20 @@ export async function openPr(input: OpenPrInput, exec: ExecFn = execFileAsync): 
   assertSafeRef('remote', remote);
   if (input.base) assertSafeRef('base', input.base);
 
-  // 1. Push the local branch to the (possibly deterministic) head ref. `--force`
-  //    so a re-drive's diverged commits update the SAME head (and thus the same
-  //    PR) rather than being rejected or opening a second PR. `--` terminates
-  //    option parsing so the validated refs can never be treated as flags. The
-  //    refspec `branch:head` is built from two separately-validated refs.
+  // 1. Push the local branch to the (possibly deterministic) head ref, auth'd via
+  //    env-auth (input.token) since the worktree origin is tokenless. `--force` so a
+  //    re-drive's diverged commits update the SAME head (and thus the same PR)
+  //    rather than being rejected or opening a second PR. `--` terminates option
+  //    parsing so the validated refs can never be treated as flags. The refspec
+  //    `branch:head` is built from two separately-validated refs.
   const refspec = head === branch ? branch : `${branch}:${head}`;
+  // The push authenticates via env-auth when a token is given (the origin is
+  // tokenless); the token never appears in argv. Absent → ambient origin auth.
+  const pushOpts: { cwd: string; env?: NodeJS.ProcessEnv } = input.token
+    ? { cwd, env: gitAuthEnv(input.token) }
+    : { cwd };
   try {
-    await exec('git', ['push', '--force', '--set-upstream', '--', remote, refspec], { cwd });
+    await exec('git', ['push', '--force', '--set-upstream', '--', remote, refspec], pushOpts);
   } catch (err) {
     throw new ExecutionError('push', `open-pr: git push failed: ${errText(err).trim()}`, {
       cause: err,

@@ -253,10 +253,11 @@ async function main(): Promise<void> {
 
     // Clone-on-dispatch: a github event's repoHint is an `owner/repo` slug, not a
     // local path. The provisioner mints an installation token (via appClient + the
-    // install→owner mapping in store) and clones/fetches into reposDir so
-    // reserveWorktree has a real local repo. Only wired with App env present.
-    // The clone's origin holds a (short-lived) installation token in .git/config —
-    // the provisioner creates reposDir mode 0700, but in production set
+    // install→owner mapping in store) and clones/fetches into reposDir so it has a
+    // real local repo to take the task worktree from. Only wired with App env
+    // present. The token is supplied per-invocation via env-auth — it is NOT
+    // persisted into .git/config, so the agent's worktree carries no readable
+    // credential. The provisioner creates reposDir mode 0700; in production set
     // TASCA_REPOS_DIR to a dedicated private volume, not the shared tmp root.
     const reposDir = process.env.TASCA_REPOS_DIR ?? path.join(os.tmpdir(), 'tasca-repos');
     provisioner = new GitAppRepoProvisioner({ appClient, store, reposDir });

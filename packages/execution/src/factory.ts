@@ -100,6 +100,32 @@ export interface CreateExecutionOptions {
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+// SECURITY — agent env allowlist. The agent runs attacker-influenced (prompt-injected)
+// code with Bash inside its worktree; it must NEVER inherit the worker's secrets
+// (GITHUB_APP_PRIVATE_KEY, DATABASE_URL, SHORTCUT_*, GH_TOKEN, …). Passing the full
+// process.env would let a `printenv` exfil all of them. Instead the child env is
+// built from this strict allowlist of non-secret vars the CLI genuinely needs
+// (PATH/HOME for spawning, locale/TZ for correct output, and the Anthropic auth the
+// `claude` CLI itself reads). Operators can widen it via TASCA_AGENT_ENV_PASSTHROUGH
+// (comma-separated names). Caller-supplied input.env still wins (spread last).
+const AGENT_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TERM',
+  'LANG',
+  'LANGUAGE',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'TMPDIR',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CONFIG_DIR',
+];
+
 function defaultVendorRoot(): string {
   // src/factory.ts -> ../vendor/emdash
   return path.join(HERE, '..', 'vendor', 'emdash');
@@ -188,6 +214,20 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
         throw new ExecutionError('spawn', 'spawnAgent requires command or prompt');
       }
 
+      // Build the child env from the allowlist (NOT the full process.env), so no
+      // inherited worker secret reaches the prompt-injectable agent. Operators can
+      // extend it via TASCA_AGENT_ENV_PASSTHROUGH; caller-supplied input.env wins.
+      const passthrough = (process.env.TASCA_AGENT_ENV_PASSTHROUGH ?? '')
+        .split(',')
+        .map((n) => n.trim())
+        .filter((n) => n !== '');
+      const agentEnv: Record<string, string> = {};
+      for (const name of [...AGENT_ENV_ALLOWLIST, ...passthrough]) {
+        const value = process.env[name];
+        if (value !== undefined) agentEnv[name] = value;
+      }
+      Object.assign(agentEnv, input.env ?? {});
+
       let handle: VendorPtyHandle;
       try {
         // startLifecyclePty can throw SYNCHRONOUSLY (before any handle exists,
@@ -196,10 +236,7 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
           id: input.id,
           command,
           cwd: input.cwd,
-          // Merge over the parent env (PATH/HOME/...) per the ExecutionPort
-          // contract — passing only input.env strips PATH and breaks CLI spawns
-          // (exit 127, command not found).
-          env: { ...process.env, ...(input.env ?? {}) } as Record<string, string>,
+          env: agentEnv,
         });
       } catch (err) {
         throw new ExecutionError('spawn', `spawnAgent failed for ${input.id}: ${errMessage(err)}`, {

@@ -170,12 +170,15 @@ describe('openPr — gh auth token (GH_TOKEN)', () => {
     };
   }
 
-  it('passes the token to gh as GH_TOKEN, but NOT to git push (push uses origin)', async () => {
+  it('passes the token to gh as GH_TOKEN and to git push as env-auth (no GH_TOKEN on push)', async () => {
     const calls: Call[] = [];
     const res = await openPr({ ...input, token: 'ghs_install_token' }, capturingExec(calls));
     expect(res).toEqual({ url: PR1 });
     expect(calls.find((c) => c.file === 'gh')?.env?.GH_TOKEN).toBe('ghs_install_token');
-    expect(calls.find((c) => c.file === 'git')?.env).toBeUndefined();
+    // The push authenticates via the http.extraheader env, NOT GH_TOKEN.
+    const push = calls.find((c) => c.file === 'git' && c.args[0] === 'push')!;
+    expect(push.env?.GIT_CONFIG_VALUE_0).toBeDefined();
+    expect(push.env?.GH_TOKEN).toBeUndefined();
   });
 
   it('threads the token to the idempotency fallback (gh pr list) on "already exists"', async () => {
@@ -196,5 +199,27 @@ describe('openPr — gh auth token (GH_TOKEN)', () => {
     const calls: Call[] = [];
     await openPr(input, capturingExec(calls));
     expect(calls.find((c) => c.file === 'gh')?.env).toBeUndefined();
+  });
+
+  it('authenticates the git PUSH via env-auth (extraheader), token never in argv', async () => {
+    // The worktree origin is tokenless, so the push must carry the credential via an
+    // http.extraheader injected through GIT_CONFIG_* — never as a CLI argument.
+    const calls: Call[] = [];
+    await openPr({ ...input, token: 'ghs_install_token' }, capturingExec(calls));
+    const push = calls.find((c) => c.file === 'git' && c.args[0] === 'push')!;
+    expect(push.env?.GIT_CONFIG_COUNT).toBe('1');
+    expect(push.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader');
+    expect(push.env?.GIT_CONFIG_VALUE_0).toBe(
+      `Authorization: Basic ${Buffer.from('x-access-token:ghs_install_token').toString('base64')}`
+    );
+    // The raw token must not appear in the push argv.
+    expect(push.args.join(' ')).not.toContain('ghs_install_token');
+  });
+
+  it('omits push env-auth when no token is given (ambient origin auth)', async () => {
+    const calls: Call[] = [];
+    await openPr(input, capturingExec(calls));
+    const push = calls.find((c) => c.file === 'git' && c.args[0] === 'push')!;
+    expect(push.env).toBeUndefined();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createExecution, commitAgentWorkImpl, type GitExecFn, type VendorServices } from './factory.js';
 import { ExecutionError } from './port.js';
 
@@ -272,6 +272,77 @@ describe('createExecution — typed error wrapping', () => {
     expect(() => port.spawnAgent(spawnInput('a'))).toThrow(ExecutionError);
     await expect(port.close()).resolves.toBeUndefined();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () => {
+  // The agent runs prompt-injectable code with Bash; it must never inherit the
+  // worker's secrets via the child env. These tests set fake secrets on the parent
+  // process.env, spawn, and assert they are absent from the captured child env.
+  const SAVED: Record<string, string | undefined> = {};
+  const setEnv = (name: string, value: string | undefined): void => {
+    if (!(name in SAVED)) SAVED[name] = process.env[name];
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+  afterEach(() => {
+    for (const [name, value] of Object.entries(SAVED)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    for (const key of Object.keys(SAVED)) delete SAVED[key];
+  });
+
+  function captureEnv(): { port: ReturnType<typeof createExecution>; envOf: () => Record<string, string> | undefined } {
+    let captured: Record<string, string> | undefined;
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: (opts) => {
+          captured = opts.env;
+          return fakePty().handle;
+        },
+      }),
+    });
+    return { port, envOf: () => captured };
+  }
+
+  it('omits inherited worker secrets but keeps PATH', () => {
+    setEnv('GITHUB_APP_PRIVATE_KEY', '-----BEGIN PRIVATE KEY-----');
+    setEnv('DATABASE_URL', 'postgres://secret@db/app');
+    setEnv('PATH', '/usr/bin:/bin');
+
+    const { port, envOf } = captureEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
+
+    const env = envOf()!;
+    expect(env.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.PATH).toBe('/usr/bin:/bin'); // non-secret essentials still flow
+  });
+
+  it('passes caller-supplied input.env through (it wins over the allowlist)', () => {
+    setEnv('PATH', '/usr/bin');
+    const { port, envOf } = captureEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi', env: { PATH: '/custom', EXTRA: 'v' } });
+
+    const env = envOf()!;
+    expect(env.PATH).toBe('/custom'); // caller override wins
+    expect(env.EXTRA).toBe('v');
+  });
+
+  it('TASCA_AGENT_ENV_PASSTHROUGH widens the allowlist to named vars', () => {
+    setEnv('TASCA_AGENT_ENV_PASSTHROUGH', 'MY_TOOL_HOME, OTHER_VAR');
+    setEnv('MY_TOOL_HOME', '/opt/tool');
+    setEnv('OTHER_VAR', 'x');
+    setEnv('STILL_SECRET', 'nope');
+
+    const { port, envOf } = captureEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
+
+    const env = envOf()!;
+    expect(env.MY_TOOL_HOME).toBe('/opt/tool');
+    expect(env.OTHER_VAR).toBe('x');
+    expect(env.STILL_SECRET).toBeUndefined(); // not listed → not passed
   });
 });
 

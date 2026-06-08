@@ -82,8 +82,19 @@ export interface ProvisionedRepo {
  */
 export interface RepoProvisioner {
   ensureLocalRepo(repoRef: string): Promise<ProvisionedRepo>;
+  /**
+   * Create an isolated worktree for one task off the provisioned local clone,
+   * returning its path + branch + base ref. The provisioner owns worktree creation
+   * (rather than ExecutionPort.reserveWorktree) because the clone's origin is
+   * tokenless — the vendored worktree path would `git fetch origin` + push, which a
+   * tokenless origin can't authenticate. Branches off `origin/<defaultBranch>`.
+   */
+  createWorktree(
+    repoRef: string,
+    taskLabel: string
+  ): Promise<{ path: string; branch: string; baseRef: string }>;
   /** A current installation token for the repo's owner — used to auth `gh pr create`
-   *  (the worktree origin authenticates the git push, but gh needs its own token). */
+   *  AND the env-auth'd `git push` in open-pr (the tokenless origin can't auth it). */
   tokenForRepo(repoRef: string): Promise<string>;
 }
 
@@ -249,30 +260,31 @@ export async function orchestrateTaskAssigned(
     // §6.9-13 — dispatch → worktree + agent → PR → status-back.
     await deps.store.setStatus(task.id, 'executing');
 
-    // Provision a local checkout for the worktree. A GitHub event's repoHint is an
-    // `owner/repo` slug, not a local path; the provisioner clones/fetches it (auth'd)
-    // and returns the path + default branch. We pass `origin/<defaultBranch>` as the
-    // worktree base ref so reserveWorktree branches off the freshly-fetched remote
-    // default — NOT via Emdash's per-project settings lookup, which the headless
-    // clone-on-dispatch flow never populates ("Project settings not found").
-    // No provisioner (or no repoRef) → use repoRef as-is, no base ref override.
-    let repoPath = '.';
+    // Provision a worktree for the agent run. A GitHub event's repoHint is an
+    // `owner/repo` slug, not a local path. With a provisioner we ensure the
+    // (tokenless-origin) local clone exists, then have the PROVISIONER create the
+    // worktree — NOT ExecutionPort.reserveWorktree, whose vendored path would
+    // `git fetch origin` + pushOnCreate against an origin we can no longer
+    // authenticate. The provisioner branches off `origin/<defaultBranch>` and
+    // returns that as the base ref. Without a provisioner (Stage-1 single-checkout /
+    // tests) we keep reserveWorktree, repoRef used as-is and no base-ref override.
+    let worktree: { path: string; branch: string };
     let baseRef: string | undefined;
-    if (repoRef) {
-      if (deps.provisioner) {
-        const provisioned = await deps.provisioner.ensureLocalRepo(repoRef);
-        repoPath = provisioned.path;
-        baseRef = `origin/${provisioned.defaultBranch}`;
-      } else {
-        repoPath = repoRef;
-      }
+    if (repoRef && deps.provisioner) {
+      await deps.provisioner.ensureLocalRepo(repoRef);
+      const provisionedWorktree = await deps.provisioner.createWorktree(
+        repoRef,
+        event.externalStoryId
+      );
+      worktree = provisionedWorktree;
+      baseRef = provisionedWorktree.baseRef;
+    } else {
+      worktree = await deps.execution.reserveWorktree({
+        repoPath: repoRef ?? '.',
+        taskLabel: event.externalStoryId,
+        projectId: event.externalStoryId,
+      });
     }
-    const worktree = await deps.execution.reserveWorktree({
-      repoPath,
-      taskLabel: event.externalStoryId,
-      projectId: event.externalStoryId,
-      ...(baseRef ? { baseRef } : {}),
-    });
 
     // §6.10 — spawn the agent over a PTY; await its exit before opening the PR.
     // The prompt is the REAL story content fetched above (content.fetch), so the
