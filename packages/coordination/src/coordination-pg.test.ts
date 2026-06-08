@@ -503,6 +503,12 @@ run('coordination (Postgres) — human write-API interventions', () => {
     expect(await store.escalateTask('00000000-0000-0000-0000-000000000000')).toEqual({ ok: false, reason: 'not_found' });
   });
 
+  it('escalateTask is an idempotent conflict on an already-needs_attention task (no spurious version bump)', async () => {
+    const { id, version } = await at('needs_attention');
+    expect(await store.escalateTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await versionOf(id)).toBe(version); // unchanged — no needless CAS-busting bump
+  });
+
   it('overrideTierEstimate sets only the tier, preserving the rest of the estimate', async () => {
     const t = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#tier', platform: 'github' });
     await store.setTierEstimate(t.id, { tier: 'low', confidence: 0.7, signals: { wordCount: 5, hasReasoningVerb: false, scopeHint: 'unknown', labelTier: null }, classifierUsed: true });

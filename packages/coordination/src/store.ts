@@ -185,7 +185,9 @@ export interface CoordinationStore {
   // hence the guards reject actions that would race an executing dispatch.
 
   /** Force a task to `needs_attention` (human review). Allowed from any non-terminal
-   *  status; a no-op `conflict` when already `done`. */
+   *  status OTHER than `needs_attention`; a `conflict` when already `needs_attention`
+   *  (avoids a spurious version bump that would needlessly fail an in-flight CAS) or
+   *  `done` (terminal). */
   escalateTask(taskId: string): Promise<TaskWriteOutcome>;
 
   /** Manually override the routing tier (sets `tier_estimate.tier`, preserving any

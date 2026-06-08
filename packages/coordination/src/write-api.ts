@@ -138,7 +138,10 @@ export async function writeApiHandler(
   if (route.kind === 'csrf') {
     const token = randomBytes(32).toString('hex');
     const secure = deps.secureCookies !== false ? '; Secure' : '';
-    res.setHeader('set-cookie', `${CSRF_COOKIE}=${token}; Path=/; SameSite=Strict${secure}`);
+    // HttpOnly is safe (and hardens against XSS reads): the client echoes the token
+    // from THIS response's JSON body, never by reading the cookie — the browser
+    // sends the cookie automatically and the server compares the two.
+    res.setHeader('set-cookie', `${CSRF_COOKIE}=${token}; Path=/; SameSite=Strict; HttpOnly${secure}`);
     sendJson(res, 200, { token });
     return true;
   }
