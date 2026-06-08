@@ -31,6 +31,7 @@ import {
 } from '@tasca/routing';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus } from '@tasca/domain';
+import type { DispatchQueue } from '@tasca/db';
 import { ExecutionError, type ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
 import type { StatusReporter, Logger } from './ports';
@@ -117,6 +118,16 @@ export interface OrchestrationDeps {
   /** Resolves a GitHub `owner/repo` slug to a local clone path before dispatch.
    *  Absent → repoRef is used as-is (Stage-1 single-checkout / test behavior). */
   provisioner?: RepoProvisioner;
+  /**
+   * The dispatch queue (the coordination→execution split). When wired, a dispatch is
+   * ENQUEUED for an agent-runner; if no runner claims it within `dispatchFallbackMs`,
+   * coordination cancels it and runs the task IN-PROCESS — the migration safety net so
+   * a runner outage never silently stalls a task. Absent → always in-process (today).
+   */
+  dispatchQueue?: DispatchQueue;
+  /** How long to wait for a runner to claim an enqueued job before falling back to
+   *  in-process. Default 8000ms. A healthy runner claims within ~one poll. */
+  dispatchFallbackMs?: number;
   /** Breaker threshold; defaults to 2 (scaffold §3.2). */
   breakerThreshold?: number;
   /** Per-project concurrency limit for the dispatch gate. */
@@ -131,6 +142,39 @@ export interface OrchestrationDeps {
 const DEFAULT_AGENT_TIMEOUT_MS = 600_000;
 /** Above this prompt length the issue body is capped (see buildClaudeCommand); we log it. */
 const PROMPT_TRUNCATE_THRESHOLD = 60_000;
+/** Default window to wait for an agent-runner to claim an enqueued job before the
+ *  in-process fallback takes over. A healthy runner claims within ~one poll interval. */
+const DEFAULT_DISPATCH_FALLBACK_MS = 8_000;
+
+/** What coordination enqueues for an agent-runner — everything the runner needs to
+ *  execute the task. Mirrors @tasca/agent-runner's DispatchPayload (jsonb on the wire). */
+export interface DispatchPayload {
+  taskId: string;
+  repoRef: string;
+  platform: AdapterEvent['platform'];
+  externalStoryId: string;
+  agentId: string;
+  prompt: string;
+  headBranch: string;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    (t as { unref?: () => void }).unref?.();
+  });
+}
+
+/** Build the agent's prompt from the real story content. Shared by the enqueued
+ *  payload and the in-process path so a runner and the fallback run the SAME task. */
+function buildAgentPrompt(content: { title: string; body: string }): string {
+  return (
+    'You are an autonomous software engineer working in a fresh checkout of this repository. ' +
+    'Implement the task below: make the necessary code changes and commit them with a clear message. ' +
+    'Make only the changes the task requires.\n\n' +
+    `Task: ${content.title}\n\n${content.body}`
+  );
+}
 
 export type OrchestrationOutcome =
   | { kind: 'dispatched'; taskId: string; agentId: string; prUrl: string }
@@ -271,6 +315,52 @@ export async function orchestrateTaskAssigned(
     // §6.9-13 — dispatch → worktree + agent → PR → status-back.
     await deps.store.setStatus(task.id, 'executing');
 
+    // The agent prompt (shared by the enqueued payload + the in-process path so a
+    // runner and the fallback run the SAME task). content is the real story body.
+    const prompt = buildAgentPrompt(content);
+    if (prompt.length > PROMPT_TRUNCATE_THRESHOLD) {
+      deps.logger?.info?.('coordination: agent prompt truncated to fit', {
+        taskId: task.id,
+        promptChars: prompt.length,
+        capChars: PROMPT_TRUNCATE_THRESHOLD,
+      });
+    }
+
+    // SPLIT DISPATCH (when a queue is wired): enqueue the job for an agent-runner and
+    // give it a short window to claim. `cancel` is the race-safe hinge — if it returns
+    // false a runner claimed the job (it executes; the reaper finalizes), so we return;
+    // if true, NO runner took it within the window, so we fall through to the in-process
+    // path below. This is the migration safety net: a runner outage can never silently
+    // stall a task — coordination always picks it up itself.
+    if (deps.dispatchQueue && repoRef) {
+      const payload: DispatchPayload = {
+        taskId: task.id,
+        repoRef,
+        platform: event.platform,
+        externalStoryId: event.externalStoryId,
+        agentId: winner.agentId,
+        prompt,
+        headBranch: deterministicHeadBranch(event.externalStoryId),
+      };
+      const { id: jobId } = await deps.dispatchQueue.enqueue({
+        taskId: task.id,
+        payload: payload as unknown as Record<string, unknown>,
+      });
+      await sleep(deps.dispatchFallbackMs ?? DEFAULT_DISPATCH_FALLBACK_MS);
+      const tookOver = await deps.dispatchQueue.cancel(jobId);
+      if (!tookOver) {
+        // A runner claimed it within the window — it owns the task; the reaper finalizes
+        // on completion. (The PR url isn't known here; the reaper records it.)
+        deps.logger?.info?.('coordination: dispatched to an agent-runner', { taskId: task.id, jobId });
+        return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: '(runner)' };
+      }
+      deps.logger?.info?.('coordination: no runner claimed; running in-process (fallback)', {
+        taskId: task.id,
+        jobId,
+      });
+      // fall through to the in-process path
+    }
+
     // Provision a worktree for the agent run. A GitHub event's repoHint is an
     // `owner/repo` slug, not a local path. With a provisioner we ensure the
     // (tokenless-origin) local clone exists, then have the PROVISIONER create the
@@ -295,25 +385,10 @@ export async function orchestrateTaskAssigned(
       });
     }
 
-    // §6.10 — spawn the agent over a PTY; await its exit before opening the PR.
-    // The prompt is the REAL story content fetched above (content.fetch), so the
-    // agent has the actual task — not just the id. The body is attacker-controlled;
-    // it reaches the shell only through the POSIX-quoted claude command the factory
-    // builds from `prompt`.
-    const prompt =
-      'You are an autonomous software engineer working in a fresh checkout of this repository. ' +
-      'Implement the task below: make the necessary code changes and commit them with a clear message. ' +
-      'Make only the changes the task requires.\n\n' +
-      `Task: ${content.title}\n\n${content.body}`;
-    // buildClaudeCommand caps the prompt to fit the OS arg limit; surface it so an
-    // operator knows a long issue's tail (often the acceptance criteria) was cut.
-    if (prompt.length > PROMPT_TRUNCATE_THRESHOLD) {
-      deps.logger?.info?.('coordination: agent prompt truncated to fit', {
-        taskId: task.id,
-        promptChars: prompt.length,
-        capChars: PROMPT_TRUNCATE_THRESHOLD,
-      });
-    }
+    // §6.10 — spawn the agent over a PTY; await its exit before opening the PR. The
+    // prompt was built above (shared with the enqueued payload). The body is
+    // attacker-controlled; it reaches the shell only through the POSIX-quoted claude
+    // command the factory builds from `prompt`.
     const agentRun = await runAgentToCompletion(
       deps.execution,
       { id: task.id, cwd: worktree.path, prompt },
