@@ -56,6 +56,15 @@ export interface DispatchQueue {
    * callers.
    */
   claimNext(runnerId: string, leaseSeconds: number): Promise<DispatchJob | null>;
+  /**
+   * Atomically remove a job IFF it is still `queued` (unclaimed). Returns true when it
+   * was removed, false when it could NOT be (a runner already claimed it, or it's
+   * gone). This is the race-safe hinge of the in-process fallback: coordination
+   * enqueues, waits briefly, then `cancel`s — true means no runner took it (run it
+   * in-process), false means a runner owns it (let the runner + reaper handle it). The
+   * queue's exactly-once claim guarantees these two outcomes never overlap.
+   */
+  cancel(jobId: string): Promise<boolean>;
   /** Extend the lease of a still-held job (heartbeat for long runs). Returns false
    *  if the claim was already lost (fence advanced / no longer claimed). */
   renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean>;
@@ -119,6 +128,16 @@ export class PgDispatchQueue implements DispatchQueue {
     // bigint comes back as a string from pg; the fence fits well within a JS number
     // for any realistic claim count, and is treated as opaque by callers.
     return { id: row.id, taskId: row.task_id, payload: row.payload, attempts: row.attempts, fence: Number(row.claim_epoch) };
+  }
+
+  async cancel(jobId: string): Promise<boolean> {
+    // Delete only while still queued — if a runner has claimed it (status='claimed'),
+    // the WHERE misses, rowCount 0, and the caller defers to the runner.
+    const res = await this.db.query(
+      `DELETE FROM dispatch_job WHERE id = $1 AND status = 'queued'`,
+      [jobId]
+    );
+    return res.rowCount === 1;
   }
 
   async renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean> {

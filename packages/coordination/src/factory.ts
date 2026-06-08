@@ -6,7 +6,7 @@
 // because @tasca/adapters is built on a sibling branch and wired in LATER.
 
 import type { Pool } from 'pg';
-import { PgClaimRepository } from '@tasca/db';
+import { PgClaimRepository, PgDispatchQueue } from '@tasca/db';
 import { PgIdentityRepository } from '@tasca/identity';
 import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
@@ -38,6 +38,11 @@ export interface CreateCoordinationDeps {
   classifier?: LlmClassifierPort;
   /** Optional repo provisioner (clone-on-dispatch); absent → repoRef used as-is. */
   provisioner?: RepoProvisioner;
+  /** Enable split dispatch: enqueue jobs for an agent-runner, with in-process fallback.
+   *  Default OFF (always in-process) until runners are deployed. */
+  dispatchQueueEnabled?: boolean;
+  /** Window to wait for a runner to claim before the in-process fallback. */
+  dispatchFallbackMs?: number;
   breakerThreshold?: number;
   perProjectLimit?: number;
   agentTimeoutMs?: number;
@@ -153,6 +158,8 @@ export function createCoordination(
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
+    ...(input.dispatchQueueEnabled ? { dispatchQueue: new PgDispatchQueue(input.pool) } : {}),
+    ...(input.dispatchFallbackMs !== undefined ? { dispatchFallbackMs: input.dispatchFallbackMs } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
     ...(input.agentTimeoutMs !== undefined ? { agentTimeoutMs: input.agentTimeoutMs } : {}),

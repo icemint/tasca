@@ -188,6 +188,19 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   it('claimNext returns null on an empty queue', async () => {
     expect(await q.claimNext('r1', 30)).toBeNull();
   });
+
+  it('cancel removes a still-queued job (true), but refuses one a runner already claimed (false)', async () => {
+    // Unclaimed → cancel succeeds and the job is gone (the in-process fallback wins).
+    const { id: a } = await q.enqueue({ taskId: 't', payload: {} });
+    expect(await q.cancel(a)).toBe(true);
+    expect(await q.claimNext('r', 30)).toBeNull(); // removed
+
+    // Claimed by a runner → cancel refuses (false): coordination must defer to it.
+    const { id: b } = await q.enqueue({ taskId: 't', payload: {} });
+    const claimed = await q.claimNext('runner-1', 30);
+    expect(claimed!.id).toBe(b);
+    expect(await q.cancel(b)).toBe(false); // a runner owns it — not cancelable
+  });
 });
 
 // The fencing token: a runner that overran its lease (reclaimed + re-claimed by

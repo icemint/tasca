@@ -21,7 +21,7 @@ import type { IncomingMessage } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
-import { TASK_TABLE_DDL } from '@tasca/db';
+import { TASK_TABLE_DDL, DISPATCH_JOB_DDL } from '@tasca/db';
 import { IDENTITY_SCHEMA_DDL } from '@tasca/identity';
 import {
   AUTH_SCHEMA_DDL,
@@ -87,6 +87,7 @@ function numericEnv(name: string): number | undefined {
 async function applySchema(pool: Pool): Promise<void> {
   const statements: readonly string[] = [
     TASK_TABLE_DDL, // the @tasca/db base task table (the CAS target) — must be first
+    DISPATCH_JOB_DDL, // the coordination→execution dispatch queue (split dispatch)
     ...IDENTITY_SCHEMA_DDL, // agent/service_user/rbac/profile/binding/delegation/audit
     ...AUTH_SCHEMA_DDL, // human login: app_user/auth_identity/oauth_state/session (no hard FK to the above)
     ...COORDINATION_SCHEMA_DDL, // task coordination columns + routing_decision/pull_request/ledger
@@ -337,6 +338,9 @@ async function main(): Promise<void> {
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
     ...(githubInstallationHandler ? { githubInstallationHandler } : {}),
     ...(provisioner ? { provisioner } : {}),
+    // Split dispatch: enqueue jobs for an agent-runner, with in-process fallback.
+    // OFF by default; set TASCA_DISPATCH_MODE=queue once a runner is deployed.
+    ...(process.env.TASCA_DISPATCH_MODE === 'queue' ? { dispatchQueueEnabled: true } : {}),
     ...(authHandler ? { authHandler } : {}),
     ...(verifySession ? { verifySession } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),

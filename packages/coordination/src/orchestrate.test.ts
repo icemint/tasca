@@ -21,6 +21,7 @@ import {
   type SpawnAgentInput,
   type Worktree,
 } from '@tasca/execution';
+import type { DispatchJob, DispatchJobInput, DispatchQueue } from '@tasca/db';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
 import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
@@ -735,6 +736,103 @@ describe('orchestrateTaskAssigned — clone-on-dispatch provisioner', () => {
 
     expect(outcome.kind).toBe('dispatched');
     expect(execution.reserveInputs[0]!.repoPath).toBe('.');
+  });
+});
+
+// The split-dispatch safety net: when a queue is wired, coordination ENQUEUES the job
+// for an agent-runner and falls back to IN-PROCESS if no runner claims it in time. A
+// runner outage must never silently stall a task.
+describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () => {
+  const GITHUB_EVENT: AdapterEvent = {
+    type: 'task.assigned',
+    platform: 'github',
+    externalStoryId: 'gh-split-1',
+    agentExternalId: 'sc-agent-elvis',
+    repoHint: 'acme/widgets',
+  };
+
+  // cancel() returns the configured result: true = "no runner claimed, we cancel and
+  // run in-process"; false = "a runner already claimed it, defer to it".
+  class FakeDispatchQueue implements DispatchQueue {
+    enqueued: DispatchJobInput[] = [];
+    constructor(private readonly cancelResult: boolean) {}
+    async enqueue(input: DispatchJobInput): Promise<{ id: string }> {
+      this.enqueued.push(input);
+      return { id: `job-${this.enqueued.length}` };
+    }
+    async cancel(): Promise<boolean> {
+      return this.cancelResult;
+    }
+    async claimNext(): Promise<DispatchJob | null> {
+      return null;
+    }
+    async renewLease(): Promise<boolean> {
+      return true;
+    }
+    async complete(): Promise<boolean> {
+      return true;
+    }
+    async release(): Promise<boolean> {
+      return true;
+    }
+    async fail(): Promise<boolean> {
+      return true;
+    }
+    async reclaimExpired(): Promise<number> {
+      return 0;
+    }
+  }
+
+  const passingProvisioner: RepoProvisioner = {
+    async ensureLocalRepo() {
+      return { path: '/local/checkout', defaultBranch: 'trunk' };
+    },
+    async createWorktree() {
+      return { path: '/wt', branch: 'tasca-wt/x', baseRef: 'origin/trunk' };
+    },
+    async tokenForRepo() {
+      return 'ghs_tok';
+    },
+    async removeWorktree() {},
+  };
+
+  it('FALLBACK: enqueue succeeds but NO runner claims within the window → coordination runs it IN-PROCESS (loop never stalls)', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const queue = new FakeDispatchQueue(true); // cancel succeeds = nobody claimed it
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+      provisioner: passingProvisioner,
+      dispatchQueue: queue,
+      dispatchFallbackMs: 0, // no real wait in the test
+    };
+
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, deps);
+
+    expect(queue.enqueued).toHaveLength(1); // it WAS enqueued for a runner first
+    expect(queue.enqueued[0]!.payload).toMatchObject({ repoRef: 'acme/widgets' });
+    expect(execution.spawnInputs).toHaveLength(1); // …then the in-process fallback RAN the agent
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind === 'dispatched') expect(outcome.prUrl).not.toBe('(runner)'); // a real in-process PR
+  });
+
+  it('a runner CLAIMS the job (cancel refused) → coordination defers and does NOT run in-process', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const queue = new FakeDispatchQueue(false); // cancel refused = a runner owns it
+    const deps: OrchestrationDeps = {
+      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+      provisioner: passingProvisioner,
+      dispatchQueue: queue,
+      dispatchFallbackMs: 0,
+    };
+
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, deps);
+
+    expect(queue.enqueued).toHaveLength(1);
+    expect(execution.spawnInputs).toHaveLength(0); // the agent did NOT run in-process — the runner owns it
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind === 'dispatched') expect(outcome.prUrl).toBe('(runner)'); // reaper will finalize
   });
 });
 
