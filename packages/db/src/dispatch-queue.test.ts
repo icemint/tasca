@@ -81,6 +81,58 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     }
   });
 
+  it('RACE: cancel vs claimNext on one job → EXACTLY ONE wins (the fallback safety hinge: no double-run, no orphan)', async () => {
+    // The migration safety net rests on this: coordination's cancel (DELETE WHERE
+    // queued) and a runner's claimNext (UPDATE WHERE queued) both target the SAME
+    // queued row. Postgres row-locking must let exactly one win — never both (double
+    // dispatch) and never neither (orphaned job, silent stall). Force them to race.
+    const GATE = 771122;
+    const racePool = new Pool({ connectionString: url, max: 6 });
+    try {
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-race', payload: {} });
+
+      const gate = await racePool.connect();
+      await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
+
+      const canceller = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { who: 'cancel', won: await new PgDispatchQueue(c).cancel(jobId) };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+      const claimer = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { who: 'claim', won: (await new PgDispatchQueue(c).claimNext('runner-1', 30)) !== null };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+
+      await waitForWaiters(racePool, GATE, 2);
+      await gate.query('SELECT pg_advisory_unlock($1)', [GATE]);
+      gate.release();
+
+      const [a, b] = await Promise.all([canceller, claimer]);
+      // EXACTLY ONE side won — never both (double-run), never neither (orphan/stall).
+      expect([a.won, b.won].filter(Boolean)).toHaveLength(1);
+
+      // Cross-check the row: if cancel won, the row is gone; if claim won, it's claimed.
+      const row = await racePool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [jobId]);
+      const cancelWon = (a.who === 'cancel' ? a.won : b.won);
+      if (cancelWon) expect(row.rowCount).toBe(0);
+      else expect(row.rows[0]!.status).toBe('claimed');
+    } finally {
+      await racePool.end();
+    }
+  });
+
   it('DRAIN: N jobs across M concurrent looping claimers → each job claimed exactly once, none lost', async () => {
     const JOBS = 200;
     const CLAIMERS = 16;
