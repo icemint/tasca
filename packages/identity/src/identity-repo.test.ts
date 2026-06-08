@@ -325,3 +325,76 @@ run('PgIdentityRepository (Postgres) — stable principal + binding lifecycle', 
     expect(after).toHaveLength(0);
   });
 });
+
+// Versioned agent writes (pause/resume/edit-profile) under optimistic concurrency:
+// the agent row's `version` is the token. A stale write loses and learns the truth.
+run('PgIdentityRepository — versioned agent writes (optimistic concurrency)', () => {
+  let pool: Pool;
+  let repo: PgIdentityRepository;
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: url });
+    for (const ddl of IDENTITY_SCHEMA_DDL) await pool.query(ddl);
+    repo = new PgIdentityRepository(pool);
+  });
+  afterAll(async () => {
+    await pool?.end();
+  });
+  beforeEach(async () => {
+    await pool.query('TRUNCATE audit_event, identity_binding, delegation, capability_profile, service_user, agent, rbac_role CASCADE');
+  });
+  const make = () => repo.createAgent({ name: 'Elvis', model: 'claude-sonnet', vendor: 'claude' });
+
+  it('setAgentStatus bumps the version and applies the status at the expected version', async () => {
+    const { agent } = await make();
+    expect(agent.version).toBe(0);
+    const out = await repo.setAgentStatus(agent.id, 'paused', 0);
+    expect(out).toEqual({ ok: true, version: 1 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent.status).toBe('paused');
+    expect(got!.agent.version).toBe(1);
+  });
+
+  it('a stale-version write loses and surfaces currentVersion (no silent overwrite)', async () => {
+    const { agent } = await make();
+    await repo.setAgentStatus(agent.id, 'paused', 0); // version → 1
+    const stale = await repo.setAgentStatus(agent.id, 'active', 0); // someone else already moved it
+    expect(stale).toEqual({ ok: false, reason: 'version_conflict', currentVersion: 1 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent.status).toBe('paused'); // NOT overwritten to active
+  });
+
+  it('setAgentStatus on a missing agent is not_found', async () => {
+    expect(await repo.setAgentStatus('nope', 'paused', 0)).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('updateCapabilityProfile atomically edits the profile + bumps the agent version', async () => {
+    const { agent } = await make();
+    await repo.setCapabilityProfile({
+      agentId: agent.id, maxTier: 'low', tiersCovered: ['basic', 'low'],
+      languageSpecialties: ['ts'], frameworkSpecialties: [], concurrencyLimit: 1, costCeiling: 5,
+      successRate: null, avgLatencyMs: null,
+    });
+    const out = await repo.updateCapabilityProfile(agent.id, { maxTier: 'hard', concurrencyLimit: 4, costCeiling: null }, 0);
+    expect(out).toEqual({ ok: true, version: 1 });
+    const prof = await repo.getCapabilityProfile(agent.id);
+    // cost_ceiling NULL = "no cap", which the mapper surfaces as 0.
+    expect(prof).toMatchObject({ maxTier: 'hard', concurrencyLimit: 4, costCeiling: 0 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent.version).toBe(1);
+  });
+
+  it('a conflicting profile edit does NOT half-apply (atomic CAS + profile update)', async () => {
+    const { agent } = await make();
+    await repo.setCapabilityProfile({
+      agentId: agent.id, maxTier: 'low', tiersCovered: ['low'],
+      languageSpecialties: [], frameworkSpecialties: [], concurrencyLimit: 1, costCeiling: 5,
+      successRate: null, avgLatencyMs: null,
+    });
+    await repo.setAgentStatus(agent.id, 'paused', 0); // bump to version 1 out-of-band
+    const stale = await repo.updateCapabilityProfile(agent.id, { maxTier: 'ultra', concurrencyLimit: 9, costCeiling: 99 }, 0);
+    expect(stale).toEqual({ ok: false, reason: 'version_conflict', currentVersion: 1 });
+    // The profile is UNCHANGED — the edit rolled back with the failed CAS.
+    const prof = await repo.getCapabilityProfile(agent.id);
+    expect(prof).toMatchObject({ maxTier: 'low', concurrencyLimit: 1, costCeiling: 5 });
+  });
+});

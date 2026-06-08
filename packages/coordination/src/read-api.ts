@@ -91,6 +91,9 @@ interface AgentJson {
   vendor: DomainAgent['vendor'] | string;
   model: string;
   status: AgentRecord['status'];
+  /** Optimistic-concurrency token: the client echoes it on a write; a stale value
+   *  loses with a 409 so the UI reconciles instead of overwriting. */
+  version: number;
   avatarUrl: string | null;
   capability: CapabilityJson;
   currentTaskId: string | null;
@@ -133,6 +136,7 @@ function agentJson(
     vendor: a.agent.vendor,
     model: a.agent.model,
     status: a.agent.status,
+    version: a.agent.version,
     avatarUrl: a.agent.avatarUrl,
     capability: capabilityJson(a.profile),
     currentTaskId,

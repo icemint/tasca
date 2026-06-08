@@ -16,10 +16,17 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { TIERS, type Tier } from '@tasca/domain';
+import { TIERS, type Tier, type AgentStatus } from '@tasca/domain';
+import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity';
 import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
+
+/** The agent-write surface the write-API needs (a subset of PgIdentityRepository). */
+export interface AgentWriter {
+  setAgentStatus(agentId: string, status: AgentStatus, expectedVersion: number): Promise<AgentWriteOutcome>;
+  updateCapabilityProfile(agentId: string, patch: CapabilityProfilePatch, expectedVersion: number): Promise<AgentWriteOutcome>;
+}
 
 /** Records a human-initiated write for the audit trail. */
 export interface WriteAuditSink {
@@ -34,6 +41,8 @@ export interface WriteAuditSink {
 
 export interface WriteApiDeps {
   store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask'>;
+  /** Agent-state writes (pause/resume/edit-profile). Absent → those routes 404. */
+  identity?: AgentWriter;
   /** Verify the request's session (same contract as the read API). */
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
   /** Fail-closed escape hatch — when no verifier is wired, refuse (503) unless this
@@ -91,18 +100,28 @@ type WriteRoute =
   | { kind: 'csrf' }
   | { kind: 'escalate'; id: string }
   | { kind: 'retier'; id: string }
-  | { kind: 'reassign'; id: string };
+  | { kind: 'reassign'; id: string }
+  | { kind: 'pause'; id: string }
+  | { kind: 'resume'; id: string }
+  | { kind: 'profile'; id: string };
 
 function matchWriteRoute(method: string, path: string): WriteRoute | null {
   if (method === 'GET' && path === '/api/csrf') return { kind: 'csrf' };
   if (method !== 'POST') return null;
-  const m = /^\/api\/tasks\/([^/]+)\/(escalate|retier|reassign)$/.exec(path);
-  if (!m) return null;
-  const id = decodeURIComponent(m[1]!);
-  const action = m[2]!;
-  if (action === 'escalate') return { kind: 'escalate', id };
-  if (action === 'retier') return { kind: 'retier', id };
-  return { kind: 'reassign', id };
+  const task = /^\/api\/tasks\/([^/]+)\/(escalate|retier|reassign)$/.exec(path);
+  if (task) {
+    const id = decodeURIComponent(task[1]!);
+    const action = task[2]!;
+    if (action === 'escalate') return { kind: 'escalate', id };
+    if (action === 'retier') return { kind: 'retier', id };
+    return { kind: 'reassign', id };
+  }
+  const agent = /^\/api\/agents\/([^/]+)\/(pause|resume|profile)$/.exec(path);
+  if (agent) {
+    const id = decodeURIComponent(agent[1]!);
+    return { kind: agent[2] as 'pause' | 'resume' | 'profile', id };
+  }
+  return null;
 }
 
 /** Map a store TaskWriteOutcome to an HTTP response. */
@@ -117,6 +136,21 @@ function sendOutcome(res: ServerResponse, outcome: TaskWriteOutcome): string {
   }
   sendJson(res, 409, { error: 'action not allowed in the task’s current state' });
   return 'conflict';
+}
+
+/** Map a versioned AgentWriteOutcome to an HTTP response. A version_conflict returns
+ *  409 WITH the current version so the client reconciles to truth (never overwrites). */
+function sendAgentOutcome(res: ServerResponse, outcome: AgentWriteOutcome): string {
+  if (outcome.ok) {
+    sendJson(res, 200, { ok: true, version: outcome.version });
+    return `ok:v${outcome.version}`;
+  }
+  if (outcome.reason === 'not_found') {
+    sendJson(res, 404, { error: 'agent not found' });
+    return 'not_found';
+  }
+  sendJson(res, 409, { error: 'agent was changed by someone else', currentVersion: outcome.currentVersion });
+  return 'version_conflict';
 }
 
 /**
@@ -230,5 +264,56 @@ async function handleWrite(
       await audit('task.retier', sendOutcome(res, outcome), { tier });
       return;
     }
+    case 'pause':
+    case 'resume':
+    case 'profile': {
+      if (!deps.identity) {
+        sendJson(res, 404, { error: 'agent writes not configured' });
+        return;
+      }
+      let body: { version?: unknown; maxTier?: unknown; concurrencyLimit?: unknown; costCeiling?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        sendJson(res, 400, { error: 'invalid body' });
+        await audit(`agent.${route.kind}`, 'bad_request');
+        return;
+      }
+      // Optimistic concurrency: the client MUST send the version it last saw.
+      if (typeof body.version !== 'number' || !Number.isInteger(body.version) || body.version < 0) {
+        sendJson(res, 400, { error: 'version (integer) is required' });
+        await audit(`agent.${route.kind}`, 'bad_request');
+        return;
+      }
+      if (route.kind === 'profile') {
+        const { maxTier, concurrencyLimit, costCeiling } = body;
+        if (typeof maxTier !== 'string' || !(TIERS as readonly string[]).includes(maxTier)) {
+          sendJson(res, 400, { error: 'maxTier must be one of ' + TIERS.join(', ') });
+          await audit('agent.profile', 'bad_request');
+          return;
+        }
+        if (!isIntOrNull(concurrencyLimit) || !isIntOrNull(costCeiling)) {
+          sendJson(res, 400, { error: 'concurrencyLimit and costCeiling must be an integer or null' });
+          await audit('agent.profile', 'bad_request');
+          return;
+        }
+        const outcome = await deps.identity.updateCapabilityProfile(
+          route.id,
+          { maxTier: maxTier as Tier, concurrencyLimit, costCeiling },
+          body.version
+        );
+        await audit('agent.profile', sendAgentOutcome(res, outcome), { maxTier, concurrencyLimit, costCeiling });
+        return;
+      }
+      const status: AgentStatus = route.kind === 'pause' ? 'paused' : 'active';
+      const outcome = await deps.identity.setAgentStatus(route.id, status, body.version);
+      await audit(`agent.${route.kind}`, sendAgentOutcome(res, outcome), { status });
+      return;
+    }
   }
+}
+
+/** True for an integer or explicit null (the editable numeric profile fields). */
+function isIntOrNull(v: unknown): v is number | null {
+  return v === null || (typeof v === 'number' && Number.isInteger(v));
 }

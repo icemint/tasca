@@ -102,3 +102,111 @@ export const getTasks = (params?: { status?: string; limit?: number }) => {
 };
 export const getTask = (id: string) => get<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`);
 export const getConnections = () => get<ConnectionsResponse>('/api/connections');
+
+// ── write endpoints (mutations) ───────────────────────────────────────────────
+// Mutations go straight to the worker (never the DEV fixtures — there is nothing to
+// mutate there). They inherit the worker's write-security harness: a double-submit
+// CSRF token (GET /api/csrf → cookie + body) echoed in the x-csrf-token header.
+// Every distinct failure is classified so a control can tell the truth: an 'unauth'
+// redirects, a 'conflict' (409) reconciles to server truth, an 'unconfigured' (503)
+// disables, an 'error' rolls back — a write NEVER silently leaves the UI lying.
+
+export type WriteResult<T = unknown> =
+  | { kind: 'ok'; data: T }
+  | { kind: 'unauth' } // 401 — session gone; redirect to login
+  | { kind: 'forbidden' } // 403 — CSRF still invalid after a refresh
+  | { kind: 'conflict'; data: T } // 409 — body carries the current truth (e.g. currentVersion)
+  | { kind: 'notfound' } // 404
+  | { kind: 'unconfigured' } // 503 — writes not enabled on the worker
+  | { kind: 'error'; message: string };
+
+let csrfToken: string | null = null;
+
+/** Test-only: clear the cached CSRF token so each test starts from a clean slate. */
+export function _resetCsrfForTest(): void {
+  csrfToken = null;
+}
+
+/** Fetch (and cache) the double-submit CSRF token. `force` re-fetches after a 403
+ *  (the token rotated/expired). Returns null if it can't be obtained. */
+export async function ensureCsrf(force = false): Promise<string | null> {
+  if (csrfToken && !force) return csrfToken;
+  try {
+    const res = await fetch('/api/csrf', { headers: { accept: 'application/json' } });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { token?: unknown };
+    csrfToken = typeof body.token === 'string' ? body.token : null;
+    return csrfToken;
+  } catch {
+    return null;
+  }
+}
+
+async function classify<T>(res: Response): Promise<WriteResult<T>> {
+  if (res.status === 200) {
+    try {
+      return { kind: 'ok', data: (await res.json()) as T };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  if (res.status === 401) return { kind: 'unauth' };
+  if (res.status === 403) return { kind: 'forbidden' };
+  if (res.status === 404) return { kind: 'notfound' };
+  if (res.status === 409) {
+    let data: T;
+    try {
+      data = (await res.json()) as T;
+    } catch {
+      data = {} as T;
+    }
+    return { kind: 'conflict', data };
+  }
+  if (res.status === 503) return { kind: 'unconfigured' };
+  return { kind: 'error', message: `Request failed (${res.status})` };
+}
+
+/** POST a mutation with CSRF. On a 403 (stale token) it refreshes the token and
+ *  retries ONCE, so an expired CSRF self-heals instead of failing the user. */
+export async function post<T>(path: string, body: unknown): Promise<WriteResult<T>> {
+  let token = await ensureCsrf();
+  if (token === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const send = (t: string): Promise<Response> =>
+    fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify(body),
+    });
+  let res: Response;
+  try {
+    res = await send(token);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  return classify<T>(res);
+}
+
+// ── agent-state writes ────────────────────────────────────────────────────────
+
+interface AgentWriteOk {
+  ok: true;
+  version: number;
+}
+interface AgentConflict {
+  error: string;
+  currentVersion: number;
+}
+
+export const pauseAgent = (id: string, version: number) =>
+  post<AgentWriteOk | AgentConflict>(`/api/agents/${encodeURIComponent(id)}/pause`, { version });
+export const resumeAgent = (id: string, version: number) =>
+  post<AgentWriteOk | AgentConflict>(`/api/agents/${encodeURIComponent(id)}/resume`, { version });
+export const editAgentProfile = (
+  id: string,
+  version: number,
+  patch: { maxTier: string; concurrencyLimit: number | null; costCeiling: number | null }
+) => post<AgentWriteOk | AgentConflict>(`/api/agents/${encodeURIComponent(id)}/profile`, { version, ...patch });

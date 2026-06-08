@@ -1,15 +1,52 @@
-// Agent detail (C6, read-only). Renders one agent's identity bindings, capability
-// profile and recent tasks from GET /api/agents/:id. All intervention controls
-// (Pause, Edit, Deploy, Assign, Reassign, Escalate) render visible-but-disabled.
+// Agent detail (C6). Renders one agent's identity bindings, capability profile and
+// recent tasks from GET /api/agents/:id. Pause/Resume are LIVE optimistic controls
+// (the first UI writes); Deploy/Assign/Interrupt/Reassign/Escalate stay read-only.
 
-import { getAgent } from '../api';
+import { getAgent, pauseAgent, resumeAgent } from '../api';
 import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
+import { liveAction } from '../live';
 import {
   I, avatar, vendorChip, statePill, tierRamp, tierTag, pct, money, taskRef,
   PLATFORM_LABEL, esc, roControl, RO_GATE_PROVISION,
 } from '../ui';
 import type { AgentDetail, Binding, TaskSummary } from '../contract';
+
+/** A visible lifecycle-status chip so a pause/resume is reflected in the UI (the
+ *  state pill shows working/idle; status is active/paused/retired). */
+function statusBadge(a: AgentDetail): string {
+  if (a.status === 'paused') return `<span class="status-chip paused">Paused</span>`;
+  if (a.status === 'retired') return `<span class="status-chip retired">Retired</span>`;
+  return '';
+}
+
+/** The live Pause/Resume control — toggles agent status under optimistic concurrency
+ *  (carries the version; a stale write 409s → the view reconciles). */
+function pauseControl(a: AgentDetail): string {
+  const paused = a.status === 'paused';
+  const action = paused ? 'resume' : 'pause';
+  const label = paused ? 'Resume' : 'Pause';
+  return `<button class="ictl live-ctl" type="button" data-action="${action}" data-agent-id="${esc(a.id)}" data-version="${a.version}" aria-label="${label} ${esc(a.name)}">${paused ? '' : I.pause + ' '}${label}</button>`;
+}
+
+/** Wire the agent view's live controls after each render; `rerun` reconciles to
+ *  server truth (mount passes it). Re-reads id/version from the DOM each render. */
+export function wireAgent(el: HTMLElement, rerun: () => Promise<void>): void {
+  const btn = el.querySelector<HTMLButtonElement>('.live-ctl[data-action]');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const id = btn.dataset.agentId ?? '';
+    const version = Number(btn.dataset.version);
+    const action = btn.dataset.action;
+    void liveAction({
+      button: btn,
+      pendingLabel: action === 'pause' ? 'Pausing…' : 'Resuming…',
+      view: el,
+      rerun,
+      write: () => (action === 'pause' ? pauseAgent(id, version) : resumeAgent(id, version)),
+    });
+  });
+}
 
 const BINDING_DOT: Record<Binding['state'], string> = {
   active: 'var(--green)',
@@ -82,9 +119,9 @@ export async function loadAgent(): Promise<LoadResult> {
         <div class="vh-main">
           <div class="vh-id">${avatar(a, 'av-xl')}
             <div><div class="vh-name">${esc(a.name)}</div>
-              <div class="vh-meta">${vendorChip(a.vendor)}<span class="mono dim">${esc(a.model)}</span>${statePill(a.state)}</div></div></div>
+              <div class="vh-meta">${vendorChip(a.vendor)}<span class="mono dim">${esc(a.model)}</span>${statePill(a.state)}${statusBadge(a)}</div></div></div>
           <div class="vh-actions">
-            ${roControl('Pause', { icon: I.pause })}
+            ${pauseControl(a)}
             ${roControl('Edit profile')}
             ${roControl('Deploy', { gate: RO_GATE_PROVISION })}
           </div>

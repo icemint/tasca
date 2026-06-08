@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Tier } from '@tasca/domain';
-import { writeApiHandler, type WriteApiDeps } from './write-api';
+import { writeApiHandler, type WriteApiDeps, type AgentWriter } from './write-api';
 import type { TaskWriteOutcome } from './store';
+import type { AgentStatus } from '@tasca/domain';
+import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity';
 
 // ── fakes (real state, no mocking framework) ─────────────────────────────────
 
@@ -181,5 +183,81 @@ describe('task interventions (session + CSRF satisfied)', () => {
     const d: WriteApiDeps = { store, allowUnauthenticated: true, secureCookies: false };
     expect((await run(d, fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }))).statusCode).toBe(200);
     expect((await run(d, fakeReq('POST', '/api/tasks/t1/escalate', {}))).statusCode).toBe(403); // CSRF still enforced
+  });
+});
+
+class FakeAgentWriter implements AgentWriter {
+  calls: string[] = [];
+  statusResult: AgentWriteOutcome = { ok: true, version: 4 };
+  profileResult: AgentWriteOutcome = { ok: true, version: 4 };
+  lastPatch: CapabilityProfilePatch | undefined;
+  async setAgentStatus(id: string, status: AgentStatus, version: number): Promise<AgentWriteOutcome> {
+    this.calls.push(`status:${id}:${status}:v${version}`);
+    return this.statusResult;
+  }
+  async updateCapabilityProfile(id: string, patch: CapabilityProfilePatch, version: number): Promise<AgentWriteOutcome> {
+    this.calls.push(`profile:${id}:v${version}`);
+    this.lastPatch = patch;
+    return this.profileResult;
+  }
+}
+
+describe('agent-state writes (optimistic concurrency via version)', () => {
+  function agentDeps(identity: FakeAgentWriter): WriteApiDeps {
+    return { store: new FakeWriteStore(), identity, verifySession: () => ({ userId: 'u1' }), secureCookies: false };
+  }
+
+  it('pause/resume require the version and pass the right status', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 3 }) }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ ok: true, version: 4 });
+    await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/resume', { headers: csrf(), body: JSON.stringify({ version: 4 }) }));
+    expect(id.calls).toEqual(['status:a1:paused:v3', 'status:a1:active:v4']);
+  });
+
+  it('400 when version is missing (optimistic concurrency is mandatory)', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({}) }));
+    expect(r.statusCode).toBe(400);
+    expect(id.calls).toEqual([]); // never reached the repo
+  });
+
+  it('a version_conflict returns 409 WITH currentVersion so the UI can reconcile to truth', async () => {
+    const id = new FakeAgentWriter();
+    id.statusResult = { ok: false, reason: 'version_conflict', currentVersion: 9 };
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 3 }) }));
+    expect(r.statusCode).toBe(409);
+    expect(JSON.parse(r.body).currentVersion).toBe(9);
+  });
+
+  it('a missing agent → 404', async () => {
+    const id = new FakeAgentWriter();
+    id.statusResult = { ok: false, reason: 'not_found' };
+    expect((await run(agentDeps(id), fakeReq('POST', '/api/agents/nope/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(404);
+  });
+
+  it('profile edit validates maxTier + numeric fields and forwards the patch', async () => {
+    const id = new FakeAgentWriter();
+    const ok = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null }) }));
+    expect(ok.statusCode).toBe(200);
+    expect(id.lastPatch).toEqual({ maxTier: 'hard', concurrencyLimit: 3, costCeiling: null });
+
+    const badTier = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'galaxy', concurrencyLimit: 3, costCeiling: null }) }));
+    expect(badTier.statusCode).toBe(400);
+    const badNum = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 1.5, costCeiling: null }) }));
+    expect(badNum.statusCode).toBe(400);
+  });
+
+  it('agent routes 404 when no identity writer is wired', async () => {
+    const d: WriteApiDeps = { store: new FakeWriteStore(), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
+    const r = await run(d, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }));
+    expect(r.statusCode).toBe(404);
+  });
+
+  it('still session+CSRF gated', async () => {
+    const id = new FakeAgentWriter();
+    expect((await run({ store: new FakeWriteStore(), identity: id, verifySession: () => null, secureCookies: false }, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(401);
+    expect((await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/pause', { body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(403);
   });
 });
