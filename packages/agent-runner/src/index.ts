@@ -11,3 +11,4 @@ export {
   type ExecuteOutcome,
 } from './runner';
 export { revokeToken, type RevokeOptions } from './revoke';
+export { makeRunnerExecute, type RunnerExecuteDeps } from './execute';

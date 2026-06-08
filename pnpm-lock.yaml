@@ -38,6 +38,9 @@ importers:
       '@tasca/db':
         specifier: workspace:*
         version: link:../db
+      '@tasca/execution':
+        specifier: workspace:*
+        version: link:../execution
       pg:
         specifier: ^8.13.1
         version: 8.21.0
