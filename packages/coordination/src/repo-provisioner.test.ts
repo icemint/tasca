@@ -37,13 +37,16 @@ function makeGit(opts: { delay?: boolean } = {}) {
   const calls: string[][] = [];
   let inFlight = 0;
   let maxInFlight = 0;
-  const git = async (args: string[]) => {
+  const git = async (args: string[]): Promise<string> => {
     calls.push(args);
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
     if (opts.delay) await new Promise((r) => setTimeout(r, 0));
     if (args[0] === 'clone') await mkdir(path.join(args[2]!, '.git'), { recursive: true });
     inFlight -= 1;
+    // default-branch detection reads HEAD's symbolic name
+    if (args.includes('rev-parse')) return 'main\n';
+    return '';
   };
   return { git, calls, maxInFlight: () => maxInFlight };
 }
@@ -87,14 +90,16 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
 
     const result = await new GitAppRepoProvisioner(deps).ensureLocalRepo('acme/widgets');
 
-    expect(result).toBe(local);
-    expect(calls).toHaveLength(1);
+    expect(result.path).toBe(local);
+    expect(result.defaultBranch).toBe('main');
     expect(calls[0]![0]).toBe('clone');
     expect(calls[0]![1]).toBe(authUrl('acme', 'widgets'));
     // Clones into a temp sibling, never directly into the published path…
     expect(calls[0]![2]).toMatch(new RegExp(`^${local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-`));
     // …then renames into place: the final path is the complete checkout.
     expect(await pathExists(path.join(local, '.git'))).toBe(true);
+    // …and detects the default branch off the clone.
+    expect(calls.some((c) => c.includes('rev-parse'))).toBe(true);
   });
 
   it('.git present → set-url origin then fetch --prune (no clone)', async () => {
@@ -104,10 +109,12 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
 
     const result = await new GitAppRepoProvisioner(deps).ensureLocalRepo('acme/widgets');
 
-    expect(result).toBe(local);
+    expect(result.path).toBe(local);
+    expect(result.defaultBranch).toBe('main');
     expect(calls).toEqual([
       ['-C', local, 'remote', 'set-url', 'origin', authUrl('acme', 'widgets')],
       ['-C', local, 'fetch', '--prune', 'origin'],
+      ['-C', local, 'rev-parse', '--abbrev-ref', 'HEAD'],
     ]);
   });
 
@@ -121,7 +128,7 @@ describe('GitAppRepoProvisioner.ensureLocalRepo', () => {
 
     const result = await new GitAppRepoProvisioner(deps).ensureLocalRepo('acme/widgets');
 
-    expect(result).toBe(local);
+    expect(result.path).toBe(local);
     expect(calls[0]![0]).toBe('clone'); // recloned rather than failing on the non-empty dir
     expect(await pathExists(path.join(local, '.git'))).toBe(true);
     expect(await pathExists(path.join(local, 'partial.txt'))).toBe(false); // leftover cleared
