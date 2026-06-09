@@ -9,4 +9,5 @@ export {
   type FinishedJob,
   type SweepResult,
   type CancelResult,
+  type CancelForTaskResult,
 } from './dispatch-queue';

@@ -154,13 +154,16 @@ async function classify<T>(res: Response): Promise<WriteResult<T>> {
   if (res.status === 403) return { kind: 'forbidden' };
   if (res.status === 404) return { kind: 'notfound' };
   if (res.status === 409) {
-    let data: T;
+    // Mirror the 200 branch: an UNPARSEABLE 409 body (a proxy error page, a truncated
+    // response) is an honest 'error', NOT a fabricated `{conflict, data:{}}`. Fabricating a
+    // conflict would let the UI render a definite "not available in the current state" (or,
+    // for agent writes, a NaN version) for what is actually a transport/unknown failure — a
+    // lie. Only a body that parses becomes a conflict, carrying its real `code`/`currentVersion`.
     try {
-      data = (await res.json()) as T;
+      return { kind: 'conflict', data: (await res.json()) as T };
     } catch {
-      data = {} as T;
+      return { kind: 'error', message: 'Malformed response' };
     }
-    return { kind: 'conflict', data };
   }
   if (res.status === 503) return { kind: 'unconfigured' };
   return { kind: 'error', message: `Request failed (${res.status})` };
@@ -210,3 +213,23 @@ export const editAgentProfile = (
   version: number,
   patch: { maxTier: string; concurrencyLimit: number | null; costCeiling: number | null }
 ) => post<AgentWriteOk | AgentConflict>(`/api/agents/${encodeURIComponent(id)}/profile`, { version, ...patch });
+
+// ── task interventions (cancel-coupled writes) ────────────────────────────────
+// Reassign re-routes a task (cancelling a live run first); Interrupt halts a live run
+// and flags it. The 200 body carries the resulting status; a 409 body carries a `code`
+// that tells the three "couldn't apply" truths apart — `too_late` (the agent already
+// finished), `no_inflight` (running in-process, no job to cancel), or a generic `conflict`.
+
+export interface TaskWriteOk {
+  ok: true;
+  status: string;
+}
+export interface TaskWriteConflict {
+  error: string;
+  code: 'conflict' | 'too_late' | 'no_inflight';
+}
+
+export const reassignTask = (id: string) =>
+  post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/reassign`, {});
+export const interruptTask = (id: string) =>
+  post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/interrupt`, {});

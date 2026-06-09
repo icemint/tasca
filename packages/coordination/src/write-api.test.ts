@@ -14,6 +14,7 @@ class FakeWriteStore {
   escalateResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
   retierResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   reassignResult: TaskWriteOutcome = { ok: true, status: 'routable' };
+  interruptResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
   async escalateTask(id: string): Promise<TaskWriteOutcome> {
     this.calls.push(`escalate:${id}`);
     return this.escalateResult;
@@ -26,6 +27,10 @@ class FakeWriteStore {
   async reassignTask(id: string): Promise<TaskWriteOutcome> {
     this.calls.push(`reassign:${id}`);
     return this.reassignResult;
+  }
+  async interruptTask(id: string): Promise<TaskWriteOutcome> {
+    this.calls.push(`interrupt:${id}`);
+    return this.interruptResult;
   }
 }
 
@@ -176,6 +181,35 @@ describe('task interventions (session + CSRF satisfied)', () => {
     expect((await run(deps(store), fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }))).statusCode).toBe(409);
     store.escalateResult = { ok: false, reason: 'not_found' };
     expect((await run(deps(store), fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }))).statusCode).toBe(404);
+  });
+
+  it('interrupt → calls interruptTask and returns the new status', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(deps(store), fakeReq('POST', '/api/tasks/t1/interrupt', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ ok: true, status: 'needs_attention' });
+    expect(store.calls).toEqual(['interrupt:t1']);
+  });
+
+  it('surfaces too_late and no_inflight as DISTINCT 409 codes (not a generic conflict) — the UI-honesty contract', async () => {
+    const store = new FakeWriteStore();
+    // too_late: the runner already finished — the UI must say "already finished", never "interrupted".
+    store.interruptResult = { ok: false, reason: 'too_late' };
+    const late = await run(deps(store), fakeReq('POST', '/api/tasks/t1/interrupt', { headers: csrf() }));
+    expect(late.statusCode).toBe(409);
+    expect(JSON.parse(late.body).code).toBe('too_late');
+
+    // no_inflight: running in-process, no job to cancel — distinct from too_late and from conflict.
+    store.interruptResult = { ok: false, reason: 'no_inflight' };
+    const inproc = await run(deps(store), fakeReq('POST', '/api/tasks/t1/interrupt', { headers: csrf() }));
+    expect(inproc.statusCode).toBe(409);
+    expect(JSON.parse(inproc.body).code).toBe('no_inflight');
+
+    // generic conflict keeps its own distinct code.
+    store.interruptResult = { ok: false, reason: 'conflict' };
+    const conflict = await run(deps(store), fakeReq('POST', '/api/tasks/t1/interrupt', { headers: csrf() }));
+    expect(conflict.statusCode).toBe(409);
+    expect(JSON.parse(conflict.body).code).toBe('conflict');
   });
 
   it('allowUnauthenticated opens the gate for dev (CSRF still required)', async () => {

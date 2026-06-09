@@ -108,6 +108,17 @@ export const TASK_LRU_DETAIL: TaskDetail = {
   ],
 };
 
+/** An executing task — a live run in flight — so the cancel-coupled controls (Interrupt +
+ *  live Reassign) render. */
+export const TASK_EXECUTING_DETAIL: TaskDetail = {
+  ...TASK_LRU,
+  id: 'task-exec',
+  status: 'executing',
+  claimedBy: 'agent-elvis',
+  routingDecision: null,
+  pullRequests: [],
+};
+
 export const AGENT_ELVIS_DETAIL: AgentDetail = {
   ...AGENT_ELVIS,
   bindings: [{ platform: 'github', externalHandle: 'tasca-elvis', state: 'active' }],

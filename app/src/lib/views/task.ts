@@ -1,13 +1,61 @@
-// Routing inspector (C5, read-only). For one task (GET /api/tasks/:id) it shows
-// the routing decision flow (estimated tier → candidates → winner) and any linked
-// pull requests. Intervention controls render visible-but-disabled. Absent data
-// (no decision yet, no PRs) renders honest empty rows, never fabricated scores.
+// Routing inspector (C5). For one task (GET /api/tasks/:id) it shows the routing
+// decision flow (estimated tier → candidates → winner) and any linked pull requests.
+// Reassign + Interrupt are LIVE controls (the cancel-coupled write-API); Escalate stays
+// read-only. Absent data (no decision yet, no PRs) renders honest empty rows.
 
-import { getTask } from '../api';
+import { getTask, reassignTask, interruptTask, type WriteResult, type TaskWriteOk, type TaskWriteConflict } from '../api';
 import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
+import { liveAction, describeFailure } from '../live';
 import { I, tierTag, taskRef, platTag, esc, roControl } from '../ui';
 import type { PullRequest, RoutingCandidate, RoutingDecision, TaskDetail } from '../contract';
+
+/** The two cancel-coupled controls. Interrupt only renders while a run is live (executing);
+ *  Reassign renders live for any non-terminal task. Both carry just the task id — the backend
+ *  cancels any live runner job atomically with the task transition (the #244 seam). */
+function taskActions(t: TaskDetail): string {
+  const interrupt =
+    t.status === 'executing'
+      ? `<button class="ictl live-ctl amber" type="button" data-action="interrupt" data-task-id="${esc(t.id)}" aria-label="Interrupt this run">${I.pause} Interrupt</button>`
+      : '';
+  const reassign =
+    t.status === 'done'
+      ? roControl('Reassign')
+      : `<button class="ictl live-ctl" type="button" data-action="reassign" data-task-id="${esc(t.id)}" aria-label="Reassign this task">Reassign</button>`;
+  return `${interrupt}${reassign}${roControl('Escalate', { cls: 'ictl amber' })}`;
+}
+
+/** Honest copy for the three "couldn't apply" truths — the UI must never tell the user it
+ *  "interrupted" a run that had already finished. Success is shown by the re-render (the task's
+ *  status flips to routable/needs_attention), so only the non-ok outcomes get a banner. */
+export function describeTaskOutcome(r: WriteResult<TaskWriteOk | TaskWriteConflict>): string {
+  if (r.kind === 'conflict') {
+    const code = (r.data as TaskWriteConflict).code;
+    if (code === 'too_late') return 'The agent already finished — showing the result.';
+    if (code === 'no_inflight') return 'This run is executing in-process and can’t be interrupted yet.';
+    return 'That action isn’t available in the task’s current state — showing the latest.';
+  }
+  return describeFailure(r);
+}
+
+/** Wire the task view's live controls after each render; `rerun` reconciles to server truth.
+ *  Re-reads the task id from the DOM each render (the button is discarded + rebuilt on rerun). */
+export function wireTask(el: HTMLElement, rerun: () => Promise<void>): void {
+  el.querySelectorAll<HTMLButtonElement>('.live-ctl[data-action]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.taskId ?? '';
+      const action = btn.dataset.action;
+      void liveAction({
+        button: btn,
+        pendingLabel: action === 'interrupt' ? 'Interrupting…' : 'Reassigning…',
+        view: el,
+        rerun,
+        write: () => (action === 'interrupt' ? interruptTask(id) : reassignTask(id)),
+        describe: describeTaskOutcome,
+      });
+    });
+  });
+}
 
 function candidate(c: RoutingCandidate, rank: number, winner: string | null): string {
   const chosen = c.agentId === winner;
@@ -62,8 +110,7 @@ export async function loadTask(): Promise<LoadResult> {
             <div class="vh-meta"><span class="mono dim">${t.repoRef ? esc(t.repoRef) : '—'}</span><span class="branch-tag">${esc(t.status)}</span>${t.claimedBy ? `<span class="mono dim">claimed by ${esc(t.claimedBy)}</span>` : ''}</div>
           </div></div>
           <div class="vh-actions">
-            ${roControl('Reassign')}
-            ${roControl('Escalate', { cls: 'ictl amber' })}
+            ${taskActions(t)}
           </div>
         </div></div>`;
 

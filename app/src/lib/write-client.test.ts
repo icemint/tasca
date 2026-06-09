@@ -56,6 +56,15 @@ describe('post — sends CSRF + classifies every outcome honestly', () => {
     expect(r.kind === 'conflict' && r.data.currentVersion).toBe(9);
   });
 
+  it('a 409 with an UNPARSEABLE body → error, NOT a fabricated conflict (never a lie)', async () => {
+    // A proxy error page / truncated response: the 409 body fails to parse. Mirroring the 200
+    // branch, this is an honest 'error' — fabricating `{conflict, data:{}}` would let the UI
+    // render a definite "not available in the current state" (or a NaN version) for an unknown
+    // failure. With no `code` ever received, the three cancel truths must not be invented.
+    mockWrites([{ status: 409 }]); // empty body → res.json() throws
+    expect((await post('/api/tasks/t1/interrupt', {})).kind).toBe('error');
+  });
+
   it('a 403 refreshes the CSRF token and retries ONCE (self-heals a stale token)', async () => {
     const m = mockWrites([{ status: 403 }, { status: 200, body: { ok: true } }]);
     const r = await post('/api/agents/a1/pause', { version: 1 });

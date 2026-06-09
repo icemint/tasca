@@ -75,6 +75,7 @@ class CountingStore implements CoordinationStore {
   async escalateTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async overrideTierEstimate(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async reassignTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async interruptTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() { return null; }
   // read-side (unused by the webhook/intake tests)

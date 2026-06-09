@@ -126,6 +126,9 @@ class FakeStore implements CoordinationStore {
   async reassignTask(): Promise<TaskWriteOutcome> {
     return { ok: false, reason: 'not_found' };
   }
+  async interruptTask(): Promise<TaskWriteOutcome> {
+    return { ok: false, reason: 'not_found' };
+  }
   // read-side
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }
@@ -801,6 +804,9 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     }
     async requestCancel(): Promise<'removed' | 'signalled' | 'too_late'> {
       return 'too_late';
+    }
+    async requestCancelForTask(): Promise<'removed' | 'signalled' | 'too_late' | 'no_job'> {
+      return 'no_job';
     }
   }
 
