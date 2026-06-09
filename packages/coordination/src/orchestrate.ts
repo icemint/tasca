@@ -136,14 +136,18 @@ export interface OrchestrationDeps {
   provisioner?: RepoProvisioner;
   /**
    * The dispatch queue (the coordination→execution split). When wired, a dispatch is
-   * ENQUEUED for an agent-runner; if no runner claims it within `dispatchFallbackMs`,
-   * coordination cancels it and runs the task IN-PROCESS — the migration safety net so
-   * a runner outage never silently stalls a task. Absent → always in-process (today).
+   * ENQUEUED for an agent-runner; coordination waits (polling) for a runner to claim it.
+   * If none claims within `runnerWaitMs`, the task is retired to `needs_attention` with a
+   * "no execution capacity" reason — NEVER run in-process (the hardened boundary holds).
+   * Absent → no queue: the agent runs in-process (Stage-1 single-process / test mode).
    */
   dispatchQueue?: DispatchQueue;
-  /** How long to wait for a runner to claim an enqueued job before falling back to
-   *  in-process. Default 8000ms. A healthy runner claims within ~one poll. */
-  dispatchFallbackMs?: number;
+  /** How long to wait (polling) for a runner to claim before retiring the task to
+   *  needs_attention. Default 30000ms — long enough to absorb a runner redeploy, short
+   *  enough that a real outage escalates visibly. Override via TASCA_RUNNER_WAIT_MS. */
+  runnerWaitMs?: number;
+  /** Poll interval while waiting for a runner claim. Default 500ms. */
+  runnerPollMs?: number;
   /** Breaker threshold; defaults to 2 (scaffold §3.2). */
   breakerThreshold?: number;
   /** Per-project concurrency limit for the dispatch gate. */
@@ -158,9 +162,12 @@ export interface OrchestrationDeps {
 const DEFAULT_AGENT_TIMEOUT_MS = 600_000;
 /** Above this prompt length the issue body is capped (see buildClaudeCommand); we log it. */
 const PROMPT_TRUNCATE_THRESHOLD = 60_000;
-/** Default window to wait for an agent-runner to claim an enqueued job before the
- *  in-process fallback takes over. A healthy runner claims within ~one poll interval. */
-const DEFAULT_DISPATCH_FALLBACK_MS = 8_000;
+/** Default window to wait (polling) for an agent-runner to claim an enqueued job before
+ *  the task is retired to needs_attention. 30s absorbs a routine runner redeploy (cached
+ *  image + Node boot + first claim poll, ~10–25s) while escalating a real outage fast. */
+const DEFAULT_RUNNER_WAIT_MS = 30_000;
+/** Default poll interval while waiting for a runner to claim. */
+const DEFAULT_RUNNER_POLL_MS = 500;
 
 /** What coordination enqueues for an agent-runner — everything the runner needs to
  *  execute the task. Mirrors @tasca/agent-runner's DispatchPayload (jsonb on the wire). */
@@ -198,7 +205,13 @@ export type OrchestrationOutcome =
   | { kind: 'no_candidate'; taskId: string }
   | { kind: 'not_routable'; taskId: string; status: TaskStatus }
   | { kind: 'needs_attention'; taskId: string; failureCount: number }
-  | { kind: 'failed'; taskId: string; failureCount: number };
+  | { kind: 'failed'; taskId: string; failureCount: number }
+  // No agent-runner claimed the enqueued job within the wait bound → retired to
+  // needs_attention with a "no execution capacity" reason (the breaker is untouched).
+  | { kind: 'no_capacity'; taskId: string; agentId: string }
+  // An operator cancel/reassign took the job mid-wait (the job is `cancelled`); the
+  // canceller owns the task's post-cancel state, so orchestration just bows out.
+  | { kind: 'preempted'; taskId: string; agentId: string };
 
 /**
  * Run the forward path for one task.assigned event. Returns a structured
@@ -342,12 +355,12 @@ export async function orchestrateTaskAssigned(
       });
     }
 
-    // SPLIT DISPATCH (when a queue is wired): enqueue the job for an agent-runner and
-    // give it a short window to claim. `cancel` is the race-safe hinge — if it returns
-    // false a runner claimed the job (it executes; the reaper finalizes), so we return;
-    // if true, NO runner took it within the window, so we fall through to the in-process
-    // path below. This is the migration safety net: a runner outage can never silently
-    // stall a task — coordination always picks it up itself.
+    // SPLIT DISPATCH (when a queue is wired): enqueue the job for an agent-runner and WAIT
+    // (polling) for a runner to claim it. The hardened boundary HOLDS — there is no longer
+    // an in-process fallback: if no runner claims within the wait bound, the task is retired
+    // to needs_attention with an honest "no execution capacity" reason (visible + actionable),
+    // NEVER run in-process co-located with the master key. `cancel` stays the race-safe hinge
+    // at the timeout boundary.
     if (deps.dispatchQueue && repoRef) {
       const payload: DispatchPayload = {
         taskId: task.id,
@@ -362,26 +375,54 @@ export async function orchestrateTaskAssigned(
         taskId: task.id,
         payload: payload as unknown as Record<string, unknown>,
       });
-      await sleep(deps.dispatchFallbackMs ?? DEFAULT_DISPATCH_FALLBACK_MS);
-      const tookOver = await deps.dispatchQueue.cancel(jobId);
-      if (!tookOver) {
-        // A runner claimed it within the window — it owns the task; the reaper finalizes
-        // on completion. (The PR url isn't known here; the reaper records it.)
+      const waitMs = deps.runnerWaitMs ?? DEFAULT_RUNNER_WAIT_MS;
+      const pollMs = deps.runnerPollMs ?? DEFAULT_RUNNER_POLL_MS;
+      const claim = await awaitRunnerClaim(deps.dispatchQueue, jobId, waitMs, pollMs);
+      if (claim === 'claimed') {
+        // A runner owns the task; the reaper finalizes on completion (PR url unknown here).
         deps.logger?.info?.('coordination: dispatched to an agent-runner', { taskId: task.id, jobId });
         return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: '(runner)' };
       }
-      // SECURITY-POSTURE DOWNGRADE, logged LOUD (error, not info): the in-process fallback
-      // runs the prompt-injected agent INSIDE the worker — root-ish, full egress, co-located
-      // with the master key — i.e. the exact pre-split exposure the runner isolation closes.
-      // It's the migration safety net (a runner outage must never stall a task), but an
-      // operator should SEE every time the hardened boundary is bypassed.
-      deps.logger?.error('coordination: SECURITY — no runner claimed; running the agent IN-PROCESS (fallback bypasses the runner isolation)', {
+      if (claim === 'preempted') {
+        // An operator cancel/reassign flipped the job to `cancelled` mid-wait; the canceller
+        // owns the task's post-cancel state. Bow out — never claim 'dispatched' for it.
+        deps.logger?.info?.('coordination: dispatch preempted by an operator cancel/reassign', { taskId: task.id, jobId });
+        return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
+      }
+      // claim === 'timeout': the job is still queued past the bound. cancel() decides it
+      // atomically — true ⇒ we deleted a still-queued job (genuinely no runner); false ⇒
+      // a runner or operator took it in the last gap, so defer to its true status.
+      const removed = await deps.dispatchQueue.cancel(jobId);
+      if (!removed) {
+        const st = await deps.dispatchQueue.jobStatus(jobId);
+        if (st === 'cancelled' || st === null) {
+          return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
+        }
+        deps.logger?.info?.('coordination: a runner claimed at the wait boundary', { taskId: task.id, jobId });
+        return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: '(runner)' };
+      }
+      // Genuinely no execution capacity. Retire to needs_attention WITHOUT the breaker —
+      // a runner outage is infra-unavailability, not an agent failure, so it must not burn
+      // the task's retry budget. The reason is recorded in last_error for the operator.
+      const reason = `no execution capacity: no agent-runner claimed within ${waitMs}ms`;
+      const acted = await deps.store.failNoCapacity(task.id, reason);
+      if (!acted) {
+        // The guard missed: an operator cancel/reassign moved the task out of executing
+        // during the wait. They own it — don't claim a no_capacity we didn't apply.
+        deps.logger?.info?.('coordination: no-capacity retire skipped; task already moved (operator)', { taskId: task.id, jobId });
+        return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
+      }
+      deps.logger?.error('coordination: no runner claimed within the wait bound; task → needs_attention (no execution capacity)', {
         taskId: task.id,
         jobId,
+        waitMs,
       });
-      // fall through to the in-process path
+      return { kind: 'no_capacity', taskId: task.id, agentId: winner.agentId };
     }
 
+    // NO-QUEUE MODE ONLY (deps.dispatchQueue absent, or no repoRef to dispatch): run the
+    // agent IN-PROCESS. This is the Stage-1 single-process / test execution path, NOT a
+    // production fallback — when the queue is wired, the branch above always returns.
     // Provision a worktree for the agent run. A GitHub event's repoHint is an
     // `owner/repo` slug, not a local path. With a provisioner we ensure the
     // (tokenless-origin) local clone exists, then have the PROVISIONER create the
@@ -564,6 +605,28 @@ function deterministicHeadBranch(externalStoryId: string): string {
 interface AgentRunResult {
   exitCode: number | null;
   outputTail: string;
+}
+
+/** Poll the dispatch queue for a runner to claim `jobId`, up to `waitMs`. Returns:
+ *  - 'claimed'   — a runner took it (status left 'queued' for a runner state),
+ *  - 'preempted' — an operator cancel/reassign flipped it to 'cancelled' (or it's gone),
+ *  - 'timeout'   — still 'queued' after the bound (no runner claimed).
+ *  The first poll is immediate, so a fast claim returns without waiting the full bound. */
+async function awaitRunnerClaim(
+  queue: DispatchQueue,
+  jobId: string,
+  waitMs: number,
+  pollMs: number
+): Promise<'claimed' | 'preempted' | 'timeout'> {
+  const interval = Math.max(1, pollMs);
+  const polls = Math.max(1, Math.ceil(waitMs / interval));
+  for (let i = 0; i < polls; i++) {
+    const st = await queue.jobStatus(jobId);
+    if (st === null || st === 'cancelled') return 'preempted';
+    if (st !== 'queued') return 'claimed';
+    if (i < polls - 1) await sleep(interval);
+  }
+  return 'timeout';
 }
 
 /** Cap on captured agent output; we keep only the last of a long run for the log. */

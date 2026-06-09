@@ -150,6 +150,7 @@ async function main(): Promise<void> {
   const breakerThreshold = numericEnv('TASCA_BREAKER_THRESHOLD');
   const perProjectLimit = numericEnv('TASCA_PER_PROJECT_LIMIT');
   const agentTimeoutMs = numericEnv('TASCA_AGENT_TIMEOUT_MS');
+  const runnerWaitMs = numericEnv('TASCA_RUNNER_WAIT_MS');
 
   const pool = new Pool({ connectionString: databaseUrl });
 
@@ -372,9 +373,11 @@ async function main(): Promise<void> {
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
     ...(githubInstallationHandler ? { githubInstallationHandler } : {}),
     ...(provisioner ? { provisioner } : {}),
-    // Split dispatch: enqueue jobs for an agent-runner, with in-process fallback.
-    // OFF by default; set TASCA_DISPATCH_MODE=queue once a runner is deployed.
+    // Split dispatch: enqueue jobs for an agent-runner (NO in-process fallback — if no
+    // runner claims within the wait bound, the task is retired to needs_attention). OFF by
+    // default; set TASCA_DISPATCH_MODE=queue once a runner is deployed.
     ...(process.env.TASCA_DISPATCH_MODE === 'queue' ? { dispatchQueueEnabled: true } : {}),
+    ...(runnerWaitMs !== undefined ? { runnerWaitMs } : {}),
     ...(authHandler ? { authHandler } : {}),
     ...(verifySession ? { verifySession } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),

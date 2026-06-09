@@ -73,6 +73,9 @@ export interface Task {
   failureCount: number;
   repoRef: string | null;
   tierEstimate: TierEstimate | null;
+  /** Human-readable reason for the current state (e.g. why a task is in needs_attention).
+   *  Null unless explicitly set; today the no-execution-capacity path writes it. */
+  lastError: string | null;
 }
 
 // ── Tier estimation ─────────────────────────────────────────────────────────

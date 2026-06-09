@@ -39,11 +39,15 @@ export interface CreateCoordinationDeps {
   classifier?: LlmClassifierPort;
   /** Optional repo provisioner (clone-on-dispatch); absent → repoRef used as-is. */
   provisioner?: RepoProvisioner;
-  /** Enable split dispatch: enqueue jobs for an agent-runner, with in-process fallback.
-   *  Default OFF (always in-process) until runners are deployed. */
+  /** Enable split dispatch: enqueue jobs for an agent-runner (no in-process fallback —
+   *  if no runner claims, the task is retired to needs_attention). Default OFF (always
+   *  in-process, the no-queue/dev mode) until runners are deployed. */
   dispatchQueueEnabled?: boolean;
-  /** Window to wait for a runner to claim before the in-process fallback. */
-  dispatchFallbackMs?: number;
+  /** Window to wait (polling) for a runner to claim before retiring the task to
+   *  needs_attention. Default 30000ms. */
+  runnerWaitMs?: number;
+  /** Poll interval while waiting for a runner claim. Default 500ms. */
+  runnerPollMs?: number;
   breakerThreshold?: number;
   perProjectLimit?: number;
   agentTimeoutMs?: number;
@@ -166,7 +170,8 @@ export function createCoordination(
     ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
     ...(dispatchQueue ? { dispatchQueue } : {}),
-    ...(input.dispatchFallbackMs !== undefined ? { dispatchFallbackMs: input.dispatchFallbackMs } : {}),
+    ...(input.runnerWaitMs !== undefined ? { runnerWaitMs: input.runnerWaitMs } : {}),
+    ...(input.runnerPollMs !== undefined ? { runnerPollMs: input.runnerPollMs } : {}),
     ...(input.breakerThreshold !== undefined ? { breakerThreshold: input.breakerThreshold } : {}),
     ...(input.perProjectLimit !== undefined ? { perProjectLimit: input.perProjectLimit } : {}),
     ...(input.agentTimeoutMs !== undefined ? { agentTimeoutMs: input.agentTimeoutMs } : {}),

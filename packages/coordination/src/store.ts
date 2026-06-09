@@ -191,6 +191,17 @@ export interface CoordinationStore {
     breakerThreshold: number
   ): Promise<{ acted: boolean; failureCount: number; tripped: boolean }>;
 
+  /**
+   * Retire a dispatched task to `needs_attention` because no execution capacity was
+   * available (no agent-runner claimed the job within the wait bound). DELIBERATELY does
+   * NOT touch the breaker / failure_count: runner-unavailability is infra, not an agent
+   * failure, and must not burn the task's retry budget. Records the human-readable reason
+   * in `last_error` so the state is actionable. Guarded to a still-dispatched status
+   * (`executing`/`claimed`) so it can't fight a concurrent operator cancel/reassign that
+   * already moved the task. Returns true if it acted.
+   */
+  failNoCapacity(taskId: string, reason: string): Promise<boolean>;
+
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
   recordRoutingDecision(input: {
     taskId: string;
@@ -281,6 +292,7 @@ interface TaskRow {
   failure_count: number;
   repo_ref: string | null;
   tier_estimate: TierEstimate | null;
+  last_error: string | null;
 }
 
 function mapTask(row: TaskRow): Task {
@@ -294,6 +306,7 @@ function mapTask(row: TaskRow): Task {
     failureCount: row.failure_count,
     repoRef: row.repo_ref,
     tierEstimate: row.tier_estimate,
+    lastError: row.last_error ?? null,
   };
 }
 
@@ -361,7 +374,7 @@ export class PgCoordinationStore implements CoordinationStore {
 
   async getTask(taskId: string): Promise<Task | null> {
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate
+      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error
          FROM task WHERE id = $1`,
       [taskId]
     );
@@ -592,6 +605,19 @@ export class PgCoordinationStore implements CoordinationStore {
     if (res.rowCount !== 1) return { acted: false, failureCount: 0, tripped: false };
     const row = res.rows[0]!;
     return { acted: true, failureCount: row.failure_count, tripped: row.status === 'needs_attention' };
+  }
+
+  async failNoCapacity(taskId: string, reason: string): Promise<boolean> {
+    // → needs_attention WITHOUT touching failure_count (infra-unavailability, not an agent
+    // failure). Records the reason in last_error. Guarded to a still-dispatched status so a
+    // concurrent operator cancel/reassign (which already moved the task) wins and this no-ops.
+    const res = await this.db.query(
+      `UPDATE task
+          SET status = 'needs_attention', last_error = $2, version = version + 1, updated_at = now()
+        WHERE id = $1 AND status IN ('executing','claimed')`,
+      [taskId, reason]
+    );
+    return res.rowCount === 1;
   }
 
   async recordRoutingDecision(input: {

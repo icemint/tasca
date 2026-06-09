@@ -637,4 +637,23 @@ run('coordination (Postgres) — human write-API interventions', () => {
     expect(await store.interruptTask(id)).toEqual({ ok: false, reason: 'conflict' });
     expect(await statusOf(id)).toBe('needs_attention');
   });
+
+  it('failNoCapacity: executing → needs_attention with the reason, failure_count UNTOUCHED (not the breaker)', async () => {
+    const { id, version } = await at('executing');
+    await pool.query('UPDATE task SET failure_count=1 WHERE id=$1', [id]); // a prior real failure
+    expect(await store.failNoCapacity(id, 'no execution capacity: no agent-runner claimed within 30000ms')).toBe(true);
+    const row = await pool.query<{ status: string; last_error: string; failure_count: number; version: number }>(
+      'SELECT status, last_error, failure_count, version FROM task WHERE id=$1',
+      [id]
+    );
+    expect(row.rows[0]).toMatchObject({ status: 'needs_attention', failure_count: 1 }); // budget NOT burned
+    expect(row.rows[0]!.last_error).toContain('no execution capacity');
+    expect(row.rows[0]!.version).toBe(version + 1);
+  });
+
+  it('failNoCapacity is guarded: a no-op once the task is no longer executing/claimed (operator already moved it)', async () => {
+    const { id } = await at('routable'); // e.g. an operator reassigned it during the wait
+    expect(await store.failNoCapacity(id, 'no execution capacity')).toBe(false);
+    expect(await statusOf(id)).toBe('routable'); // untouched — never fights the operator
+  });
 });

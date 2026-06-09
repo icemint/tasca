@@ -57,6 +57,7 @@ class CountingStore implements CoordinationStore {
       failureCount: 0,
       repoRef: input.repoRef ?? null,
       tierEstimate: null,
+      lastError: null,
     };
     this.tasksByStory.set(key, task);
     return task;
@@ -76,6 +77,7 @@ class CountingStore implements CoordinationStore {
   async overrideTierEstimate(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async reassignTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async interruptTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async failNoCapacity(): Promise<boolean> { return false; }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() { return null; }
   // read-side (unused by the webhook/intake tests)

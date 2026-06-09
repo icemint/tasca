@@ -336,6 +336,7 @@ async function dispatch(
         repoRef: task.repoRef,
         claimedBy: task.claimedBy,
         failureCount: task.failureCount,
+        lastError: task.lastError,
         routingDecision: decision ? routingDecisionJson(decision) : null,
         pullRequests: prs.map(pullRequestJson),
       });

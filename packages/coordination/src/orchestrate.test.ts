@@ -63,6 +63,7 @@ class FakeStore implements CoordinationStore {
       failureCount: 0,
       repoRef: input.repoRef ?? null,
       tierEstimate: null,
+      lastError: null,
     };
     this.tasks.set(task.id, task);
     return task;
@@ -100,6 +101,16 @@ class FakeStore implements CoordinationStore {
     }
     const r = await this.recordFailureAndTransition(taskId, breakerThreshold);
     return { acted: true, ...r };
+  }
+  noCapacityCalls: Array<{ taskId: string; reason: string }> = [];
+  async failNoCapacity(taskId: string, reason: string): Promise<boolean> {
+    this.noCapacityCalls.push({ taskId, reason });
+    const t = this.tasks.get(taskId)!;
+    if (t.status !== 'executing' && t.status !== 'claimed') return false;
+    t.status = 'needs_attention';
+    t.lastError = reason;
+    t.version += 1; // breaker/failure_count deliberately untouched
+    return true;
   }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() {
@@ -762,17 +773,24 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     repoHint: 'acme/widgets',
   };
 
-  // cancel() returns the configured result: true = "no runner claimed, we cancel and
-  // run in-process"; false = "a runner already claimed it, defer to it".
+  // The runner-wait path polls jobStatus() to detect a claim, then uses cancel() as the
+  // race-safe hinge at timeout. `status` drives the poll outcome; cancelResult drives the
+  // timeout hinge (true = "still queued, we cancel" → no_capacity; false = "a runner took it").
   class FakeDispatchQueue implements DispatchQueue {
     enqueued: DispatchJobInput[] = [];
+    status = 'queued';
+    cancelled: string[] = [];
     constructor(private readonly cancelResult: boolean) {}
     async enqueue(input: DispatchJobInput): Promise<{ id: string }> {
       this.enqueued.push(input);
       return { id: `job-${this.enqueued.length}` };
     }
-    async cancel(): Promise<boolean> {
+    async cancel(id: string): Promise<boolean> {
+      this.cancelled.push(id);
       return this.cancelResult;
+    }
+    async jobStatus(): Promise<string | null> {
+      return this.status;
     }
     async claimNext(): Promise<DispatchJob | null> {
       return null;
@@ -823,43 +841,57 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     async removeWorktree() {},
   };
 
-  it('FALLBACK: enqueue succeeds but NO runner claims within the window → coordination runs it IN-PROCESS (loop never stalls)', async () => {
-    const store = new FakeStore();
-    const execution = new FakeExecution();
-    const queue = new FakeDispatchQueue(true); // cancel succeeds = nobody claimed it
-    const deps: OrchestrationDeps = {
-      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
-      provisioner: passingProvisioner,
-      dispatchQueue: queue,
-      dispatchFallbackMs: 0, // no real wait in the test
-    };
-
-    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, deps);
-
-    expect(queue.enqueued).toHaveLength(1); // it WAS enqueued for a runner first
-    expect(queue.enqueued[0]!.payload).toMatchObject({ repoRef: 'acme/widgets' });
-    expect(execution.spawnInputs).toHaveLength(1); // …then the in-process fallback RAN the agent
-    expect(outcome.kind).toBe('dispatched');
-    if (outcome.kind === 'dispatched') expect(outcome.prUrl).not.toBe('(runner)'); // a real in-process PR
+  const queueDeps = (store: FakeStore, execution: FakeExecution, queue: FakeDispatchQueue): OrchestrationDeps => ({
+    ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+    provisioner: passingProvisioner,
+    dispatchQueue: queue,
+    runnerWaitMs: 5, // tiny bound so the no-claim timeout fires fast
+    runnerPollMs: 1,
   });
 
-  it('a runner CLAIMS the job (cancel refused) → coordination defers and does NOT run in-process', async () => {
+  it('NO RUNNER claims within the bound → task retired to needs_attention (no execution capacity), NEVER in-process', async () => {
     const store = new FakeStore();
     const execution = new FakeExecution();
-    const queue = new FakeDispatchQueue(false); // cancel refused = a runner owns it
-    const deps: OrchestrationDeps = {
-      ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
-      provisioner: passingProvisioner,
-      dispatchQueue: queue,
-      dispatchFallbackMs: 0,
-    };
+    const queue = new FakeDispatchQueue(true); // cancel succeeds at timeout = nobody claimed it
+    // queue.status stays 'queued' → the poll times out.
 
-    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, deps);
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, queueDeps(store, execution, queue));
+
+    expect(queue.enqueued).toHaveLength(1); // it WAS enqueued for a runner
+    expect(execution.spawnInputs).toHaveLength(0); // the hardened boundary HELD — no in-process run
+    expect(queue.cancelled).toHaveLength(1); // the queued job was cancelled
+    expect(store.noCapacityCalls).toHaveLength(1); // → needs_attention with a reason
+    expect(store.noCapacityCalls[0]!.reason).toContain('no execution capacity');
+    expect(outcome.kind).toBe('no_capacity');
+  });
+
+  it('a runner CLAIMS the job (poll sees it leave the queue) → dispatched, no in-process run', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const queue = new FakeDispatchQueue(false);
+    queue.status = 'claimed'; // a runner took it
+
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, queueDeps(store, execution, queue));
 
     expect(queue.enqueued).toHaveLength(1);
-    expect(execution.spawnInputs).toHaveLength(0); // the agent did NOT run in-process — the runner owns it
+    expect(execution.spawnInputs).toHaveLength(0); // the runner owns it; nothing ran in-process
+    expect(queue.cancelled).toHaveLength(0); // never reached the cancel hinge (claimed during poll)
+    expect(store.noCapacityCalls).toHaveLength(0);
     expect(outcome.kind).toBe('dispatched');
-    if (outcome.kind === 'dispatched') expect(outcome.prUrl).toBe('(runner)'); // reaper will finalize
+    if (outcome.kind === 'dispatched') expect(outcome.prUrl).toBe('(runner)');
+  });
+
+  it('an operator cancel/reassign flips the job to cancelled mid-wait → preempted (task untouched by orchestration)', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const queue = new FakeDispatchQueue(false);
+    queue.status = 'cancelled'; // operator interrupt/reassign during the wait
+
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, queueDeps(store, execution, queue));
+
+    expect(execution.spawnInputs).toHaveLength(0);
+    expect(store.noCapacityCalls).toHaveLength(0); // orchestration does NOT fight the canceller
+    expect(outcome.kind).toBe('preempted');
   });
 });
 
