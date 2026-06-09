@@ -114,6 +114,12 @@ export async function loadTask(): Promise<LoadResult> {
           </div>
         </div></div>`;
 
+    // When a task is parked (needs_attention) with a recorded reason, surface it honestly so
+    // the state is actionable — e.g. "no execution capacity" when no runner was available.
+    const attention = t.lastError
+      ? `<div class="pcard attention" style="margin-bottom:18px"><div class="pc-h">Needs attention</div><div class="we-s" style="padding:6px 0">${esc(t.lastError)}</div></div>`
+      : '';
+
     const decision = t.routingDecision
       ? decisionBlock(t.routingDecision)
       : `<div class="pcard decision"><div class="pc-h">Routing decision</div>${empty('No routing decision yet', 'This task has not been routed. Once the engine estimates a tier and ranks candidates, the decision appears here.', I.spark)}</div>`;
@@ -122,6 +128,6 @@ export async function loadTask(): Promise<LoadResult> {
       ? `<div class="pcard" style="margin-top:18px"><div class="pc-h">Pull requests</div>${t.pullRequests.map(prRow).join('')}</div>`
       : '';
 
-    return { kind: 'ok', html: `${head}${decision}${prs}` };
+    return { kind: 'ok', html: `${head}${attention}${decision}${prs}` };
   });
 }

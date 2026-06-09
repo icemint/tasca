@@ -14,6 +14,7 @@ import {
   TASK_RETRY_ATTN,
   TASK_LRU_DETAIL,
   TASK_EXECUTING_DETAIL,
+  TASK_NO_CAPACITY_DETAIL,
   CONNECTIONS_OK,
   htmlOf,
 } from '../test-support';
@@ -112,6 +113,14 @@ describe('task inspector — the agent-authored PR actually shows', () => {
     expect(html).not.toContain('data-action="interrupt"');
     expect(html).not.toContain('data-action="reassign"'); // Reassign is read-only (roControl) on a done task
     expect(html).toContain('data-ro'); // the disabled Reassign control
+  });
+
+  it('a needs_attention task surfaces the honest reason (e.g. no execution capacity), not a silent stall', async () => {
+    withId('task-nocap');
+    stubFetch({ '/api/tasks/task-nocap': { body: TASK_NO_CAPACITY_DETAIL } });
+    const html = htmlOf(await loadTask());
+    expect(html).toContain('Needs attention');
+    expect(html).toContain('no execution capacity'); // the reason is visible + actionable
   });
 });
 
