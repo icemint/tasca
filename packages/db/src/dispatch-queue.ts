@@ -42,6 +42,17 @@ export interface SweepResult {
  */
 export type CancelResult = 'removed' | 'signalled' | 'too_late';
 
+/**
+ * The outcome of cancelling whatever job is currently live for a TASK (used by the
+ * write-API's interrupt/reassign-executing path). Same three cancel outcomes as
+ * {@link CancelResult}, plus:
+ *   - 'no_job' — the task has NO active dispatch job (queued/claimed/publishing). Either it
+ *               is running in-process (the coordination fallback, which this seam can't
+ *               interrupt) or it already finished. The caller must surface this honestly,
+ *               never as a false "interrupted".
+ */
+export type CancelForTaskResult = CancelResult | 'no_job';
+
 /** A claimed job handed to exactly one runner. */
 export interface DispatchJob {
   id: string;
@@ -114,6 +125,15 @@ export interface DispatchQueue {
    * revokes); a no-op once the runner is `publishing` or the job is terminal. See CancelResult.
    */
   requestCancel(jobId: string): Promise<CancelResult>;
+  /**
+   * Cancel whatever job is currently live for a TASK (the write-API interrupt / reassign-an-
+   * executing-task entrypoint). Finds the task's active job (queued/claimed/publishing), locks
+   * it, and applies the same exactly-one cancel as {@link requestCancel}. Returns 'no_job' when
+   * the task has no active job (in-process fallback, or already finished). Designed to run on a
+   * caller-supplied transaction client so the cancel + the task-state transition commit
+   * atomically. See {@link CancelForTaskResult}.
+   */
+  requestCancelForTask(taskId: string): Promise<CancelForTaskResult>;
   /** Mark a job `done` (terminal) from `publishing` (the runner's post-point-of-no-return
    *  state), storing the runner's `result` for the reaper. Fenced: false if the claim/row was
    *  lost (e.g. reclaimed). */
@@ -244,6 +264,38 @@ export class PgDispatchQueue implements DispatchQueue {
     );
     if (res.rowCount !== 1) return 'too_late'; // publishing / terminal / gone
     return res.rows[0]!.prev_status === 'queued' ? 'removed' : 'signalled';
+  }
+
+  async requestCancelForTask(taskId: string): Promise<CancelForTaskResult> {
+    // Find the task's single live job (the system invariant is one active job per task;
+    // ORDER BY created_at DESC LIMIT 1 is a defensive tiebreak), lock it, then apply the
+    // same queued|claimed → cancelled flip as requestCancel. The FOR UPDATE on `active`
+    // serializes against the runner's beginPublish exactly as the by-id path does. The
+    // RETURNING reports the prior status even when the conditional UPDATE did not fire, so
+    // a 'publishing' job is told apart from no job at all.
+    const res = await this.db.query<{ prev_status: string; cancelled: boolean }>(
+      `WITH active AS (
+         SELECT id, status FROM dispatch_job
+          WHERE task_id = $1 AND status IN ('queued','claimed','publishing')
+          ORDER BY created_at DESC
+          LIMIT 1
+          FOR UPDATE
+       ),
+       upd AS (
+         UPDATE dispatch_job d
+            SET status = 'cancelled', cancelled_at = now(), lease_expires_at = NULL, updated_at = now()
+           FROM active
+          WHERE d.id = active.id AND active.status IN ('queued','claimed')
+         RETURNING d.id
+       )
+       SELECT a.status AS prev_status, EXISTS (SELECT 1 FROM upd) AS cancelled
+         FROM active a`,
+      [taskId]
+    );
+    if (res.rowCount !== 1) return 'no_job'; // no active job — in-process fallback or already done
+    const row = res.rows[0]!;
+    if (!row.cancelled) return 'too_late'; // it was 'publishing' — the runner is finishing
+    return row.prev_status === 'queued' ? 'removed' : 'signalled';
   }
 
   async complete(jobId: string, fence: number, result?: Record<string, unknown>): Promise<boolean> {

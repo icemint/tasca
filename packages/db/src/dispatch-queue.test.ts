@@ -192,6 +192,62 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     }
   });
 
+  it('RACE: requestCancelForTask vs beginPublish on one CLAIMED job → EXACTLY ONE wins (the write-API task path)', async () => {
+    // The write-API cancels by TASK, not job id. requestCancelForTask must inherit the same
+    // exactly-one hinge: its `FOR UPDATE` on the task's active job serializes against the
+    // runner's beginPublish. Force them head-to-head.
+    const GATE = 880022;
+    const racePool = new Pool({ connectionString: url, max: 6 });
+    try {
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-taskrace', payload: {} });
+      const claimed = await new PgDispatchQueue(racePool).claimNext('runner-1', 30);
+      const fence = claimed!.fence;
+
+      const gate = await racePool.connect();
+      await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
+
+      const canceller = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { result: await new PgDispatchQueue(c).requestCancelForTask('t-taskrace') };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+      const publisher = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { won: await new PgDispatchQueue(c).beginPublish(jobId, fence) };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+
+      await waitForWaiters(racePool, GATE, 2);
+      await gate.query('SELECT pg_advisory_unlock($1)', [GATE]);
+      gate.release();
+
+      const [cancel, publish] = await Promise.all([canceller, publisher]);
+      const cancelWon = cancel.result === 'signalled';
+      const publishWon = publish.won === true;
+      expect([cancelWon, publishWon].filter(Boolean)).toHaveLength(1);
+
+      const row = await racePool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [jobId]);
+      if (cancelWon) {
+        expect(row.rows[0]!.status).toBe('cancelled');
+      } else {
+        expect(cancel.result).toBe('too_late'); // the task cancel is a no-op once publishing
+        expect(row.rows[0]!.status).toBe('publishing');
+      }
+    } finally {
+      await racePool.end();
+    }
+  });
+
   it('DRAIN: N jobs across M concurrent looping claimers → each job claimed exactly once, none lost', async () => {
     const JOBS = 200;
     const CLAIMERS = 16;
@@ -319,6 +375,33 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
     const jc = await q.claimNext('r1', 30);
     expect(await q.beginPublish(jc!.id, jc!.fence)).toBe(true);
     expect(await q.requestCancel(c)).toBe('too_late');
+  });
+
+  it('requestCancelForTask: finds the task live job — removed/signalled/too_late, and no_job when there is none', async () => {
+    // no active job for the task → no_job (in-process fallback or already finished)
+    expect(await q.requestCancelForTask('t-none')).toBe('no_job');
+
+    // queued → removed
+    await q.enqueue({ taskId: 't-q', payload: {} });
+    expect(await q.requestCancelForTask('t-q')).toBe('removed');
+    expect(await q.claimNext('r', 30)).toBeNull();
+
+    // claimed → signalled
+    const { id: b } = await q.enqueue({ taskId: 't-c', payload: {} });
+    expect((await q.claimNext('r1', 30))!.id).toBe(b);
+    expect(await q.requestCancelForTask('t-c')).toBe('signalled');
+    expect((await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b])).rows[0]!.status).toBe('cancelled');
+
+    // publishing → too_late (told apart from no_job: a job exists, it just passed the point of no return)
+    const { id: c } = await q.enqueue({ taskId: 't-p', payload: {} });
+    const jc = await q.claimNext('r1', 30);
+    expect(jc!.id).toBe(c);
+    expect(await q.beginPublish(jc!.id, jc!.fence)).toBe(true);
+    expect(await q.requestCancelForTask('t-p')).toBe('too_late');
+
+    // a terminal job is also no active job → no_job
+    await q.complete(jc!.id, jc!.fence, { prUrl: 'u' });
+    expect(await q.requestCancelForTask('t-p')).toBe('no_job');
   });
 
   it('beginPublish → complete: the normal finish path (claimed → publishing → done)', async () => {

@@ -52,6 +52,9 @@ class FakeQueue implements DispatchQueue {
   requestCancel(): Promise<'removed' | 'signalled' | 'too_late'> {
     return Promise.resolve('too_late');
   }
+  requestCancelForTask(): Promise<'removed' | 'signalled' | 'too_late' | 'no_job'> {
+    return Promise.resolve('no_job');
+  }
   // Reaper-side methods — unused by the runner, present to satisfy the interface.
   sweepExpired(): Promise<{ reclaimed: number; failedOver: number }> {
     return Promise.resolve({ reclaimed: 0, failedOver: 0 });
