@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { existsSync } from 'node:fs';
 import { createExecution, commitAgentWorkImpl, type GitExecFn, type VendorServices } from './factory.js';
 import { ExecutionError } from './port.js';
 
@@ -487,5 +488,79 @@ describe('commitAgentWork', () => {
     expect(err).toBeInstanceOf(ExecutionError);
     expect((err as ExecutionError).kind).toBe('commit');
     expect((err as ExecutionError).cause).toBeInstanceOf(Error);
+  });
+});
+
+describe('spawnAgent — ephemeral per-task HOME (Wave-2 shared-HOME residual)', () => {
+  /** Capture the opts the factory hands the vendor, and the fake pty so a test can fire exit. */
+  function capture(over?: { throwOnSpawn?: boolean }) {
+    let opts: { env?: Record<string, string> } | undefined;
+    const pty = fakePty();
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: (o) => {
+          opts = o;
+          if (over?.throwOnSpawn) throw new Error('spawn failed');
+          return pty.handle;
+        },
+      }),
+    });
+    return { port, pty, optsOf: () => opts };
+  }
+
+  it('injects a FRESH per-task HOME + CLAUDE_CONFIG_DIR under it, distinct from the runner HOME', () => {
+    const { port, pty, optsOf } = capture();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
+    const env = optsOf()!.env!;
+    expect(env.HOME).toContain('tasca-agent-home-');
+    expect(env.HOME).not.toBe(process.env.HOME); // NOT the shared runner HOME — no cross-task sourcing
+    expect(env.CLAUDE_CONFIG_DIR).toBe(`${env.HOME}/.claude`); // claude state isolated under it
+    expect(existsSync(env.HOME!)).toBe(true); // created on disk
+    pty.fireExit(0); // cleanup
+  });
+
+  it('gives each spawn a DISTINCT home (no cross-task sharing), each removed on exit', () => {
+    const homes: string[] = [];
+    const ptys = [fakePty(), fakePty()];
+    let i = 0;
+    const port = createExecution({
+      servicesOverride: fakeServices({
+        startLifecyclePty: (o) => {
+          homes.push(o.env!.HOME!);
+          return ptys[i++]!.handle;
+        },
+      }),
+    });
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo' });
+    port.spawnAgent({ id: 'b', cwd: '/wt', command: 'echo' });
+    expect(homes[0]).not.toBe(homes[1]); // task B never sees task A's HOME
+    ptys.forEach((p) => p.fireExit(0));
+    expect(existsSync(homes[0]!)).toBe(false);
+    expect(existsSync(homes[1]!)).toBe(false);
+  });
+
+  it('removes the per-task HOME when the agent exits (no disk leak, no persistence to the next task)', () => {
+    const { port, pty, optsOf } = capture();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo' });
+    const home = optsOf()!.env!.HOME!;
+    expect(existsSync(home)).toBe(true);
+    pty.fireExit(0);
+    expect(existsSync(home)).toBe(false);
+  });
+
+  it('removes the per-task HOME on an agent ERROR too', () => {
+    const { port, pty, optsOf } = capture();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo' });
+    const home = optsOf()!.env!.HOME!;
+    pty.fireError(new Error('boom'));
+    expect(existsSync(home)).toBe(false);
+  });
+
+  it('cleans up the per-task HOME when the spawn THROWS synchronously (no leak on failure)', () => {
+    const { port, optsOf } = capture({ throwOnSpawn: true });
+    expect(() => port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo' })).toThrow(ExecutionError);
+    const home = optsOf()!.env!.HOME!;
+    expect(home).toContain('tasca-agent-home-');
+    expect(existsSync(home)).toBe(false); // created then cleaned, even on a spawn failure
   });
 });
