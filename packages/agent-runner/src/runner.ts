@@ -31,11 +31,25 @@ export interface DispatchPayload {
 }
 
 /** The outcome of executing one job. `retry:true` releases the job for another attempt
- *  (transient); `retry:false` fails it terminally. On success `result` carries what the
- *  reaper needs to finalize (e.g. the PR url) — the runner writes back to the QUEUE only. */
+ *  (transient); `retry:false` fails it terminally. `cancelled:true` means an operator's
+ *  requestCancel won the row at the runner's point-of-no-return — the runner opened NO PR;
+ *  the job is already `cancelled` in the queue, so the runner only revokes its token (no
+ *  complete/fail/release). On success `result` carries what the reaper finalizes (the PR
+ *  url) — the runner writes back to the QUEUE only. */
 export type ExecuteOutcome =
   | { ok: true; result?: Record<string, unknown> }
-  | { ok: false; retry: boolean; error: string };
+  | { ok: false; cancelled: true }
+  | { ok: false; cancelled?: false; retry: boolean; error: string };
+
+/** Cancellation context handed to execute so an operator interrupt can stop a run:
+ *  `signal` aborts a mid-run agent (the heartbeat trips it when the claim is lost), and
+ *  `beginPublish` is the point-of-no-return gate the runner must win before opening the PR. */
+export interface ExecuteControl {
+  signal: AbortSignal;
+  /** Atomically claim the right to finish (claimed→publishing); false ⇒ cancelled/fenced,
+   *  so execute must abort WITHOUT opening a PR. */
+  beginPublish: () => Promise<boolean>;
+}
 
 /** Run ONE dispatched job with a freshly-minted scoped token. Injected — the real
  *  implementation (clone/worktree/spawn/openPr via the ExecutionPort, using `token`
@@ -43,7 +57,8 @@ export type ExecuteOutcome =
 export type ExecuteJob = (
   job: DispatchJob,
   payload: DispatchPayload,
-  token: RepoToken
+  token: RepoToken,
+  control: ExecuteControl
 ) => Promise<ExecuteOutcome>;
 
 export interface RunnerOptions {
@@ -99,6 +114,10 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
 
     let token: RepoToken | null = null;
+    // Aborts the in-flight agent when the runner loses the claim (operator cancel flips the
+    // job to `cancelled`, so renewLease starts returning false) — a prompt interrupt, not a
+    // wait-for-the-agent-to-finish.
+    const abort = new AbortController();
 
     // Keep the lease alive while execute runs so a long task isn't reclaimed and
     // double-dispatched. A lost lease (renew returns false) or a task outliving its
@@ -117,10 +136,14 @@ export function createRunner(opts: RunnerOptions): Runner {
         .renewLease(job.id, job.fence, leaseSeconds)
         .then((ok) => {
           if (ok === false) {
-            opts.logger?.error?.('runner: lost the lease before renew (reclaimed by another runner)', {
+            // Lost the claim — reclaimed by another runner OR cancelled by an operator.
+            // Either way this runner must stop touching the job: abort the agent now, and
+            // its writes downstream are fenced out. Token is revoked in finally.
+            opts.logger?.error?.('runner: lost the claim mid-run (reclaimed or cancelled); aborting the agent', {
               jobId: job.id,
               fence: job.fence,
             });
+            abort.abort();
           }
         })
         .catch(() => {});
@@ -137,11 +160,20 @@ export function createRunner(opts: RunnerOptions): Runner {
 
     try {
       token = await opts.broker.mintRepoToken(payload.repoRef);
-      const outcome = await opts.execute(job, payload as DispatchPayload, token);
+      const control: ExecuteControl = {
+        signal: abort.signal,
+        beginPublish: () => opts.queue.beginPublish(job.id, job.fence),
+      };
+      const outcome = await opts.execute(job, payload as DispatchPayload, token, control);
       if (outcome.ok) {
         // The result (e.g. the PR url) rides into the QUEUE so the reaper — coordination
         // side — can record it + finalize; the runner never touches coordination tables.
         logIfLost(await opts.queue.complete(job.id, job.fence, outcome.result), 'complete');
+      } else if (outcome.cancelled) {
+        // An operator's cancel won the row (or the claim was lost): the job is already
+        // `cancelled` in the queue and NO PR was opened. The runner writes nothing back —
+        // the reaper re-routes the task — and only revokes its token (finally below).
+        opts.logger?.info?.('runner: job cancelled; no PR opened, revoking token', { jobId: job.id });
       } else if (outcome.retry) {
         logIfLost(await opts.queue.release(job.id, job.fence, { delaySeconds: retryDelay }), 'release');
       } else {

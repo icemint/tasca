@@ -8,4 +8,5 @@ export {
   type DispatchJobInput,
   type FinishedJob,
   type SweepResult,
+  type CancelResult,
 } from './dispatch-queue';

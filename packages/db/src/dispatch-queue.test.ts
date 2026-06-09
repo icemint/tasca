@@ -133,6 +133,65 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     }
   });
 
+  it('RACE: requestCancel vs beginPublish on one CLAIMED job → EXACTLY ONE wins (cancel hinge: no double-finalize, no zombie)', async () => {
+    // The cancel-in-flight invariant: an operator's requestCancel (claimed→cancelled) and the
+    // runner's beginPublish (claimed→publishing, its point-of-no-return before opening the PR)
+    // both target the SAME claimed row. Postgres row-locking must let exactly one win — never
+    // both (cancel AND a PR opened = double-finalize) and never neither (zombie). Force them.
+    const GATE = 880011;
+    const racePool = new Pool({ connectionString: url, max: 6 });
+    try {
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-cancelrace', payload: {} });
+      const claimed = await new PgDispatchQueue(racePool).claimNext('runner-1', 30);
+      const fence = claimed!.fence;
+
+      const gate = await racePool.connect();
+      await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
+
+      const canceller = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { who: 'cancel', result: await new PgDispatchQueue(c).requestCancel(jobId) };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+      const publisher = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { who: 'publish', won: await new PgDispatchQueue(c).beginPublish(jobId, fence) };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+
+      await waitForWaiters(racePool, GATE, 2);
+      await gate.query('SELECT pg_advisory_unlock($1)', [GATE]);
+      gate.release();
+
+      const [cancel, publish] = await Promise.all([canceller, publisher]);
+      const cancelWon = cancel.result === 'signalled';
+      const publishWon = publish.won === true;
+      // EXACTLY ONE — never both (double-finalize), never neither (zombie).
+      expect([cancelWon, publishWon].filter(Boolean)).toHaveLength(1);
+
+      const row = await racePool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [jobId]);
+      if (cancelWon) {
+        expect(publish.won).toBe(false); // the runner aborts: no PR
+        expect(row.rows[0]!.status).toBe('cancelled');
+      } else {
+        expect(cancel.result).toBe('too_late'); // the operator's cancel is a no-op
+        expect(row.rows[0]!.status).toBe('publishing');
+      }
+    } finally {
+      await racePool.end();
+    }
+  });
+
   it('DRAIN: N jobs across M concurrent looping claimers → each job claimed exactly once, none lost', async () => {
     const JOBS = 200;
     const CLAIMERS = 16;
@@ -239,6 +298,36 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
 
   it('claimNext returns null on an empty queue', async () => {
     expect(await q.claimNext('r1', 30)).toBeNull();
+  });
+
+  it('requestCancel: removes a queued job, signals a claimed one, is too_late once publishing/terminal', async () => {
+    // queued → removed
+    const { id: a } = await q.enqueue({ taskId: 't', payload: {} });
+    expect(await q.requestCancel(a)).toBe('removed');
+    expect(await q.claimNext('r', 30)).toBeNull(); // cancelled, not claimable
+
+    // claimed → signalled (a runner holds it; it'll abort + revoke)
+    const { id: b } = await q.enqueue({ taskId: 't', payload: {} });
+    const jb = await q.claimNext('r1', 30);
+    expect(jb!.id).toBe(b);
+    expect(await q.requestCancel(b)).toBe('signalled');
+    const row = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b]);
+    expect(row.rows[0]!.status).toBe('cancelled');
+
+    // publishing (point of no return passed) → too_late
+    const { id: c } = await q.enqueue({ taskId: 't', payload: {} });
+    const jc = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(jc!.id, jc!.fence)).toBe(true);
+    expect(await q.requestCancel(c)).toBe('too_late');
+  });
+
+  it('beginPublish → complete: the normal finish path (claimed → publishing → done)', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    expect(await q.complete(job!.id, job!.fence, { prUrl: 'u' })).toBe(true);
+    const row = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [job!.id]);
+    expect(row.rows[0]!.status).toBe('done');
   });
 
   it('cancel removes a still-queued job (true), but refuses one a runner already claimed (false)', async () => {

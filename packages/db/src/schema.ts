@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS dispatch_job (
   id               uuid PRIMARY KEY,
   task_id          text NOT NULL,
   payload          jsonb NOT NULL,
-  status           text NOT NULL DEFAULT 'queued' CONSTRAINT dispatch_job_status_chk CHECK (status IN ('queued','claimed','done','failed')),
+  status           text NOT NULL DEFAULT 'queued' CONSTRAINT dispatch_job_status_chk CHECK (status IN ('queued','claimed','publishing','done','failed','cancelled')),
   claimed_by       text,
   attempts         integer NOT NULL DEFAULT 0,
   claim_epoch      bigint NOT NULL DEFAULT 0,
@@ -55,5 +55,12 @@ ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS claim_epoch bigint NOT NULL DE
 -- re-selected — the status stays the source of truth, never lost to a 'reaping' limbo.
 ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS result jsonb;
 ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS reaping_at timestamptz;
+ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;
+-- Widen the status CHECK on an EXISTING table for the cancel-in-flight states
+-- ('publishing' = the runner's point-of-no-return; 'cancelled' = operator interrupt).
+-- DROP-then-ADD makes the migration idempotent across boots.
+ALTER TABLE dispatch_job DROP CONSTRAINT IF EXISTS dispatch_job_status_chk;
+ALTER TABLE dispatch_job ADD CONSTRAINT dispatch_job_status_chk
+  CHECK (status IN ('queued','claimed','publishing','done','failed','cancelled'));
 CREATE INDEX IF NOT EXISTS dispatch_job_claimable ON dispatch_job (available_at, created_at) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS dispatch_job_finished ON dispatch_job (updated_at) WHERE status IN ('done','failed');`;

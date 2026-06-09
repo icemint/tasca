@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { DispatchJob, DispatchJobInput, DispatchQueue } from '@tasca/db';
 import type { CredentialBroker } from '@tasca/broker';
-import { createRunner, type ExecuteOutcome } from './index';
+import { createRunner, type ExecuteOutcome, type ExecuteJob } from './index';
 
 // ── fakes (real state, no mocking framework) ─────────────────────────────────
 
@@ -41,6 +41,17 @@ class FakeQueue implements DispatchQueue {
   reclaimExpired(): Promise<number> {
     return Promise.resolve(0);
   }
+  // Cancel seam: by default the runner wins the point-of-no-return (beginPublish true) and
+  // no cancel is requested. Tests override `beginPublishResult` to exercise the cancel path.
+  beginPublishResult = true;
+  beginPublished: Array<{ id: string; fence: number }> = [];
+  beginPublish(id: string, fence: number): Promise<boolean> {
+    this.beginPublished.push({ id, fence });
+    return Promise.resolve(this.beginPublishResult);
+  }
+  requestCancel(): Promise<'removed' | 'signalled' | 'too_late'> {
+    return Promise.resolve('too_late');
+  }
   // Reaper-side methods — unused by the runner, present to satisfy the interface.
   sweepExpired(): Promise<{ reclaimed: number; failedOver: number }> {
     return Promise.resolve({ reclaimed: 0, failedOver: 0 });
@@ -70,7 +81,7 @@ const brokerThatMints = (token = 'scoped-tok'): { broker: CredentialBroker; call
   };
 };
 
-function setup(over: { execute?: () => Promise<ExecuteOutcome>; jobs?: DispatchJob[] } = {}) {
+function setup(over: { execute?: ExecuteJob; jobs?: DispatchJob[] } = {}) {
   const queue = new FakeQueue();
   queue.jobs = over.jobs ?? [job()];
   const { broker, calls: brokerCalls } = brokerThatMints();
@@ -136,6 +147,30 @@ describe('agent-runner — the claim → scoped token → execute → revoke lif
   it('runOnce returns false on an empty queue (the loop then backs off)', async () => {
     const { runner } = setup({ jobs: [] });
     expect(await runner.runOnce()).toBe(false);
+  });
+
+  it('a CANCELLED outcome writes NOTHING back to the queue but ALWAYS revokes the token', async () => {
+    // The job is already `cancelled` in the queue (the operator won the row). The runner must
+    // not complete/release/fail it (those would fight the cancel), and must still revoke.
+    const { queue, runner, revoked } = setup({ execute: async () => ({ ok: false, cancelled: true }) });
+    await runner.runOnce();
+    expect(queue.completed).toEqual([]);
+    expect(queue.released).toEqual([]);
+    expect(queue.failed).toEqual([]);
+    expect(revoked).toEqual(['scoped-tok']); // token revoked on a cancel-win
+  });
+
+  it('threads beginPublish (the point-of-no-return gate) to execute with the job id + fence', async () => {
+    const { queue, runner } = setup({
+      // A custom execute that exercises the injected gate, like the real one does before openPr.
+      execute: async (_job, _payload, _token, control) => {
+        const won = await control.beginPublish();
+        return won ? { ok: true } : { ok: false, cancelled: true };
+      },
+    });
+    await runner.runOnce();
+    expect(queue.beginPublished).toEqual([{ id: 'job-1', fence: 7 }]); // delegated with the job fence
+    expect(queue.completed).toHaveLength(1); // beginPublish won (default true) → completed
   });
 });
 

@@ -39,7 +39,7 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
   const timeoutMs = deps.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
   const prepareWorktree = deps.prepareWorktree ?? defaultPrepareWorktree;
   const removeWorktree = deps.removeWorktree ?? ((w: PreparedWorktree) => defaultRemoveWorktree({ localPath: w.localPath, worktreePath: w.worktreePath }));
-  return async (job, payload, token): Promise<ExecuteOutcome> => {
+  return async (job, payload, token, control): Promise<ExecuteOutcome> => {
     // 1. Clone + worktree using the SCOPED token via env-auth (never persisted).
     let worktree: PreparedWorktree;
     try {
@@ -62,8 +62,12 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
       //    socket). The prompt is the only attacker-influenced value; the factory
       //    POSIX-quotes it into the claude command.
       try {
-        await spawnAndAwait(deps.execution, { id: payload.taskId, prompt: payload.prompt, cwd: worktree.worktreePath }, timeoutMs);
+        await spawnAndAwait(deps.execution, { id: payload.taskId, prompt: payload.prompt, cwd: worktree.worktreePath }, timeoutMs, control.signal);
       } catch (err) {
+        // An operator cancel aborts the run (the heartbeat trips control.signal). That's a
+        // clean interrupt — NOT a retryable failure — so the breaker isn't driven and no PR
+        // is opened; the job is already `cancelled` in the queue.
+        if (control.signal.aborted) return { ok: false, cancelled: true };
         return { ok: false, retry: true, error: `agent run failed: ${errMsg(err)}` };
       }
 
@@ -75,6 +79,14 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
       });
       if (!work.changed) {
         return { ok: false, retry: false, error: 'agent produced no committed changes' };
+      }
+
+      // 3b. POINT OF NO RETURN. Atomically claim the right to finish (claimed→publishing).
+      //     If an operator's requestCancel won the row first (→ cancelled) or the claim was
+      //     fenced out, beginPublish is false: abort WITHOUT opening a PR. This is the
+      //     exactly-one cancel hinge — opening the PR is the irreversible customer action.
+      if (!(await control.beginPublish())) {
+        return { ok: false, cancelled: true };
       }
 
       // 4. Open the PR with the SCOPED token (env-auth push + gh GH_TOKEN; not in argv).
@@ -104,8 +116,13 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
  *  exit, a real transport error, or a timeout. EIO/EPIPE on the PTY master during child
  *  teardown is a benign Linux race — treat it as success and let commitAgentWork be the
  *  source of truth. (Mirrors coordination's runAgentToCompletion.) */
-function spawnAndAwait(execution: ExecutionPort, input: SpawnAgentInput, timeoutMs: number): Promise<void> {
+function spawnAndAwait(execution: ExecutionPort, input: SpawnAgentInput, timeoutMs: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    // Already cancelled before the agent even starts — don't spawn.
+    if (signal.aborted) {
+      reject(new Error('agent run aborted (cancelled before start)'));
+      return;
+    }
     // spawnAgent can throw SYNCHRONOUSLY before any handle exists — the executor throw
     // rejects this promise, which is what we want.
     const handle = execution.spawnAgent(input);
@@ -114,8 +131,22 @@ function spawnAndAwait(execution: ExecutionPort, input: SpawnAgentInput, timeout
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
       fn();
     };
+    // Operator cancel: the runner's heartbeat trips the signal when the claim is lost.
+    // Kill the agent immediately and reject — execute maps an aborted signal to `cancelled`.
+    const onAbort = (): void => {
+      finish(() => {
+        try {
+          execution.killAgent(input.id);
+        } catch {
+          // best-effort reap; we're aborting regardless
+        }
+        reject(new Error('agent run aborted (cancelled)'));
+      });
+    };
+    signal.addEventListener('abort', onAbort);
     const timer = setTimeout(() => {
       finish(() => {
         try {

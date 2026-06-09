@@ -47,6 +47,7 @@ export interface ReaperDeps {
 export interface ReapResult {
   finalizedDone: number;
   finalizedFailed: number;
+  cancelled: number;
   reclaimed: number;
   failedOver: number;
 }
@@ -129,7 +130,7 @@ export function makeReaper(deps: ReaperDeps): Reaper {
   }
 
   async function tick(): Promise<ReapResult> {
-    const result: ReapResult = { finalizedDone: 0, finalizedFailed: 0, reclaimed: 0, failedOver: 0 };
+    const result: ReapResult = { finalizedDone: 0, finalizedFailed: 0, cancelled: 0, reclaimed: 0, failedOver: 0 };
 
     // 1. Recover dead-runner claims first, so their fail-overs surface as `failed` jobs
     //    this same tick's finalize pass can pick up. NOTE: this bounds repeated
@@ -152,6 +153,13 @@ export function makeReaper(deps: ReaperDeps): Reaper {
         if (job.status === 'done') {
           await finalizeDone(job);
           result.finalizedDone += 1;
+        } else if (job.status === 'cancelled') {
+          // Operator interrupt: the runner already aborted + revoked its token, and the
+          // CANCELLER (the write-API) owns the task's post-cancel state. The reaper just
+          // reaps the job — it must NOT re-transition the task (that would fight the
+          // operator's chosen target state).
+          deps.logger?.info?.('reaper: reaped a cancelled job (task state owned by the canceller)', { jobId: job.id, taskId: job.taskId });
+          result.cancelled += 1;
         } else {
           await finalizeFailed(job);
           result.finalizedFailed += 1;
