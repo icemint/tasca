@@ -133,6 +133,65 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     }
   });
 
+  it('RACE: requestCancel vs beginPublish on one CLAIMED job → EXACTLY ONE wins (cancel hinge: no double-finalize, no zombie)', async () => {
+    // The cancel-in-flight invariant: an operator's requestCancel (claimed→cancelled) and the
+    // runner's beginPublish (claimed→publishing, its point-of-no-return before opening the PR)
+    // both target the SAME claimed row. Postgres row-locking must let exactly one win — never
+    // both (cancel AND a PR opened = double-finalize) and never neither (zombie). Force them.
+    const GATE = 880011;
+    const racePool = new Pool({ connectionString: url, max: 6 });
+    try {
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-cancelrace', payload: {} });
+      const claimed = await new PgDispatchQueue(racePool).claimNext('runner-1', 30);
+      const fence = claimed!.fence;
+
+      const gate = await racePool.connect();
+      await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
+
+      const canceller = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { who: 'cancel', result: await new PgDispatchQueue(c).requestCancel(jobId) };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+      const publisher = (async () => {
+        const c = await racePool.connect();
+        try {
+          await c.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
+          return { who: 'publish', won: await new PgDispatchQueue(c).beginPublish(jobId, fence) };
+        } finally {
+          await c.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
+          c.release();
+        }
+      })();
+
+      await waitForWaiters(racePool, GATE, 2);
+      await gate.query('SELECT pg_advisory_unlock($1)', [GATE]);
+      gate.release();
+
+      const [cancel, publish] = await Promise.all([canceller, publisher]);
+      const cancelWon = cancel.result === 'signalled';
+      const publishWon = publish.won === true;
+      // EXACTLY ONE — never both (double-finalize), never neither (zombie).
+      expect([cancelWon, publishWon].filter(Boolean)).toHaveLength(1);
+
+      const row = await racePool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [jobId]);
+      if (cancelWon) {
+        expect(publish.won).toBe(false); // the runner aborts: no PR
+        expect(row.rows[0]!.status).toBe('cancelled');
+      } else {
+        expect(cancel.result).toBe('too_late'); // the operator's cancel is a no-op
+        expect(row.rows[0]!.status).toBe('publishing');
+      }
+    } finally {
+      await racePool.end();
+    }
+  });
+
   it('DRAIN: N jobs across M concurrent looping claimers → each job claimed exactly once, none lost', async () => {
     const JOBS = 200;
     const CLAIMERS = 16;
@@ -239,6 +298,68 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
 
   it('claimNext returns null on an empty queue', async () => {
     expect(await q.claimNext('r1', 30)).toBeNull();
+  });
+
+  it('requestCancel: removes a queued job, signals a claimed one, is too_late once publishing/terminal', async () => {
+    // queued → removed
+    const { id: a } = await q.enqueue({ taskId: 't', payload: {} });
+    expect(await q.requestCancel(a)).toBe('removed');
+    expect(await q.claimNext('r', 30)).toBeNull(); // cancelled, not claimable
+
+    // claimed → signalled (a runner holds it; it'll abort + revoke)
+    const { id: b } = await q.enqueue({ taskId: 't', payload: {} });
+    const jb = await q.claimNext('r1', 30);
+    expect(jb!.id).toBe(b);
+    expect(await q.requestCancel(b)).toBe('signalled');
+    const row = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b]);
+    expect(row.rows[0]!.status).toBe('cancelled');
+
+    // publishing (point of no return passed) → too_late
+    const { id: c } = await q.enqueue({ taskId: 't', payload: {} });
+    const jc = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(jc!.id, jc!.fence)).toBe(true);
+    expect(await q.requestCancel(c)).toBe('too_late');
+  });
+
+  it('beginPublish → complete: the normal finish path (claimed → publishing → done)', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    expect(await q.complete(job!.id, job!.fence, { prUrl: 'u' })).toBe(true);
+    const row = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [job!.id]);
+    expect(row.rows[0]!.status).toBe('done');
+  });
+
+  it('renewLease keeps a PUBLISHING job alive (a slow openPr must not let the lease lapse)', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    // The runner's heartbeat fires during openPr — it must still renew while publishing,
+    // else the lease lapses and sweep could reclaim a live publisher out from under it.
+    expect(await q.renewLease(job!.id, job!.fence, 30)).toBe(true);
+    // Fenced: a stale fence never renews, even on a publishing row.
+    expect(await q.renewLease(job!.id, job!.fence + 1, 30)).toBe(false);
+  });
+
+  it('release requeues a PUBLISHING job (openPr threw after beginPublish) — prompt re-drive, fenced', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    // A stale fence cannot clobber a publishing row.
+    expect(await q.release(job!.id, job!.fence + 1, { delaySeconds: 0 })).toBe(false);
+    // The holding runner releases for an idempotent re-drive instead of waiting for the lease.
+    expect(await q.release(job!.id, job!.fence, { delaySeconds: 0 })).toBe(true);
+    expect((await q.claimNext('r2', 30))!.id).toBe(job!.id); // claimable again
+  });
+
+  it('fail records a terminal failure from a PUBLISHING row (fenced) — drives the breaker without stranding', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    expect(await q.fail(job!.id, job!.fence + 1, 'x')).toBe(false); // stale fence rejected
+    expect(await q.fail(job!.id, job!.fence, 'openPr exhausted retries')).toBe(true);
+    const row = await pool.query<{ status: string; last_error: string }>('SELECT status, last_error FROM dispatch_job WHERE id=$1', [job!.id]);
+    expect(row.rows[0]).toMatchObject({ status: 'failed', last_error: 'openPr exhausted retries' });
   });
 
   it('cancel removes a still-queued job (true), but refuses one a runner already claimed (false)', async () => {
@@ -397,5 +518,27 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
       [b.id]
     );
     expect(failedRow.rows[0]).toMatchObject({ status: 'failed', last_error: 'exceeded max dispatch attempts' });
+  });
+
+  it('sweepExpired recovers a PUBLISHING job whose runner died (no zombie): requeues under cap, fails over at cap', async () => {
+    // The runner won beginPublish (claimed→publishing) then DIED before complete — without
+    // covering `publishing`, sweep would leave it stranded forever (never finalized, never
+    // re-claimable). Under the cap it must requeue (openPr is idempotent → safe re-drive).
+    await q.enqueue({ taskId: 't-pub-retry', payload: {} });
+    const a = (await q.claimNext('r1', 30))!;
+    expect(await q.beginPublish(a.id, a.fence)).toBe(true);
+    await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second' WHERE id=$1`, [a.id]);
+
+    // A publishing job at the attempts cap fails over rather than looping forever.
+    await q.enqueue({ taskId: 't-pub-giveup', payload: {} });
+    const b = (await q.claimNext('r2', 30))!;
+    expect(await q.beginPublish(b.id, b.fence)).toBe(true);
+    await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second', attempts = 3 WHERE id=$1`, [b.id]);
+
+    const swept = await q.sweepExpired(3);
+    expect(swept).toEqual({ reclaimed: 1, failedOver: 1 });
+    expect((await q.claimNext('r3', 30))!.id).toBe(a.id); // re-drivable, not a zombie
+    const failed = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b.id]);
+    expect(failed.rows[0]!.status).toBe('failed');
   });
 });

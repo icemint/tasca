@@ -141,6 +141,20 @@ describe('makeReaper — finalizes runner-completed jobs from the coordination s
     expect(reaped).toEqual(['job-2']);
   });
 
+  it('a CANCELLED job is reaped WITHOUT touching the task (the canceller owns its state) and without a PR/breaker', async () => {
+    const { queue, reaped } = fakeQueue({ finished: [failedJob({ id: 'job-3', status: 'cancelled', lastError: null })] });
+    const { store, calls } = fakeStore();
+    const { deps } = baseDeps(queue, store);
+
+    const res = await makeReaper(deps).tick();
+
+    expect(res.cancelled).toBe(1);
+    expect(calls.recordedPrs).toEqual([]); // no PR
+    expect(calls.failures).toEqual([]); // breaker NOT driven (cancel isn't a failure)
+    expect(calls.setStatus).toEqual([]); // task state owned by the write-API canceller
+    expect(reaped).toEqual(['job-3']); // job cleaned up
+  });
+
   it('surfaces the sweep result and passes the attempts cap', async () => {
     const { queue, sweepCalls } = fakeQueue({ finished: [], sweep: { reclaimed: 2, failedOver: 1 } });
     const { store } = fakeStore();

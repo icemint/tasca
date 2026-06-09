@@ -796,6 +796,12 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
       return [];
     }
     async markReaped(): Promise<void> {}
+    async beginPublish(): Promise<boolean> {
+      return true;
+    }
+    async requestCancel(): Promise<'removed' | 'signalled' | 'too_late'> {
+      return 'too_late';
+    }
   }
 
   const passingProvisioner: RepoProvisioner = {

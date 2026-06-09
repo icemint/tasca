@@ -13,13 +13,13 @@ export interface DispatchJobInput {
 
 /** A finished (terminal) job the reaper leases to finalize: a `done` job carries the
  *  runner's `result` (e.g. the PR url) to record; a `failed` job carries `lastError` to
- *  drive the task's breaker. The status is the source of truth — the reaper finalizes
- *  per it, then `markReaped` deletes the row. */
+ *  drive the task's breaker; a `cancelled` job (operator interrupt) re-routes the task. The
+ *  status is the source of truth — the reaper finalizes per it, then `markReaped` deletes it. */
 export interface FinishedJob {
   id: string;
   taskId: string;
   payload: Record<string, unknown>;
-  status: 'done' | 'failed';
+  status: 'done' | 'failed' | 'cancelled';
   result: Record<string, unknown> | null;
   lastError: string | null;
 }
@@ -30,6 +30,17 @@ export interface SweepResult {
   reclaimed: number;
   failedOver: number;
 }
+
+/**
+ * The outcome of requesting a cancel:
+ *   - 'removed'   — it was still `queued`, taken off the queue before any runner claimed it.
+ *   - 'signalled' — it was `claimed` (a runner is executing); flipped to `cancelled`, so the
+ *                   runner will lose the row at its point-of-no-return (beginPublish) or its
+ *                   next heartbeat, abort, and revoke its scoped token. The reaper reaps it.
+ *   - 'too_late'  — the runner already passed the point of no return (`publishing`) or the job
+ *                   is terminal (`done`/`failed`/`cancelled`); the cancel is a no-op.
+ */
+export type CancelResult = 'removed' | 'signalled' | 'too_late';
 
 /** A claimed job handed to exactly one runner. */
 export interface DispatchJob {
@@ -88,8 +99,24 @@ export interface DispatchQueue {
   /** Extend the lease of a still-held job (heartbeat for long runs). Returns false
    *  if the claim was already lost (fence advanced / no longer claimed). */
   renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean>;
-  /** Mark a claimed job `done` (terminal), storing the runner's `result` for the reaper
-   *  to finalize against (e.g. the PR url). Fenced: returns false if the claim was lost. */
+  /**
+   * The runner's POINT OF NO RETURN, taken right before it opens the PR. Atomically moves a
+   * still-held `claimed` job to `publishing` (fenced). Returns true if the runner won the
+   * row — it is now committed to finish and a concurrent `requestCancel` will see `too_late`.
+   * Returns false if it lost: an operator's `requestCancel` flipped the row to `cancelled`
+   * first, or the claim was fenced out — either way the runner MUST abort without opening a
+   * PR and revoke its token. This conditional transition is the exactly-one cancel hinge.
+   */
+  beginPublish(jobId: string, fence: number): Promise<boolean>;
+  /**
+   * Request cancellation of a job (operator interrupt / executing-reassign). Removes it if
+   * still `queued`; flips it `claimed`→`cancelled` if a runner holds it (the runner aborts +
+   * revokes); a no-op once the runner is `publishing` or the job is terminal. See CancelResult.
+   */
+  requestCancel(jobId: string): Promise<CancelResult>;
+  /** Mark a job `done` (terminal) from `publishing` (the runner's post-point-of-no-return
+   *  state), storing the runner's `result` for the reaper. Fenced: false if the claim/row was
+   *  lost (e.g. reclaimed). */
   complete(jobId: string, fence: number, result?: Record<string, unknown>): Promise<boolean>;
   /** Return a job to `queued` for another attempt, optionally delayed (backoff).
    *  Fenced: returns false if the claim was lost. */
@@ -180,71 +207,118 @@ export class PgDispatchQueue implements DispatchQueue {
   }
 
   async renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean> {
+    // Renew while the runner still holds the job — `claimed` (agent running) OR `publishing`
+    // (past beginPublish, opening the PR). Covering `publishing` keeps a slow openPr from
+    // letting the lease lapse (which would both spuriously abort the run and make the row
+    // reclaimable mid-publish). Still fenced on claim_epoch, so a reclaim/cancel loses it.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, leaseSeconds]
     );
     return res.rowCount === 1;
   }
 
+  async beginPublish(jobId: string, fence: number): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE dispatch_job SET status = 'publishing', updated_at = now()
+        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+      [jobId, fence]
+    );
+    return res.rowCount === 1;
+  }
+
+  async requestCancel(jobId: string): Promise<CancelResult> {
+    // One statement: capture the prior status under a row lock, then flip queued|claimed →
+    // cancelled. The row lock is what serializes this against the runner's beginPublish
+    // (claimed → publishing) — exactly one of the two transitions wins the `claimed` row.
+    const res = await this.db.query<{ prev_status: string }>(
+      `WITH prev AS (SELECT id, status FROM dispatch_job WHERE id = $1 FOR UPDATE)
+       UPDATE dispatch_job d
+          SET status = 'cancelled', cancelled_at = now(), lease_expires_at = NULL, updated_at = now()
+         FROM prev
+        WHERE d.id = prev.id AND prev.status IN ('queued','claimed')
+       RETURNING prev.status AS prev_status`,
+      [jobId]
+    );
+    if (res.rowCount !== 1) return 'too_late'; // publishing / terminal / gone
+    return res.rows[0]!.prev_status === 'queued' ? 'removed' : 'signalled';
+  }
+
   async complete(jobId: string, fence: number, result?: Record<string, unknown>): Promise<boolean> {
+    // Accept 'publishing' (the normal path — the runner beginPublishes before openPr) AND
+    // 'claimed' (back-compat: a complete with no prior beginPublish). Still fenced.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'done', lease_expires_at = NULL, result = $3::jsonb, updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, result === undefined ? null : JSON.stringify(result)]
     );
     return res.rowCount === 1;
   }
 
   async release(jobId: string, fence: number, opts?: { delaySeconds?: number }): Promise<boolean> {
+    // Accept 'publishing' as well as 'claimed': if openPr THROWS after a won beginPublish,
+    // execute rejects and the runner's catch releases for an idempotent re-drive — the row
+    // is 'publishing' by then, so a 'claimed'-only guard would strand it until the lease
+    // lapsed (sweep would still recover it, but a lease later). Still fenced on claim_epoch.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL,
               available_at = now() + make_interval(secs => $3), updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, opts?.delaySeconds ?? 0]
     );
     return res.rowCount === 1;
   }
 
   async fail(jobId: string, fence: number, error?: string): Promise<boolean> {
+    // Symmetric with release/complete: a terminal failure can land from 'claimed' OR
+    // 'publishing' (a non-retryable post-beginPublish failure records + drives the breaker
+    // promptly instead of stranding the row). Still fenced on claim_epoch.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'failed', lease_expires_at = NULL, last_error = $3, updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, error ?? null]
     );
     return res.rowCount === 1;
   }
 
   async reclaimExpired(): Promise<number> {
+    // Same recovery scope as sweepExpired (the live reaper path): a dead runner can leave
+    // an expired lease in `claimed` OR `publishing` — both must requeue, else `publishing`
+    // zombies. openPr is idempotent so the re-drive is safe.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
-        WHERE status = 'claimed' AND lease_expires_at < now()`
+        WHERE status IN ('claimed','publishing') AND lease_expires_at < now()`
     );
     return res.rowCount ?? 0;
   }
 
   async sweepExpired(maxAttempts: number): Promise<SweepResult> {
-    // Two writes, both scoped to expired-lease claims. Fail over FIRST (attempts at the
-    // cap → 'failed' for the reaper's breaker path), then requeue the rest — ordering so
-    // a row counts once. attempts was already incremented by the claim that then died,
-    // so `attempts >= maxAttempts` means it has had its allotted runner tries.
+    // Two writes, both scoped to expired-lease jobs a runner still nominally holds —
+    // `claimed` (died mid-run) OR `publishing` (died after beginPublish, mid/after openPr).
+    // Without `publishing` the latter is a ZOMBIE: never swept, never finalized (the reaper
+    // takes terminal only), never re-claimable. A live publisher renews its lease (renewLease
+    // now covers publishing), so only a genuinely dead one expires here. The re-drive is safe
+    // because openPr is idempotent (deterministic head → no duplicate PR). Fail over FIRST
+    // (attempts at the cap → 'failed' for the reaper's breaker path), then requeue the rest —
+    // ordering so a row counts once. attempts was already incremented by the claim that then
+    // died, so `attempts >= maxAttempts` means it has had its allotted runner tries.
     const failed = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'failed', claimed_by = NULL, lease_expires_at = NULL,
               last_error = 'exceeded max dispatch attempts', updated_at = now()
-        WHERE status = 'claimed' AND lease_expires_at < now() AND attempts >= $1`,
+        WHERE status IN ('claimed','publishing') AND lease_expires_at < now() AND attempts >= $1`,
       [maxAttempts]
     );
     const reclaimed = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
-        WHERE status = 'claimed' AND lease_expires_at < now() AND attempts < $1`,
+        WHERE status IN ('claimed','publishing') AND lease_expires_at < now() AND attempts < $1`,
       [maxAttempts]
     );
     return { reclaimed: reclaimed.rowCount ?? 0, failedOver: failed.rowCount ?? 0 };
@@ -255,7 +329,7 @@ export class PgDispatchQueue implements DispatchQueue {
       id: string;
       task_id: string;
       payload: Record<string, unknown>;
-      status: 'done' | 'failed';
+      status: 'done' | 'failed' | 'cancelled';
       result: Record<string, unknown> | null;
       last_error: string | null;
     }>(
@@ -263,7 +337,7 @@ export class PgDispatchQueue implements DispatchQueue {
           SET reaping_at = now() + make_interval(secs => $2), updated_at = now()
         WHERE id IN (
           SELECT id FROM dispatch_job
-           WHERE status IN ('done','failed')
+           WHERE status IN ('done','failed','cancelled')
              AND (reaping_at IS NULL OR reaping_at < now())
            ORDER BY updated_at
            FOR UPDATE SKIP LOCKED

@@ -79,6 +79,14 @@ const fakePrepare = (over: Partial<{ worktreePath: string; localPath: string; br
     ...over,
   }));
 
+// A cancel control: beginPublish wins by default (the runner commits to finish), signal
+// not aborted. Override per test to exercise the cancel paths.
+const ctl = (over: Partial<{ beginPublish: () => Promise<boolean>; signal: AbortSignal }> = {}) => ({
+  signal: new AbortController().signal,
+  beginPublish: async () => true,
+  ...over,
+});
+
 describe('makeRunnerExecute — clone → spawn → commit → openPr with the scoped token', () => {
   it('runs the full flow and returns the PR url; threads the SCOPED token to git auth', async () => {
     const { execution, spawns, commits, prs } = fakeExecution();
@@ -86,7 +94,7 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
     const removeWorktree = vi.fn(async () => {});
     const execute = makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree, removeWorktree });
 
-    const outcome = await execute(JOB, PAYLOAD, TOKEN);
+    const outcome = await execute(JOB, PAYLOAD, TOKEN, ctl());
 
     expect(outcome).toEqual({ ok: true, result: { prUrl: 'https://github.com/acme/widgets/pull/7' } });
     // the worktree is prepared with the scoped token (env-auth happens inside prepare)
@@ -103,7 +111,7 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
 
   it('SECURITY: the agent spawn input carries NO token and NO broker socket', async () => {
     const { execution, spawns } = fakeExecution();
-    await makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) })(JOB, PAYLOAD, TOKEN);
+    await makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) })(JOB, PAYLOAD, TOKEN, ctl());
     const spawnInput = spawns[0]!;
     const serialized = JSON.stringify(spawnInput);
     expect(serialized).not.toContain('ghs_scoped'); // no token in the spawn surface
@@ -115,7 +123,7 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
   it('no committed change → terminal fail, no PR opened — and the worktree is still reclaimed', async () => {
     const { execution, prs } = fakeExecution({ async commitAgentWork() { return { changed: false }; } });
     const removeWorktree = vi.fn(async () => {});
-    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(JOB, PAYLOAD, TOKEN);
+    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(JOB, PAYLOAD, TOKEN, ctl());
     expect(outcome).toEqual({ ok: false, retry: false, error: 'agent produced no committed changes' });
     expect(prs).toHaveLength(0);
     expect(removeWorktree).toHaveBeenCalledTimes(1); // no disk leak even on the terminal path
@@ -126,7 +134,7 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
       throw new Error('network down');
     });
     const removeWorktree = vi.fn(async () => {});
-    const outcome = await makeRunnerExecute({ execution: fakeExecution().execution, reposDir: '/r', prepareWorktree, removeWorktree })(JOB, PAYLOAD, TOKEN);
+    const outcome = await makeRunnerExecute({ execution: fakeExecution().execution, reposDir: '/r', prepareWorktree, removeWorktree })(JOB, PAYLOAD, TOKEN, ctl());
     expect(outcome).toMatchObject({ ok: false, retry: true });
     // prepare threw before a worktree existed → no teardown to run
     expect(removeWorktree).not.toHaveBeenCalled();
@@ -139,9 +147,45 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
       },
     });
     const removeWorktree = vi.fn(async () => {});
-    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(JOB, PAYLOAD, TOKEN);
+    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(JOB, PAYLOAD, TOKEN, ctl());
     expect(outcome).toMatchObject({ ok: false, retry: true });
     expect(prs).toHaveLength(0);
     expect(removeWorktree).toHaveBeenCalledTimes(1); // reclaimed after the failed run
+  });
+
+  it('CANCEL at the point of no return: beginPublish loses → cancelled, NO PR opened', async () => {
+    const { execution, prs, commits } = fakeExecution();
+    const removeWorktree = vi.fn(async () => {});
+    // The agent ran + committed, but an operator cancel won the row: beginPublish returns false.
+    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(
+      JOB, PAYLOAD, TOKEN, ctl({ beginPublish: async () => false })
+    );
+    expect(outcome).toEqual({ ok: false, cancelled: true });
+    expect(commits).toHaveLength(1); // it got as far as committing
+    expect(prs).toHaveLength(0); // but NEVER opened the PR
+    expect(removeWorktree).toHaveBeenCalledTimes(1); // still reclaimed
+  });
+
+  it('CANCEL mid-run: an aborted signal kills the agent → cancelled (not a retryable failure), NO PR', async () => {
+    const killed: string[] = [];
+    const ac = new AbortController();
+    const { execution, prs } = fakeExecution({
+      killAgent(id: string) { killed.push(id); },
+      spawnAgent(input) {
+        // A handle that never exits on its own — only the abort ends the run. Trip the
+        // operator cancel on a macrotask, AFTER spawnAndAwait has registered its abort
+        // listener (so this exercises the mid-run kill, not the pre-spawn early-out).
+        setTimeout(() => ac.abort(), 0);
+        return { pid: 1, onData() {}, onExit() {}, onError() {}, kill() {} };
+      },
+    });
+    const removeWorktree = vi.fn(async () => {});
+    const outcome = await makeRunnerExecute({ execution, reposDir: '/r', prepareWorktree: fakePrepare(), removeWorktree })(
+      JOB, PAYLOAD, TOKEN, ctl({ signal: ac.signal })
+    );
+    expect(outcome).toEqual({ ok: false, cancelled: true });
+    expect(killed).toEqual(['task-1']); // the agent was killed promptly
+    expect(prs).toHaveLength(0);
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
   });
 });
