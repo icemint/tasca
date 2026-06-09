@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import {
   ExecutionError,
@@ -282,7 +284,33 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
         const value = process.env[name];
         if (value !== undefined) agentEnv[name] = value;
       }
+      // EPHEMERAL PER-TASK HOME — a fresh, empty home dir per spawn, overriding the
+      // runner's shared HOME. Nothing persists across tasks: no shared ~/.claude session
+      // map, no ~/.gitconfig / ~/.git-credentials. It also closes the login-shell residual:
+      // the worker user's profiles live at the WORKER's HOME, not here, so even the vendor's
+      // `$SHELL -ilc` sources none of them (only system /etc/profile, which the runner image
+      // keeps secret-free) — an attacker's `export SECRET` in a prior run's ~/.bashrc can't
+      // re-enter. An empty HOME breaks nothing downstream — git identity is injected inline
+      // (commitAgentWork) and git/gh auth is env-based (GIT_CONFIG_*/GH_TOKEN), neither reads
+      // ~/.gitconfig. Removed when the agent exits (HOME isn't needed post-run; commit +
+      // openPr don't touch it). Created OUTSIDE the env scrub (mkdtemp reads TMPDIR); 0700.
+      const agentHome = mkdtempSync(path.join(tmpdir(), 'tasca-agent-home-'));
+      agentEnv.HOME = agentHome;
+      agentEnv.CLAUDE_CONFIG_DIR = path.join(agentHome, '.claude');
+      // input.env still wins (a test/operator escape hatch); no production caller sets HOME.
       Object.assign(agentEnv, input.env ?? {});
+      let homeRemoved = false;
+      const cleanupHome = (): void => {
+        if (homeRemoved) return;
+        homeRemoved = true;
+        // Best-effort, like reap(): a failed cleanup leaks a tmp dir but must never
+        // break the run or mask the agent's real outcome. (No logger in this factory.)
+        try {
+          rmSync(agentHome, { recursive: true, force: true });
+        } catch {
+          /* leaked tmp HOME — tolerated over a thrown teardown */
+        }
+      };
       // The scrub keeps exactly the allowlist (so the vendor's process.env reads —
       // happy-path SSH_AUTH_SOCK/display + fallback's full spread — can only surface
       // allowlisted vars) plus the vendor's own PTY control flag.
@@ -309,6 +337,7 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
           })
         );
       } catch (err) {
+        cleanupHome(); // the spawn never started — don't leak the per-task HOME
         throw new ExecutionError('spawn', `spawnAgent failed for ${input.id}: ${errMessage(err)}`, {
           cause: err,
         });
@@ -325,6 +354,10 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
       };
       handle.onExit(deregisterSelf);
       handle.onError(deregisterSelf);
+      // Tear down the ephemeral HOME on any terminal event (normal exit, error, or a
+      // kill via reap()/killAgent → the PTY fires exit). Idempotent.
+      handle.onExit(cleanupHome);
+      handle.onError(cleanupHome);
 
       return {
         pid: handle.pid,
