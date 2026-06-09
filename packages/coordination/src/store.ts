@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import { PgDispatchQueue } from '@tasca/db';
 import {
   TASK_TRANSITIONS,
   type CapabilityMatch,
@@ -17,13 +18,22 @@ import {
 } from '@tasca/domain';
 
 /**
- * Outcome of a human write-API task intervention. `ok` carries the resulting
- * status; `conflict` means the task exists but its current status forbids the
- * action (mapped to HTTP 409); `not_found` → 404.
+ * Outcome of a human write-API task intervention. `ok` carries the resulting status.
+ * The failure reasons are deliberately distinct so the UI can reconcile to the TRUTH of
+ * what happened rather than collapsing everything into one "conflict":
+ *   - 'not_found'   — no such task (HTTP 404).
+ *   - 'conflict'    — the task exists but its current status forbids the action (HTTP 409),
+ *                     e.g. interrupting a task that isn't running, or reassigning a `done` one.
+ *   - 'too_late'    — a cancel lost the race: the runner had already passed its point of no
+ *                     return and is finishing. The task is UNTOUCHED (the reaper finalizes it).
+ *                     The UI must say "already finished", never a false "interrupted".
+ *   - 'no_inflight' — the task is executing but has NO cancellable runner job (it is running
+ *                     in-process via the coordination fallback, which this seam can't
+ *                     interrupt). Surfaced honestly; a Wave-2 residual.
  */
 export type TaskWriteOutcome =
   | { ok: true; status: TaskStatus }
-  | { ok: false; reason: 'not_found' | 'conflict' };
+  | { ok: false; reason: 'not_found' | 'conflict' | 'too_late' | 'no_inflight' };
 
 /**
  * Inverse of TASK_TRANSITIONS: for each status, the statuses it may legally be
@@ -211,11 +221,20 @@ export interface CoordinationStore {
   overrideTierEstimate(taskId: string, tier: Tier): Promise<TaskWriteOutcome>;
 
   /** Release a task's claim so it re-routes from a clean slate (status → `routable`,
-   *  `claimed_by` cleared, `failure_count` reset). Allowed only from a NON-executing
-   *  status (`routable`/`claimed`/`needs_attention`/`failed`); `conflict` if the task
-   *  is `executing`/`in_review` (cancelling a live run needs the execution seam) or
-   *  `done`. */
+   *  `claimed_by` cleared, `failure_count` reset). Works from the non-executing reassignable
+   *  states (`routable`/`claimed`/`needs_attention`/`failed`) AND from `executing`: an
+   *  executing task's live runner job is cancelled first (the #244 exactly-one seam),
+   *  atomically with the task transition, then re-routed. `too_late` if the runner had
+   *  already committed to finishing; `no_inflight` if it is running in-process (no job to
+   *  cancel); `conflict` if `done`/`in_review`; `not_found` if absent. */
   reassignTask(taskId: string): Promise<TaskWriteOutcome>;
+
+  /** Interrupt a LIVE run and flag the task for a human (status → `needs_attention`).
+   *  Cancels the executing task's runner job (the #244 seam) atomically with the task
+   *  transition. `too_late` if the runner had already committed to finishing; `no_inflight`
+   *  if it is running in-process; `conflict` if the task isn't executing (nothing live to
+   *  interrupt); `not_found` if absent. */
+  interruptTask(taskId: string): Promise<TaskWriteOutcome>;
 
   // ── GitHub App installation (write-back installation resolution) ──────────────
 
@@ -365,10 +384,82 @@ export class PgCoordinationStore implements CoordinationStore {
     params: unknown[],
     taskId: string
   ): Promise<TaskWriteOutcome> {
-    const res = await this.db.query<{ status: string }>(sql, params);
+    return this.taskWriteOn(this.db, sql, params, taskId);
+  }
+
+  /** taskWrite against a specific Queryable (the tx client for the cancel-coupled path). */
+  private async taskWriteOn(
+    db: Queryable,
+    sql: string,
+    params: unknown[],
+    taskId: string
+  ): Promise<TaskWriteOutcome> {
+    const res = await db.query<{ status: string }>(sql, params);
     if (res.rowCount && res.rows[0]) return { ok: true, status: res.rows[0].status as TaskStatus };
-    const exists = await this.db.query(`SELECT 1 FROM task WHERE id = $1`, [taskId]);
+    const exists = await db.query(`SELECT 1 FROM task WHERE id = $1`, [taskId]);
     return { ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' };
+  }
+
+  /** Run `fn` in a transaction so a job cancel + the task transition commit together (or
+   *  not at all) — a crash between them would orphan the task in `executing` with a reaped
+   *  job (the task-level analog of a publishing zombie). Mirrors PgIdentityRepository:
+   *  a Pool owns a fresh tx; an already-checked-out client reuses the caller's. */
+  private async withTaskTx<T>(fn: (db: Queryable) => Promise<T>): Promise<T> {
+    if (!isPool(this.db)) return fn(this.db);
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * The shared cancel-coupled write: cancel the task's live runner job, then transition the
+   * task — atomically. LOCK ORDER is dispatch_job (requestCancelForTask's FOR UPDATE) BEFORE
+   * task (the transition UPDATE); every path that touches both tables uses this order, so
+   * there is no deadlock. `target` is the post-cancel task status (routable=reassign,
+   * needs_attention=interrupt). `nonExecuting` handles a task with no live job that is NOT
+   * executing (reassign re-routes it; interrupt rejects it).
+   */
+  private async cancelCoupledWrite(
+    taskId: string,
+    target: 'routable' | 'needs_attention',
+    nonExecuting: (db: Queryable) => Promise<TaskWriteOutcome>
+  ): Promise<TaskWriteOutcome> {
+    return this.withTaskTx(async (db) => {
+      const cancel = await new PgDispatchQueue(db).requestCancelForTask(taskId);
+      if (cancel === 'too_late') return { ok: false, reason: 'too_late' };
+      if (cancel === 'removed' || cancel === 'signalled') {
+        // Cancel won → the task is executing and its run is being torn down (the runner
+        // aborts + revokes its token). Move it to the target, fenced to `executing` so this
+        // fires only on the run we just cancelled. claimed_by/failure_count reset: the claim
+        // is gone and a cancel is not a failure.
+        return this.taskWriteOn(
+          db,
+          `UPDATE task
+              SET status = $2, claimed_by = NULL, failure_count = 0,
+                  version = version + 1, updated_at = now()
+            WHERE id = $1 AND status = 'executing'
+           RETURNING status`,
+          [taskId, target],
+          taskId
+        );
+      }
+      // cancel === 'no_job': no runner job. An executing/in_review task is running in-process
+      // (this seam can't interrupt it) → no_inflight; otherwise defer to the non-executing path.
+      const cur = await db.query<{ status: string }>(`SELECT status FROM task WHERE id = $1`, [taskId]);
+      if (!cur.rowCount) return { ok: false, reason: 'not_found' };
+      const status = cur.rows[0]!.status;
+      if (status === 'executing' || status === 'in_review') return { ok: false, reason: 'no_inflight' };
+      return nonExecuting(db);
+    });
   }
 
   async escalateTask(taskId: string): Promise<TaskWriteOutcome> {
@@ -401,17 +492,28 @@ export class PgCoordinationStore implements CoordinationStore {
   }
 
   async reassignTask(taskId: string): Promise<TaskWriteOutcome> {
-    // Release the claim → re-route from a clean slate. Guarded to NON-executing
-    // statuses: cancelling a live run (executing/in_review) needs the execution
-    // cancel seam, so reject those here rather than orphan a running agent.
-    return this.taskWrite(
-      `UPDATE task
-          SET status = 'routable', claimed_by = NULL, failure_count = 0,
-              version = version + 1, updated_at = now()
-        WHERE id = $1 AND status IN ('routable','claimed','needs_attention','failed')
-       RETURNING status`,
-      [taskId],
-      taskId
+    // Cancel any live run, then release the claim → re-route from a clean slate. For an
+    // executing task the #244 cancel seam runs first (atomically with the transition); for
+    // the non-executing reassignable states it is a plain guarded CAS.
+    return this.cancelCoupledWrite(taskId, 'routable', (db) =>
+      this.taskWriteOn(
+        db,
+        `UPDATE task
+            SET status = 'routable', claimed_by = NULL, failure_count = 0,
+                version = version + 1, updated_at = now()
+          WHERE id = $1 AND status IN ('routable','claimed','needs_attention','failed')
+         RETURNING status`,
+        [taskId],
+        taskId
+      )
+    );
+  }
+
+  async interruptTask(taskId: string): Promise<TaskWriteOutcome> {
+    // Halt a live run and flag for a human (→ needs_attention). Only meaningful while
+    // executing; a non-executing task has nothing live to interrupt → conflict.
+    return this.cancelCoupledWrite(taskId, 'needs_attention', () =>
+      Promise.resolve({ ok: false, reason: 'conflict' })
     );
   }
 
@@ -695,4 +797,11 @@ interface ConnectionRow {
   received_24h: number | string;
   processed_24h: number | string;
   last_received_at: Date | string | null;
+}
+
+function isPool(db: Queryable): db is Pool {
+  // Discriminate by `release()`: a checked-out PoolClient has it, a Pool does not.
+  // (Mirrors PgIdentityRepository — `connect()` is not a valid discriminator since pg's
+  // PoolClient is a Client and also exposes it.) Used to decide tx ownership.
+  return typeof (db as { release?: unknown }).release !== 'function';
 }

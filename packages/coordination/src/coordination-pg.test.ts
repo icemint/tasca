@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { PgClaimRepository, TASK_TABLE_DDL } from '@tasca/db';
+import { PgClaimRepository, PgDispatchQueue, TASK_TABLE_DDL, DISPATCH_JOB_DDL } from '@tasca/db';
 import { PgIdentityRepository, IDENTITY_SCHEMA_DDL } from '@tasca/identity';
 import type { CapabilityProfile } from '@tasca/domain';
 import type { AdapterEvent } from '@tasca/contracts';
@@ -492,6 +492,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
     await bootstrap.end();
     pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
     await pool.query(TASK_TABLE_DDL);
+    await pool.query(DISPATCH_JOB_DDL);
     for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
     store = new PgCoordinationStore(pool);
   });
@@ -499,7 +500,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
     await pool?.end();
   });
   beforeEach(async () => {
-    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task, dispatch_job CASCADE');
   });
 
   const at = async (status: string): Promise<{ id: string; version: number }> => {
@@ -512,6 +513,18 @@ run('coordination (Postgres) — human write-API interventions', () => {
     (await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id])).rows[0]!.status;
   const versionOf = async (id: string) =>
     (await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [id])).rows[0]!.version;
+  // Enqueue (and optionally claim / drive to publishing) a dispatch job for a task, so the
+  // cancel-coupled path has a real live job to act on. The queue is built lazily — `pool` is
+  // assigned in beforeAll, after this describe body runs.
+  const dispatchFor = async (taskId: string, to: 'queued' | 'claimed' | 'publishing'): Promise<void> => {
+    const queue = new PgDispatchQueue(pool);
+    await queue.enqueue({ taskId, payload: {} });
+    if (to === 'queued') return;
+    const job = await queue.claimNext('runner-1', 30);
+    if (to === 'publishing') await queue.beginPublish(job!.id, job!.fence);
+  };
+  const jobStatusFor = async (taskId: string) =>
+    (await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE task_id=$1', [taskId])).rows[0]?.status;
 
   it('escalateTask forces needs_attention from a live status and bumps version', async () => {
     const { id, version } = await at('executing');
@@ -560,9 +573,68 @@ run('coordination (Postgres) — human write-API interventions', () => {
     expect(row.rows[0]).toMatchObject({ status: 'routable', claimed_by: null, failure_count: 0 });
   });
 
-  it('reassignTask is a conflict on an executing task (cancelling a live run needs the execution seam)', async () => {
+  it('reassignTask on an EXECUTING task cancels the live (claimed) job atomically, then re-routes', async () => {
+    const { id, version } = await at('executing');
+    await dispatchFor(id, 'claimed');
+    expect(await store.reassignTask(id)).toEqual({ ok: true, status: 'routable' });
+    expect(await statusOf(id)).toBe('routable');
+    expect(await versionOf(id)).toBe(version + 1);
+    expect(await jobStatusFor(id)).toBe('cancelled'); // the runner job was signalled → cancelled
+  });
+
+  it('reassignTask cancels a still-queued job (no runner claimed yet) and re-routes', async () => {
     const { id } = await at('executing');
-    expect(await store.reassignTask(id)).toEqual({ ok: false, reason: 'conflict' });
-    expect(await statusOf(id)).toBe('executing'); // unchanged — not orphaned
+    await dispatchFor(id, 'queued');
+    expect(await store.reassignTask(id)).toEqual({ ok: true, status: 'routable' });
+    expect(await jobStatusFor(id)).toBe('cancelled');
+  });
+
+  it('reassignTask is too_late once the runner is publishing (point of no return) — task UNTOUCHED', async () => {
+    const { id, version } = await at('executing');
+    await dispatchFor(id, 'publishing');
+    expect(await store.reassignTask(id)).toEqual({ ok: false, reason: 'too_late' });
+    expect(await statusOf(id)).toBe('executing'); // the run is finishing; not orphaned, not re-routed
+    expect(await versionOf(id)).toBe(version); // no spurious bump
+    expect(await jobStatusFor(id)).toBe('publishing'); // the runner keeps its row
+  });
+
+  it('reassignTask on an executing task running IN-PROCESS (no runner job) → no_inflight, untouched', async () => {
+    const { id, version } = await at('executing');
+    expect(await store.reassignTask(id)).toEqual({ ok: false, reason: 'no_inflight' });
+    expect(await statusOf(id)).toBe('executing');
+    expect(await versionOf(id)).toBe(version);
+  });
+
+  it('interruptTask halts a live (claimed) run → needs_attention and cancels the job', async () => {
+    const { id, version } = await at('executing');
+    await dispatchFor(id, 'claimed');
+    expect(await store.interruptTask(id)).toEqual({ ok: true, status: 'needs_attention' });
+    expect(await statusOf(id)).toBe('needs_attention');
+    expect(await versionOf(id)).toBe(version + 1);
+    expect(await jobStatusFor(id)).toBe('cancelled');
+  });
+
+  it('interruptTask is too_late on a publishing run (task untouched), and a conflict when nothing is executing', async () => {
+    const { id, version } = await at('executing');
+    await dispatchFor(id, 'publishing');
+    expect(await store.interruptTask(id)).toEqual({ ok: false, reason: 'too_late' });
+    expect(await statusOf(id)).toBe('executing');
+
+    expect(await versionOf(id)).toBe(version); // the publishing task was untouched
+
+    const c = await at('claimed'); // not executing → nothing live to interrupt
+    expect(await store.interruptTask(c.id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await statusOf(c.id)).toBe('claimed');
+    expect(await versionOf(c.id)).toBe(c.version);
+  });
+
+  it('a double interrupt is idempotent: the first cancels + flags, the second is a benign conflict no-op', async () => {
+    const { id } = await at('executing');
+    await dispatchFor(id, 'claimed');
+    expect(await store.interruptTask(id)).toEqual({ ok: true, status: 'needs_attention' });
+    // Second click: the job is already cancelled (no active job) and the task is no longer
+    // executing → conflict (nothing live to interrupt), and the task is left untouched.
+    expect(await store.interruptTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await statusOf(id)).toBe('needs_attention');
   });
 });

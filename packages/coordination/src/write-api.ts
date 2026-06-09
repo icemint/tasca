@@ -40,7 +40,7 @@ export interface WriteAuditSink {
 }
 
 export interface WriteApiDeps {
-  store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask'>;
+  store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask' | 'interruptTask'>;
   /** Agent-state writes (pause/resume/edit-profile). Absent → those routes 404. */
   identity?: AgentWriter;
   /** Verify the request's session (same contract as the read API). */
@@ -101,6 +101,7 @@ type WriteRoute =
   | { kind: 'escalate'; id: string }
   | { kind: 'retier'; id: string }
   | { kind: 'reassign'; id: string }
+  | { kind: 'interrupt'; id: string }
   | { kind: 'pause'; id: string }
   | { kind: 'resume'; id: string }
   | { kind: 'profile'; id: string };
@@ -108,12 +109,13 @@ type WriteRoute =
 function matchWriteRoute(method: string, path: string): WriteRoute | null {
   if (method === 'GET' && path === '/api/csrf') return { kind: 'csrf' };
   if (method !== 'POST') return null;
-  const task = /^\/api\/tasks\/([^/]+)\/(escalate|retier|reassign)$/.exec(path);
+  const task = /^\/api\/tasks\/([^/]+)\/(escalate|retier|reassign|interrupt)$/.exec(path);
   if (task) {
     const id = decodeURIComponent(task[1]!);
     const action = task[2]!;
     if (action === 'escalate') return { kind: 'escalate', id };
     if (action === 'retier') return { kind: 'retier', id };
+    if (action === 'interrupt') return { kind: 'interrupt', id };
     return { kind: 'reassign', id };
   }
   const agent = /^\/api\/agents\/([^/]+)\/(pause|resume|profile)$/.exec(path);
@@ -124,7 +126,11 @@ function matchWriteRoute(method: string, path: string): WriteRoute | null {
   return null;
 }
 
-/** Map a store TaskWriteOutcome to an HTTP response. */
+/** Map a store TaskWriteOutcome to an HTTP response. The three non-ok "couldn't apply"
+ *  reasons all return 409 but each carries a distinct machine-readable `code`, so the UI
+ *  reconciles to the TRUTH of what happened — "already finished" (too_late) is NEVER
+ *  conflated with "running in-process" (no_inflight) or a generic state conflict. The
+ *  returned string is also the audit outcome, so the three are distinct in the audit log. */
 function sendOutcome(res: ServerResponse, outcome: TaskWriteOutcome): string {
   if (outcome.ok) {
     sendJson(res, 200, { ok: true, status: outcome.status });
@@ -134,8 +140,14 @@ function sendOutcome(res: ServerResponse, outcome: TaskWriteOutcome): string {
     sendJson(res, 404, { error: 'task not found' });
     return 'not_found';
   }
-  sendJson(res, 409, { error: 'action not allowed in the task’s current state' });
-  return 'conflict';
+  const message =
+    outcome.reason === 'too_late'
+      ? 'the agent already finished — showing the result'
+      : outcome.reason === 'no_inflight'
+        ? 'this run can’t be interrupted (it is running in-process)'
+        : 'action not allowed in the task’s current state';
+  sendJson(res, 409, { error: message, code: outcome.reason });
+  return outcome.reason;
 }
 
 /** Map a versioned AgentWriteOutcome to an HTTP response. A version_conflict returns
@@ -155,7 +167,7 @@ function sendAgentOutcome(res: ServerResponse, outcome: AgentWriteOutcome): stri
 
 /**
  * Handle a write-API request. Returns `true` when it owned the request (so the
- * caller stops), `false` otherwise. Owns GET /api/csrf and POST /api/tasks/:id/{escalate,retier,reassign}.
+ * caller stops), `false` otherwise. Owns GET /api/csrf and POST /api/tasks/:id/{escalate,retier,reassign,interrupt}.
  */
 export async function writeApiHandler(
   req: IncomingMessage,
@@ -243,6 +255,11 @@ async function handleWrite(
     case 'reassign': {
       const outcome = await deps.store.reassignTask(route.id);
       await audit('task.reassign', sendOutcome(res, outcome));
+      return;
+    }
+    case 'interrupt': {
+      const outcome = await deps.store.interruptTask(route.id);
+      await audit('task.interrupt', sendOutcome(res, outcome));
       return;
     }
     case 'retier': {
