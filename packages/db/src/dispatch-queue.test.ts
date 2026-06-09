@@ -341,6 +341,27 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
     expect(await q.renewLease(job!.id, job!.fence + 1, 30)).toBe(false);
   });
 
+  it('release requeues a PUBLISHING job (openPr threw after beginPublish) — prompt re-drive, fenced', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    // A stale fence cannot clobber a publishing row.
+    expect(await q.release(job!.id, job!.fence + 1, { delaySeconds: 0 })).toBe(false);
+    // The holding runner releases for an idempotent re-drive instead of waiting for the lease.
+    expect(await q.release(job!.id, job!.fence, { delaySeconds: 0 })).toBe(true);
+    expect((await q.claimNext('r2', 30))!.id).toBe(job!.id); // claimable again
+  });
+
+  it('fail records a terminal failure from a PUBLISHING row (fenced) — drives the breaker without stranding', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    expect(await q.fail(job!.id, job!.fence + 1, 'x')).toBe(false); // stale fence rejected
+    expect(await q.fail(job!.id, job!.fence, 'openPr exhausted retries')).toBe(true);
+    const row = await pool.query<{ status: string; last_error: string }>('SELECT status, last_error FROM dispatch_job WHERE id=$1', [job!.id]);
+    expect(row.rows[0]).toMatchObject({ status: 'failed', last_error: 'openPr exhausted retries' });
+  });
+
   it('cancel removes a still-queued job (true), but refuses one a runner already claimed (false)', async () => {
     // Unclaimed → cancel succeeds and the job is gone (the in-process fallback wins).
     const { id: a } = await q.enqueue({ taskId: 't', payload: {} });

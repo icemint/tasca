@@ -259,21 +259,28 @@ export class PgDispatchQueue implements DispatchQueue {
   }
 
   async release(jobId: string, fence: number, opts?: { delaySeconds?: number }): Promise<boolean> {
+    // Accept 'publishing' as well as 'claimed': if openPr THROWS after a won beginPublish,
+    // execute rejects and the runner's catch releases for an idempotent re-drive — the row
+    // is 'publishing' by then, so a 'claimed'-only guard would strand it until the lease
+    // lapsed (sweep would still recover it, but a lease later). Still fenced on claim_epoch.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL,
               available_at = now() + make_interval(secs => $3), updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, opts?.delaySeconds ?? 0]
     );
     return res.rowCount === 1;
   }
 
   async fail(jobId: string, fence: number, error?: string): Promise<boolean> {
+    // Symmetric with release/complete: a terminal failure can land from 'claimed' OR
+    // 'publishing' (a non-retryable post-beginPublish failure records + drives the breaker
+    // promptly instead of stranding the row). Still fenced on claim_epoch.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'failed', lease_expires_at = NULL, last_error = $3, updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, error ?? null]
     );
     return res.rowCount === 1;

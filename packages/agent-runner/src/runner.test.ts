@@ -160,6 +160,22 @@ describe('agent-runner — the claim → scoped token → execute → revoke lif
     expect(revoked).toEqual(['scoped-tok']); // token revoked on a cancel-win
   });
 
+  it('execute that throws AFTER beginPublish (openPr failed) → catch releases for re-drive + revokes the token', async () => {
+    // The point-of-no-return was passed (beginPublish called), then openPr threw. The
+    // runner's catch must still requeue (release) the now-`publishing` job and revoke.
+    const { queue, runner, revoked } = setup({
+      execute: async (_job, _payload, _token, control) => {
+        await control.beginPublish();
+        throw new Error('openPr failed: network');
+      },
+    });
+    await runner.runOnce();
+    expect(queue.beginPublished).toEqual([{ id: 'job-1', fence: 7 }]);
+    expect(queue.released).toEqual([{ id: 'job-1', fence: 7 }]); // requeued via the catch path
+    expect(queue.completed).toEqual([]);
+    expect(revoked).toEqual(['scoped-tok']); // token always revoked
+  });
+
   it('threads beginPublish (the point-of-no-return gate) to execute with the job id + fence', async () => {
     const { queue, runner } = setup({
       // A custom execute that exercises the injected gate, like the real one does before openPr.
