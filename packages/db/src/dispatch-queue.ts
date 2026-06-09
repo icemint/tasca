@@ -207,10 +207,14 @@ export class PgDispatchQueue implements DispatchQueue {
   }
 
   async renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean> {
+    // Renew while the runner still holds the job — `claimed` (agent running) OR `publishing`
+    // (past beginPublish, opening the PR). Covering `publishing` keeps a slow openPr from
+    // letting the lease lapse (which would both spuriously abort the run and make the row
+    // reclaimable mid-publish). Still fenced on claim_epoch, so a reclaim/cancel loses it.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
-        WHERE id = $1 AND claim_epoch = $2 AND status = 'claimed'`,
+        WHERE id = $1 AND claim_epoch = $2 AND status IN ('claimed','publishing')`,
       [jobId, fence, leaseSeconds]
     );
     return res.rowCount === 1;
@@ -276,30 +280,38 @@ export class PgDispatchQueue implements DispatchQueue {
   }
 
   async reclaimExpired(): Promise<number> {
+    // Same recovery scope as sweepExpired (the live reaper path): a dead runner can leave
+    // an expired lease in `claimed` OR `publishing` — both must requeue, else `publishing`
+    // zombies. openPr is idempotent so the re-drive is safe.
     const res = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
-        WHERE status = 'claimed' AND lease_expires_at < now()`
+        WHERE status IN ('claimed','publishing') AND lease_expires_at < now()`
     );
     return res.rowCount ?? 0;
   }
 
   async sweepExpired(maxAttempts: number): Promise<SweepResult> {
-    // Two writes, both scoped to expired-lease claims. Fail over FIRST (attempts at the
-    // cap → 'failed' for the reaper's breaker path), then requeue the rest — ordering so
-    // a row counts once. attempts was already incremented by the claim that then died,
-    // so `attempts >= maxAttempts` means it has had its allotted runner tries.
+    // Two writes, both scoped to expired-lease jobs a runner still nominally holds —
+    // `claimed` (died mid-run) OR `publishing` (died after beginPublish, mid/after openPr).
+    // Without `publishing` the latter is a ZOMBIE: never swept, never finalized (the reaper
+    // takes terminal only), never re-claimable. A live publisher renews its lease (renewLease
+    // now covers publishing), so only a genuinely dead one expires here. The re-drive is safe
+    // because openPr is idempotent (deterministic head → no duplicate PR). Fail over FIRST
+    // (attempts at the cap → 'failed' for the reaper's breaker path), then requeue the rest —
+    // ordering so a row counts once. attempts was already incremented by the claim that then
+    // died, so `attempts >= maxAttempts` means it has had its allotted runner tries.
     const failed = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'failed', claimed_by = NULL, lease_expires_at = NULL,
               last_error = 'exceeded max dispatch attempts', updated_at = now()
-        WHERE status = 'claimed' AND lease_expires_at < now() AND attempts >= $1`,
+        WHERE status IN ('claimed','publishing') AND lease_expires_at < now() AND attempts >= $1`,
       [maxAttempts]
     );
     const reclaimed = await this.db.query(
       `UPDATE dispatch_job
           SET status = 'queued', claimed_by = NULL, lease_expires_at = NULL, updated_at = now()
-        WHERE status = 'claimed' AND lease_expires_at < now() AND attempts < $1`,
+        WHERE status IN ('claimed','publishing') AND lease_expires_at < now() AND attempts < $1`,
       [maxAttempts]
     );
     return { reclaimed: reclaimed.rowCount ?? 0, failedOver: failed.rowCount ?? 0 };

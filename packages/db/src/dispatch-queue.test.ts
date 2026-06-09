@@ -330,6 +330,17 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
     expect(row.rows[0]!.status).toBe('done');
   });
 
+  it('renewLease keeps a PUBLISHING job alive (a slow openPr must not let the lease lapse)', async () => {
+    await q.enqueue({ taskId: 't', payload: {} });
+    const job = await q.claimNext('r1', 30);
+    expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
+    // The runner's heartbeat fires during openPr — it must still renew while publishing,
+    // else the lease lapses and sweep could reclaim a live publisher out from under it.
+    expect(await q.renewLease(job!.id, job!.fence, 30)).toBe(true);
+    // Fenced: a stale fence never renews, even on a publishing row.
+    expect(await q.renewLease(job!.id, job!.fence + 1, 30)).toBe(false);
+  });
+
   it('cancel removes a still-queued job (true), but refuses one a runner already claimed (false)', async () => {
     // Unclaimed → cancel succeeds and the job is gone (the in-process fallback wins).
     const { id: a } = await q.enqueue({ taskId: 't', payload: {} });
@@ -486,5 +497,27 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
       [b.id]
     );
     expect(failedRow.rows[0]).toMatchObject({ status: 'failed', last_error: 'exceeded max dispatch attempts' });
+  });
+
+  it('sweepExpired recovers a PUBLISHING job whose runner died (no zombie): requeues under cap, fails over at cap', async () => {
+    // The runner won beginPublish (claimed→publishing) then DIED before complete — without
+    // covering `publishing`, sweep would leave it stranded forever (never finalized, never
+    // re-claimable). Under the cap it must requeue (openPr is idempotent → safe re-drive).
+    await q.enqueue({ taskId: 't-pub-retry', payload: {} });
+    const a = (await q.claimNext('r1', 30))!;
+    expect(await q.beginPublish(a.id, a.fence)).toBe(true);
+    await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second' WHERE id=$1`, [a.id]);
+
+    // A publishing job at the attempts cap fails over rather than looping forever.
+    await q.enqueue({ taskId: 't-pub-giveup', payload: {} });
+    const b = (await q.claimNext('r2', 30))!;
+    expect(await q.beginPublish(b.id, b.fence)).toBe(true);
+    await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second', attempts = 3 WHERE id=$1`, [b.id]);
+
+    const swept = await q.sweepExpired(3);
+    expect(swept).toEqual({ reclaimed: 1, failedOver: 1 });
+    expect((await q.claimNext('r3', 30))!.id).toBe(a.id); // re-drivable, not a zombie
+    const failed = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b.id]);
+    expect(failed.rows[0]!.status).toBe('failed');
   });
 });
