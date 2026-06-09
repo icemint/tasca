@@ -93,6 +93,7 @@ export const TASK_RETRY_ATTN: TaskSummary = {
 
 export const TASK_LRU_DETAIL: TaskDetail = {
   ...TASK_LRU,
+  lastError: null,
   routingDecision: {
     taskId: 'task-lru',
     tierEstimate: 'medium',
@@ -115,6 +116,18 @@ export const TASK_EXECUTING_DETAIL: TaskDetail = {
   id: 'task-exec',
   status: 'executing',
   claimedBy: 'agent-elvis',
+  lastError: null,
+  routingDecision: null,
+  pullRequests: [],
+};
+
+/** A task parked in needs_attention with a recorded reason (no execution capacity) — so the
+ *  inspector's reason surfacing renders. */
+export const TASK_NO_CAPACITY_DETAIL: TaskDetail = {
+  ...TASK_LRU,
+  id: 'task-nocap',
+  status: 'needs_attention',
+  lastError: 'no execution capacity: no agent-runner claimed within 30000ms',
   routingDecision: null,
   pullRequests: [],
 };

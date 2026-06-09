@@ -20,6 +20,9 @@ class FakeQueue implements DispatchQueue {
   cancel(): Promise<boolean> {
     return Promise.resolve(false);
   }
+  jobStatus(): Promise<string | null> {
+    return Promise.resolve(null);
+  }
   renewLease(id: string, fence: number): Promise<boolean> {
     this.renewed.push({ id, fence });
     return Promise.resolve(true);

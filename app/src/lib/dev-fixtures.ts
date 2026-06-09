@@ -74,6 +74,8 @@ function taskDetail(id: string): TaskDetail | null {
   if (!t) return null;
   return {
     ...t,
+    // Demonstrate the needs_attention reason surfacing in dev.
+    lastError: t.status === 'needs_attention' ? 'no execution capacity: no agent-runner claimed within 30000ms' : null,
     routingDecision: ROUTING_DECISIONS.find((d) => d.taskId === id) ?? null,
     pullRequests:
       t.status === 'executing' || t.status === 'done'

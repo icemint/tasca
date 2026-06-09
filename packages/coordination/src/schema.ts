@@ -26,6 +26,10 @@ export const TASK_COORDINATION_COLUMNS_DDL = `
 ALTER TABLE task ADD COLUMN IF NOT EXISTS tier_estimate jsonb;
 ALTER TABLE task ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE task ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+-- Human-readable reason a task is in needs_attention (e.g. "no execution capacity").
+-- Nullable; set on the no-runner-capacity path, surfaced in the inspector so the state
+-- is actionable rather than a silent stall.
+ALTER TABLE task ADD COLUMN IF NOT EXISTS last_error text;
 DO $$ BEGIN
   ALTER TABLE task ADD CONSTRAINT task_status_chk CHECK (
     status IN ('ingested','routable','claimed','executing','in_review','done','failed','needs_attention')

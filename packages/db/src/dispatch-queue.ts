@@ -101,12 +101,17 @@ export interface DispatchQueue {
   /**
    * Atomically remove a job IFF it is still `queued` (unclaimed). Returns true when it
    * was removed, false when it could NOT be (a runner already claimed it, or it's
-   * gone). This is the race-safe hinge of the in-process fallback: coordination
-   * enqueues, waits briefly, then `cancel`s — true means no runner took it (run it
-   * in-process), false means a runner owns it (let the runner + reaper handle it). The
-   * queue's exactly-once claim guarantees these two outcomes never overlap.
+   * gone). This is the race-safe hinge of the runner-wait path: coordination enqueues,
+   * waits (polling) for a runner to claim, then `cancel`s on timeout — true means no
+   * runner took it (retire the task to needs_attention), false means a runner owns it
+   * (let the runner + reaper handle it). The exactly-once claim guarantees these never
+   * overlap. (Also: the in-process no-queue mode still uses `true` to run in-process.)
    */
   cancel(jobId: string): Promise<boolean>;
+  /** Read a job's current status (`queued`/`claimed`/`publishing`/`done`/`failed`/
+   *  `cancelled`), or null if the row is gone. Non-destructive — used to poll for a
+   *  runner claim during the bounded wait without consuming the race-safe `cancel`. */
+  jobStatus(jobId: string): Promise<string | null>;
   /** Extend the lease of a still-held job (heartbeat for long runs). Returns false
    *  if the claim was already lost (fence advanced / no longer claimed). */
   renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean>;
@@ -224,6 +229,14 @@ export class PgDispatchQueue implements DispatchQueue {
       [jobId]
     );
     return res.rowCount === 1;
+  }
+
+  async jobStatus(jobId: string): Promise<string | null> {
+    const res = await this.db.query<{ status: string }>(
+      `SELECT status FROM dispatch_job WHERE id = $1`,
+      [jobId]
+    );
+    return res.rowCount === 1 ? res.rows[0]!.status : null;
   }
 
   async renewLease(jobId: string, fence: number, leaseSeconds: number): Promise<boolean> {
