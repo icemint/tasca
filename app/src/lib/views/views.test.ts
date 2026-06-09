@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { loadRoster } from './roster';
 import { loadMonitoring } from './monitoring';
-import { loadTask } from './task';
+import { loadTask, describeTaskOutcome } from './task';
 import { loadAgent } from './agent';
 import { loadConnections } from './connections';
 import { loadOnboarding } from './onboarding';
@@ -13,6 +13,7 @@ import {
   TASK_LRU,
   TASK_RETRY_ATTN,
   TASK_LRU_DETAIL,
+  TASK_EXECUTING_DETAIL,
   CONNECTIONS_OK,
   htmlOf,
 } from '../test-support';
@@ -92,6 +93,46 @@ describe('task inspector — the agent-authored PR actually shows', () => {
     const r = await loadTask();
     expect(r.kind).toBe('empty');
     expect(htmlOf(r)).toContain('No task selected');
+  });
+
+  it('an EXECUTING task renders LIVE Interrupt + Reassign controls (the cancel-coupled actions)', async () => {
+    withId('task-exec');
+    stubFetch({ '/api/tasks/task-exec': { body: TASK_EXECUTING_DETAIL } });
+    const html = htmlOf(await loadTask());
+    expect(html).toContain('data-action="interrupt"');
+    expect(html).toContain('data-action="reassign"');
+    expect(html).toContain('live-ctl'); // Interrupt + Reassign are live (not disabled) controls
+    // (Escalate stays read-only — out of this slice's scope — so data-ro is still present for it.)
+  });
+
+  it('a DONE task offers no Interrupt and only a disabled Reassign (nothing live to act on)', async () => {
+    withId('task-lru');
+    stubFetch({ '/api/tasks/task-lru': { body: TASK_LRU_DETAIL } });
+    const html = htmlOf(await loadTask());
+    expect(html).not.toContain('data-action="interrupt"');
+    expect(html).not.toContain('data-action="reassign"'); // Reassign is read-only (roControl) on a done task
+    expect(html).toContain('data-ro'); // the disabled Reassign control
+  });
+});
+
+describe('describeTaskOutcome — the three cancel truths reach the user distinctly (never a lie)', () => {
+  it('too_late says the agent already finished, NOT "interrupted"', () => {
+    const msg = describeTaskOutcome({ kind: 'conflict', data: { error: 'x', code: 'too_late' } });
+    expect(msg).toContain('already finished');
+    expect(msg.toLowerCase()).not.toContain('interrupt');
+  });
+  it('no_inflight explains the in-process limitation distinctly', () => {
+    const msg = describeTaskOutcome({ kind: 'conflict', data: { error: 'x', code: 'no_inflight' } });
+    expect(msg).toContain('in-process');
+  });
+  it('a generic conflict is distinct from both', () => {
+    const msg = describeTaskOutcome({ kind: 'conflict', data: { error: 'x', code: 'conflict' } });
+    expect(msg).toContain('current state');
+    expect(msg).not.toContain('already finished');
+    expect(msg).not.toContain('in-process');
+  });
+  it('falls back to the generic describer for non-conflict failures', () => {
+    expect(describeTaskOutcome({ kind: 'notfound' })).toMatch(/no longer exists|not found/i);
   });
 });
 

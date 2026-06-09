@@ -210,3 +210,23 @@ export const editAgentProfile = (
   version: number,
   patch: { maxTier: string; concurrencyLimit: number | null; costCeiling: number | null }
 ) => post<AgentWriteOk | AgentConflict>(`/api/agents/${encodeURIComponent(id)}/profile`, { version, ...patch });
+
+// ── task interventions (cancel-coupled writes) ────────────────────────────────
+// Reassign re-routes a task (cancelling a live run first); Interrupt halts a live run
+// and flags it. The 200 body carries the resulting status; a 409 body carries a `code`
+// that tells the three "couldn't apply" truths apart — `too_late` (the agent already
+// finished), `no_inflight` (running in-process, no job to cancel), or a generic `conflict`.
+
+export interface TaskWriteOk {
+  ok: true;
+  status: string;
+}
+export interface TaskWriteConflict {
+  error: string;
+  code: 'conflict' | 'too_late' | 'no_inflight';
+}
+
+export const reassignTask = (id: string) =>
+  post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/reassign`, {});
+export const interruptTask = (id: string) =>
+  post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/interrupt`, {});
