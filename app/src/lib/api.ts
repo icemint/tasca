@@ -154,13 +154,16 @@ async function classify<T>(res: Response): Promise<WriteResult<T>> {
   if (res.status === 403) return { kind: 'forbidden' };
   if (res.status === 404) return { kind: 'notfound' };
   if (res.status === 409) {
-    let data: T;
+    // Mirror the 200 branch: an UNPARSEABLE 409 body (a proxy error page, a truncated
+    // response) is an honest 'error', NOT a fabricated `{conflict, data:{}}`. Fabricating a
+    // conflict would let the UI render a definite "not available in the current state" (or,
+    // for agent writes, a NaN version) for what is actually a transport/unknown failure — a
+    // lie. Only a body that parses becomes a conflict, carrying its real `code`/`currentVersion`.
     try {
-      data = (await res.json()) as T;
+      return { kind: 'conflict', data: (await res.json()) as T };
     } catch {
-      data = {} as T;
+      return { kind: 'error', message: 'Malformed response' };
     }
-    return { kind: 'conflict', data };
   }
   if (res.status === 503) return { kind: 'unconfigured' };
   return { kind: 'error', message: `Request failed (${res.status})` };
