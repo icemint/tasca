@@ -404,6 +404,16 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
     expect(await q.requestCancelForTask('t-p')).toBe('no_job');
   });
 
+  it('jobStatus reflects the lifecycle non-destructively (queued → claimed), null when gone', async () => {
+    expect(await q.jobStatus('00000000-0000-0000-0000-000000000000')).toBeNull();
+    const { id } = await q.enqueue({ taskId: 't', payload: {} });
+    expect(await q.jobStatus(id)).toBe('queued');
+    expect(await q.jobStatus(id)).toBe('queued'); // non-destructive — a repeat read is identical
+    const job = await q.claimNext('r1', 30);
+    expect(job!.id).toBe(id);
+    expect(await q.jobStatus(id)).toBe('claimed'); // the runner-claim signal the wait poll reads
+  });
+
   it('beginPublish → complete: the normal finish path (claimed → publishing → done)', async () => {
     await q.enqueue({ taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
