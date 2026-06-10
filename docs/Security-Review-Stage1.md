@@ -2,6 +2,30 @@
 
 Date: 2026-06-08 · Scope: the agent execution context on the live worker · Method: architect-framed, 4-dimension adversarial panel with per-finding verification.
 
+> ## Status update (2026-06-10) — most of this review has SHIPPED
+>
+> This review describes the **pre-split single-container** runtime (agent spawned in-process as
+> root in the worker). That topology is **superseded** by the coordination|execution split
+> (#234–#248). The findings below remain the historical analysis; their **isolation fixes have
+> largely landed**. Current mapping:
+>
+> | Finding | Status | Shipped by |
+> |---------|--------|-----------|
+> | **C1** agent reads worker `/proc/.../environ` | **Closed for production** — agent runs in the separate non-root **runner**, not in-process in the worker; in-process fallback **retired** | split #234–#243, #247 |
+> | **H1** App master key in agent-reachable env | **Closed** — master key stays worker-side behind the **broker**; runner mints per-task scoped tokens | broker #236, #248 |
+> | **H2** sibling git/gh `/proc` token theft | **Mitigated** — runner holds only a one-repo, task-lived scoped token (revoked on completion) | #230, split, #237 |
+> | **M2** unrestricted egress | **Closed** — runner is non-root on `internal:` networks; default-deny egress proxy (model API + GitHub only) | split #234–#243 |
+> | **L1** AES file-store key on shared root HOME | **Closed for the shared-HOME part** — ephemeral per-task HOME | #246 |
+> | **L2** login-shell profile sourcing | **Closed for the dominant case** — empty per-task HOME | #246 |
+> | *(new)* `ANTHROPIC_API_KEY` in agent env (named in the split ADR) | **Closed** — keyless agent, credential proxy worker-side | #248 |
+> | **M1** undefended await-free scrub invariant | **Open** — still relevant on the no-queue/dev in-process path | — |
+>
+> **The dominant residual that REMAINS:** a **separate-UID + PID/mount/network namespace sandbox
+> per agent on the runner** — multiple agent runs in one runner container still share namespaces.
+> Until it lands the safe bar holds (below). Note this is the **agent-sandbox** axis; the
+> **multi-tenant data-plane** axis (org_id) is tracked separately in
+> `docs/decisions/2026-06-10-org-scoping-app-level.md`.
+
 ## Threat model & doctrine
 
 **Actor:** a prompt-injected `claude` agent. The agent prompt is built from the GitHub issue title + body (`orchestrate.ts`), which is **attacker-controlled** — anyone who can open/assign an issue on a connected repo can attempt injection. The agent has **Bash + full network** (it must — it writes code, runs `git`/`gh`, and reaches the model API; agent-authored PRs #8/#9 prove the capability is intact and must stay intact).
