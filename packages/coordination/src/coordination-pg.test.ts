@@ -56,6 +56,11 @@ const okExecution: ExecutionPort = {
 
 const content: TaskContentSource = { async fetch() { return { title: 'Build it', body: 'task body' }; } };
 
+// The default org every row backfills onto (ORG_SCOPING_DDL seeds the organization row).
+// These direct store assertions act in that single org; orchestrateTaskAssigned resolves
+// its own org from the (unconnected → default) workspace, so both land on the same tenant.
+const ORG = 'org_default';
+
 run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   let pool: Pool;
   let store: PgCoordinationStore;
@@ -163,7 +168,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(outcome.kind).toBe('dispatched');
     if (outcome.kind !== 'dispatched') return;
 
-    const task = await store.getTask(outcome.taskId);
+    const task = await store.getTask(ORG, outcome.taskId);
     expect(task?.status).toBe('in_review');
     expect(task?.claimedBy).toBe(agentId);
     expect(task?.tierEstimate).not.toBeNull();
@@ -187,7 +192,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     const GATE = 553311;
     const racePool = new Pool({ connectionString: url, max: N + 4, options: `-c search_path=${SCHEMA}` });
     try {
-      const task = await store.getOrCreateTask({ externalStoryId: 'sc-race', platform: 'shortcut', repoRef: '/r' });
+      const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-race', platform: 'shortcut', repoRef: '/r' });
 
       const gate = await racePool.connect();
       await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
@@ -212,7 +217,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       const results = await Promise.all(workers);
       expect(results.filter((r) => r.won).length).toBe(1);
 
-      const persisted = await store.getTask(task.id);
+      const persisted = await store.getTask(ORG, task.id);
       expect(persisted?.status).toBe('claimed');
       expect(persisted?.version).toBe(1);
     } finally {
@@ -221,15 +226,15 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   it('webhook ledger: a received-but-unprocessed redelivery is not a duplicate; a processed one is', async () => {
-    const first = await store.recordWebhookEvent({ platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
+    const first = await store.recordWebhookEvent(ORG, { platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
     expect(first).toEqual({ fresh: true, alreadyProcessed: false });
     // Redelivery while still `received` (prior attempt not finished) → re-drivable.
-    const second = await store.recordWebhookEvent({ platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
+    const second = await store.recordWebhookEvent(ORG, { platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
     expect(second).toEqual({ fresh: false, alreadyProcessed: false });
 
     // Once processed, a redelivery is a true duplicate.
-    await store.markWebhookProcessed({ platform: 'shortcut', externalEventId: 'evt-x' });
-    const third = await store.recordWebhookEvent({ platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
+    await store.markWebhookProcessed(ORG, { platform: 'shortcut', externalEventId: 'evt-x' });
+    const third = await store.recordWebhookEvent(ORG, { platform: 'shortcut', externalEventId: 'evt-x', payload: {} });
     expect(third).toEqual({ fresh: false, alreadyProcessed: true });
 
     // Exactly one ledger row regardless of redelivery count.
@@ -240,11 +245,11 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   it('github installation: upsert records the account→installation, lookup resolves it by owner', async () => {
     expect(await store.getInstallationIdForOwner('icemint')).toBeNull();
 
-    await store.upsertGitHubInstallation({ workspaceId: 'icemint', installationId: '7700' });
+    await store.upsertGitHubInstallation(ORG, { workspaceId: 'icemint', installationId: '7700' });
     expect(await store.getInstallationIdForOwner('icemint')).toBe('7700');
 
     // Re-installing updates the id in place (one connection per owner).
-    await store.upsertGitHubInstallation({ workspaceId: 'icemint', installationId: '8800' });
+    await store.upsertGitHubInstallation(ORG, { workspaceId: 'icemint', installationId: '8800' });
     expect(await store.getInstallationIdForOwner('icemint')).toBe('8800');
     const rows = await pool.query(
       `SELECT count(*)::int AS c FROM platform_connection WHERE platform='github' AND workspace_id=$1`,
@@ -268,8 +273,8 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   it('get-or-create: two deliveries for the same story yield ONE task row', async () => {
-    const a = await store.getOrCreateTask({ externalStoryId: 'sc-dup', platform: 'shortcut' });
-    const b = await store.getOrCreateTask({ externalStoryId: 'sc-dup', platform: 'shortcut' });
+    const a = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-dup', platform: 'shortcut' });
+    const b = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-dup', platform: 'shortcut' });
     expect(b.id).toBe(a.id);
     const tasks = await pool.query('SELECT count(*)::int AS c FROM task WHERE external_story_id=$1', ['sc-dup']);
     expect(tasks.rows[0].c).toBe(1);
@@ -278,13 +283,13 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   it('recordFailureAndTransition: one atomic UPDATE resets below threshold, trips at threshold', async () => {
     // Seed a claimed task so we can prove the reset clears claimed_by below the
     // threshold and retains it on the trip — all in a single statement.
-    const task = await store.getOrCreateTask({ externalStoryId: 'sc-atomic', platform: 'shortcut', repoRef: '/r' });
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-atomic', platform: 'shortcut', repoRef: '/r' });
     await pool.query(`UPDATE task SET status='claimed', claimed_by=$2 WHERE id=$1`, [task.id, agentId]);
 
     // Below threshold (N=2): one failure → routable, claim cleared, count = 1.
-    const first = await store.recordFailureAndTransition(task.id, 2);
+    const first = await store.recordFailureAndTransition(ORG, task.id, 2);
     expect(first).toEqual({ failureCount: 1, tripped: false });
-    const afterFirst = await store.getTask(task.id);
+    const afterFirst = await store.getTask(ORG, task.id);
     expect(afterFirst?.status).toBe('routable');
     expect(afterFirst?.claimedBy).toBeNull();
     expect(afterFirst?.failureCount).toBe(1);
@@ -292,9 +297,9 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     // Re-claim, then a second failure reaches the threshold → needs_attention,
     // claim RETAINED for the human, count = 2.
     await pool.query(`UPDATE task SET status='claimed', claimed_by=$2 WHERE id=$1`, [task.id, agentId]);
-    const second = await store.recordFailureAndTransition(task.id, 2);
+    const second = await store.recordFailureAndTransition(ORG, task.id, 2);
     expect(second).toEqual({ failureCount: 2, tripped: true });
-    const afterSecond = await store.getTask(task.id);
+    const afterSecond = await store.getTask(ORG, task.id);
     expect(afterSecond?.status).toBe('needs_attention');
     expect(afterSecond?.claimedBy).toBe(agentId);
     expect(afterSecond?.failureCount).toBe(2);
@@ -303,26 +308,26 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   it('recordRunnerFailure: idempotent — acts once from executing, then no-ops (no breaker double-count)', async () => {
     // The reaper finalizes a runner-FAILED job at-least-once (re-leased after a crash /
     // failed markReaped). recordRunnerFailure must count the breaker exactly once.
-    const task = await store.getOrCreateTask({ externalStoryId: 'sc-runner-fail', platform: 'shortcut', repoRef: '/r' });
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-runner-fail', platform: 'shortcut', repoRef: '/r' });
     await pool.query(`UPDATE task SET status='executing', claimed_by=$2 WHERE id=$1`, [task.id, agentId]);
 
     // First finalize: task is executing → acts, increments, transitions out of executing.
-    const first = await store.recordRunnerFailure(task.id, 2);
+    const first = await store.recordRunnerFailure(ORG, task.id, 2);
     expect(first).toEqual({ acted: true, failureCount: 1, tripped: false });
-    expect((await store.getTask(task.id))?.status).toBe('routable');
+    expect((await store.getTask(ORG, task.id))?.status).toBe('routable');
 
     // Re-finalize the SAME job: task no longer executing → NO-OP, count stays 1.
-    const again = await store.recordRunnerFailure(task.id, 2);
+    const again = await store.recordRunnerFailure(ORG, task.id, 2);
     expect(again.acted).toBe(false);
-    expect((await store.getTask(task.id))?.failureCount).toBe(1); // not double-counted
+    expect((await store.getTask(ORG, task.id))?.failureCount).toBe(1); // not double-counted
   });
 
   it('recordPullRequest is idempotent on (task_id, url): a re-finalize does not duplicate the PR', async () => {
-    const task = await store.getOrCreateTask({ externalStoryId: 'sc-pr-idem', platform: 'shortcut', repoRef: '/r' });
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-pr-idem', platform: 'shortcut', repoRef: '/r' });
     const url = 'https://github.com/icemint/tasca/pull/123';
-    await store.recordPullRequest({ taskId: task.id, url });
-    await store.recordPullRequest({ taskId: task.id, url }); // re-finalize
-    expect(await store.listPullRequestsForTask(task.id)).toHaveLength(1);
+    await store.recordPullRequest(ORG, { taskId: task.id, url });
+    await store.recordPullRequest(ORG, { taskId: task.id, url }); // re-finalize
+    expect(await store.listPullRequestsForTask(ORG, task.id)).toHaveLength(1);
   });
 
   it('auto-recover: a failed attempt resets the SAME task to routable and re-wins the CAS (real Postgres)', async () => {
@@ -341,7 +346,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(first.kind).toBe('failed');
     if (first.kind !== 'failed') return;
 
-    const reset = await store.getTask(first.taskId);
+    const reset = await store.getTask(ORG, first.taskId);
     expect(reset?.status).toBe('routable');
     expect(reset?.claimedBy).toBeNull();
     expect(reset?.failureCount).toBe(1);
@@ -368,17 +373,17 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
         throw new Error('openPr must not be called on the existing-PR path');
       },
     };
-    const task = await store.getOrCreateTask({
+    const task = await store.getOrCreateTask(ORG, {
       externalStoryId: EVENT.externalStoryId,
       platform: EVENT.platform,
     });
-    await store.recordPullRequest({ taskId: task.id, url: 'https://github.com/icemint/tasca/pull/99' });
+    await store.recordPullRequest(ORG, { taskId: task.id, url: 'https://github.com/icemint/tasca/pull/99' });
 
     const base = { store, claim: new PgClaimRepository(pool), status, directory: directory(), audit: auditSink, content };
     const outcome = await orchestrateTaskAssigned(EVENT, { ...base, execution: noDispatchExec });
 
     expect(outcome.kind).toBe('dispatched');
-    const after = await store.getTask(task.id);
+    const after = await store.getTask(ORG, task.id);
     expect(after?.status).toBe('in_review'); // reached in_review, not stranded in claimed
     const prs = await pool.query('SELECT count(*)::int AS c FROM pull_request WHERE task_id=$1', [task.id]);
     expect(prs.rows[0].c).toBe(1); // dispatch skipped — no second PR opened
@@ -415,22 +420,22 @@ run('coordination (Postgres) — setStatus transition guard', () => {
   // ClaimPort, so here we set up `claimed` directly to exercise the setStatus edges
   // the dispatch loop actually drives (claimed→executing→in_review).
   async function newClaimedTask(): Promise<string> {
-    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#1', platform: 'github' });
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'acme/widgets#1', platform: 'github' });
     await pool.query('UPDATE task SET status = $2 WHERE id = $1', [task.id, 'claimed']);
     return task.id;
   }
 
   it('allows the legal dispatch edges claimed→executing→in_review', async () => {
     const id = await newClaimedTask();
-    await store.setStatus(id, 'executing');
-    await store.setStatus(id, 'in_review');
+    await store.setStatus(ORG, id, 'executing');
+    await store.setStatus(ORG, id, 'in_review');
     const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
     expect(r.rows[0]!.status).toBe('in_review');
   });
 
   it('rejects an illegal transition (routable→in_review) and leaves the row unchanged', async () => {
-    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#2', platform: 'github' });
-    await expect(store.setStatus(task.id, 'in_review')).rejects.toThrow(
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'acme/widgets#2', platform: 'github' });
+    await expect(store.setStatus(ORG, task.id, 'in_review')).rejects.toThrow(
       /illegal transition routable -> in_review/
     );
     const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [task.id]);
@@ -440,9 +445,9 @@ run('coordination (Postgres) — setStatus transition guard', () => {
   it('allows the routable self-loop (pre-claim failure reset) but not a generic identity', async () => {
     // routable→routable IS a TASK_TRANSITIONS self-loop (the §6.14 reset), so it
     // succeeds — driven by the map, not a blanket identity allowance.
-    const task = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#3', platform: 'github' });
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'acme/widgets#3', platform: 'github' });
     const before = await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [task.id]);
-    await store.setStatus(task.id, 'routable');
+    await store.setStatus(ORG, task.id, 'routable');
     const after = await pool.query<{ status: string; version: number }>(
       'SELECT status, version FROM task WHERE id=$1',
       [task.id]
@@ -453,27 +458,27 @@ run('coordination (Postgres) — setStatus transition guard', () => {
 
   it('treats `done` as terminal: a done task rejects every onward transition incl. itself', async () => {
     const id = await newClaimedTask();
-    await store.setStatus(id, 'executing');
-    await store.setStatus(id, 'in_review');
-    await store.setStatus(id, 'done'); // in_review→done is the one legal edge into done
+    await store.setStatus(ORG, id, 'executing');
+    await store.setStatus(ORG, id, 'in_review');
+    await store.setStatus(ORG, id, 'done'); // in_review→done is the one legal edge into done
     // done has no outgoing edges and no self-loop → nothing onward is permitted.
-    await expect(store.setStatus(id, 'routable')).rejects.toThrow(/illegal transition done -> routable/);
-    await expect(store.setStatus(id, 'done')).rejects.toThrow(/illegal transition done -> done/);
+    await expect(store.setStatus(ORG, id, 'routable')).rejects.toThrow(/illegal transition done -> routable/);
+    await expect(store.setStatus(ORG, id, 'done')).rejects.toThrow(/illegal transition done -> done/);
     const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
     expect(r.rows[0]!.status).toBe('done'); // frozen
   });
 
   it('rejects skipping a step (executing→done) and leaves the row unchanged', async () => {
     const id = await newClaimedTask();
-    await store.setStatus(id, 'executing');
-    await expect(store.setStatus(id, 'done')).rejects.toThrow(/illegal transition executing -> done/);
+    await store.setStatus(ORG, id, 'executing');
+    await expect(store.setStatus(ORG, id, 'done')).rejects.toThrow(/illegal transition executing -> done/);
     const r = await pool.query<{ status: string }>('SELECT status FROM task WHERE id=$1', [id]);
     expect(r.rows[0]!.status).toBe('executing');
   });
 
   it('throws "not found" for a missing task', async () => {
     await expect(
-      store.setStatus('00000000-0000-0000-0000-000000000000', 'executing')
+      store.setStatus(ORG, '00000000-0000-0000-0000-000000000000', 'executing')
     ).rejects.toThrow(/not found/);
   });
 });
@@ -504,7 +509,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
   });
 
   const at = async (status: string): Promise<{ id: string; version: number }> => {
-    const t = await store.getOrCreateTask({ externalStoryId: `acme/widgets#${status}`, platform: 'github' });
+    const t = await store.getOrCreateTask(ORG, { externalStoryId: `acme/widgets#${status}`, platform: 'github' });
     await pool.query('UPDATE task SET status=$2 WHERE id=$1', [t.id, status]);
     const r = await pool.query<{ version: number }>('SELECT version FROM task WHERE id=$1', [t.id]);
     return { id: t.id, version: r.rows[0]!.version };
@@ -528,7 +533,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
 
   it('escalateTask forces needs_attention from a live status and bumps version', async () => {
     const { id, version } = await at('executing');
-    const out = await store.escalateTask(id);
+    const out = await store.escalateTask(ORG, id);
     expect(out).toEqual({ ok: true, status: 'needs_attention' });
     expect(await statusOf(id)).toBe('needs_attention');
     expect(await versionOf(id)).toBe(version + 1);
@@ -536,21 +541,21 @@ run('coordination (Postgres) — human write-API interventions', () => {
 
   it('escalateTask is a conflict on a done task (terminal) and a 404 when missing', async () => {
     const { id } = await at('done');
-    expect(await store.escalateTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await store.escalateTask(ORG, id)).toEqual({ ok: false, reason: 'conflict' });
     expect(await statusOf(id)).toBe('done'); // unchanged
-    expect(await store.escalateTask('00000000-0000-0000-0000-000000000000')).toEqual({ ok: false, reason: 'not_found' });
+    expect(await store.escalateTask(ORG, '00000000-0000-0000-0000-000000000000')).toEqual({ ok: false, reason: 'not_found' });
   });
 
   it('escalateTask is an idempotent conflict on an already-needs_attention task (no spurious version bump)', async () => {
     const { id, version } = await at('needs_attention');
-    expect(await store.escalateTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await store.escalateTask(ORG, id)).toEqual({ ok: false, reason: 'conflict' });
     expect(await versionOf(id)).toBe(version); // unchanged — no needless CAS-busting bump
   });
 
   it('overrideTierEstimate sets only the tier, preserving the rest of the estimate', async () => {
-    const t = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#tier', platform: 'github' });
-    await store.setTierEstimate(t.id, { tier: 'low', confidence: 0.7, signals: { wordCount: 5, hasReasoningVerb: false, scopeHint: 'unknown', labelTier: null }, classifierUsed: true });
-    const out = await store.overrideTierEstimate(t.id, 'hard');
+    const t = await store.getOrCreateTask(ORG, { externalStoryId: 'acme/widgets#tier', platform: 'github' });
+    await store.setTierEstimate(ORG, t.id, { tier: 'low', confidence: 0.7, signals: { wordCount: 5, hasReasoningVerb: false, scopeHint: 'unknown', labelTier: null }, classifierUsed: true });
+    const out = await store.overrideTierEstimate(ORG, t.id, 'hard');
     expect(out.ok).toBe(true);
     const row = await pool.query<{ tier_estimate: { tier: string; confidence: number; classifierUsed: boolean } }>('SELECT tier_estimate FROM task WHERE id=$1', [t.id]);
     expect(row.rows[0]!.tier_estimate.tier).toBe('hard');
@@ -558,16 +563,16 @@ run('coordination (Postgres) — human write-API interventions', () => {
   });
 
   it('overrideTierEstimate seeds a minimal estimate when none existed', async () => {
-    const t = await store.getOrCreateTask({ externalStoryId: 'acme/widgets#tier2', platform: 'github' });
-    await store.overrideTierEstimate(t.id, 'ultra');
-    const got = await store.getTask(t.id);
+    const t = await store.getOrCreateTask(ORG, { externalStoryId: 'acme/widgets#tier2', platform: 'github' });
+    await store.overrideTierEstimate(ORG, t.id, 'ultra');
+    const got = await store.getTask(ORG, t.id);
     expect(got!.tierEstimate!.tier).toBe('ultra');
   });
 
   it('reassignTask releases the claim → routable with failures reset, from a non-executing status', async () => {
     const { id } = await at('needs_attention');
     await pool.query('UPDATE task SET claimed_by=$2, failure_count=2 WHERE id=$1', [id, 'agent-x']);
-    const out = await store.reassignTask(id);
+    const out = await store.reassignTask(ORG, id);
     expect(out).toEqual({ ok: true, status: 'routable' });
     const row = await pool.query<{ status: string; claimed_by: string | null; failure_count: number }>('SELECT status, claimed_by, failure_count FROM task WHERE id=$1', [id]);
     expect(row.rows[0]).toMatchObject({ status: 'routable', claimed_by: null, failure_count: 0 });
@@ -576,7 +581,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
   it('reassignTask on an EXECUTING task cancels the live (claimed) job atomically, then re-routes', async () => {
     const { id, version } = await at('executing');
     await dispatchFor(id, 'claimed');
-    expect(await store.reassignTask(id)).toEqual({ ok: true, status: 'routable' });
+    expect(await store.reassignTask(ORG, id)).toEqual({ ok: true, status: 'routable' });
     expect(await statusOf(id)).toBe('routable');
     expect(await versionOf(id)).toBe(version + 1);
     expect(await jobStatusFor(id)).toBe('cancelled'); // the runner job was signalled → cancelled
@@ -585,14 +590,14 @@ run('coordination (Postgres) — human write-API interventions', () => {
   it('reassignTask cancels a still-queued job (no runner claimed yet) and re-routes', async () => {
     const { id } = await at('executing');
     await dispatchFor(id, 'queued');
-    expect(await store.reassignTask(id)).toEqual({ ok: true, status: 'routable' });
+    expect(await store.reassignTask(ORG, id)).toEqual({ ok: true, status: 'routable' });
     expect(await jobStatusFor(id)).toBe('cancelled');
   });
 
   it('reassignTask is too_late once the runner is publishing (point of no return) — task UNTOUCHED', async () => {
     const { id, version } = await at('executing');
     await dispatchFor(id, 'publishing');
-    expect(await store.reassignTask(id)).toEqual({ ok: false, reason: 'too_late' });
+    expect(await store.reassignTask(ORG, id)).toEqual({ ok: false, reason: 'too_late' });
     expect(await statusOf(id)).toBe('executing'); // the run is finishing; not orphaned, not re-routed
     expect(await versionOf(id)).toBe(version); // no spurious bump
     expect(await jobStatusFor(id)).toBe('publishing'); // the runner keeps its row
@@ -600,7 +605,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
 
   it('reassignTask on an executing task running IN-PROCESS (no runner job) → no_inflight, untouched', async () => {
     const { id, version } = await at('executing');
-    expect(await store.reassignTask(id)).toEqual({ ok: false, reason: 'no_inflight' });
+    expect(await store.reassignTask(ORG, id)).toEqual({ ok: false, reason: 'no_inflight' });
     expect(await statusOf(id)).toBe('executing');
     expect(await versionOf(id)).toBe(version);
   });
@@ -608,7 +613,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
   it('interruptTask halts a live (claimed) run → needs_attention and cancels the job', async () => {
     const { id, version } = await at('executing');
     await dispatchFor(id, 'claimed');
-    expect(await store.interruptTask(id)).toEqual({ ok: true, status: 'needs_attention' });
+    expect(await store.interruptTask(ORG, id)).toEqual({ ok: true, status: 'needs_attention' });
     expect(await statusOf(id)).toBe('needs_attention');
     expect(await versionOf(id)).toBe(version + 1);
     expect(await jobStatusFor(id)).toBe('cancelled');
@@ -617,13 +622,13 @@ run('coordination (Postgres) — human write-API interventions', () => {
   it('interruptTask is too_late on a publishing run (task untouched), and a conflict when nothing is executing', async () => {
     const { id, version } = await at('executing');
     await dispatchFor(id, 'publishing');
-    expect(await store.interruptTask(id)).toEqual({ ok: false, reason: 'too_late' });
+    expect(await store.interruptTask(ORG, id)).toEqual({ ok: false, reason: 'too_late' });
     expect(await statusOf(id)).toBe('executing');
 
     expect(await versionOf(id)).toBe(version); // the publishing task was untouched
 
     const c = await at('claimed'); // not executing → nothing live to interrupt
-    expect(await store.interruptTask(c.id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await store.interruptTask(ORG, c.id)).toEqual({ ok: false, reason: 'conflict' });
     expect(await statusOf(c.id)).toBe('claimed');
     expect(await versionOf(c.id)).toBe(c.version);
   });
@@ -631,17 +636,17 @@ run('coordination (Postgres) — human write-API interventions', () => {
   it('a double interrupt is idempotent: the first cancels + flags, the second is a benign conflict no-op', async () => {
     const { id } = await at('executing');
     await dispatchFor(id, 'claimed');
-    expect(await store.interruptTask(id)).toEqual({ ok: true, status: 'needs_attention' });
+    expect(await store.interruptTask(ORG, id)).toEqual({ ok: true, status: 'needs_attention' });
     // Second click: the job is already cancelled (no active job) and the task is no longer
     // executing → conflict (nothing live to interrupt), and the task is left untouched.
-    expect(await store.interruptTask(id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await store.interruptTask(ORG, id)).toEqual({ ok: false, reason: 'conflict' });
     expect(await statusOf(id)).toBe('needs_attention');
   });
 
   it('failNoCapacity: executing → needs_attention with the reason, failure_count UNTOUCHED (not the breaker)', async () => {
     const { id, version } = await at('executing');
     await pool.query('UPDATE task SET failure_count=1 WHERE id=$1', [id]); // a prior real failure
-    expect(await store.failNoCapacity(id, 'no execution capacity: no agent-runner claimed within 30000ms')).toBe(true);
+    expect(await store.failNoCapacity(ORG, id, 'no execution capacity: no agent-runner claimed within 30000ms')).toBe(true);
     const row = await pool.query<{ status: string; last_error: string; failure_count: number; version: number }>(
       'SELECT status, last_error, failure_count, version FROM task WHERE id=$1',
       [id]
@@ -653,7 +658,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
 
   it('failNoCapacity is guarded: a no-op once the task is no longer executing/claimed (operator already moved it)', async () => {
     const { id } = await at('routable'); // e.g. an operator reassigned it during the wait
-    expect(await store.failNoCapacity(id, 'no execution capacity')).toBe(false);
+    expect(await store.failNoCapacity(ORG, id, 'no execution capacity')).toBe(false);
     expect(await statusOf(id)).toBe('routable'); // untouched — never fights the operator
   });
 });

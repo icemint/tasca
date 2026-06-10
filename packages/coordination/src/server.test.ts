@@ -26,7 +26,13 @@ class CountingStore implements CoordinationStore {
     return this.ledger.get(`${platform}:${externalEventId}`);
   }
 
-  async recordWebhookEvent(input: { platform: string; externalEventId: string }) {
+  async getOrgForConnection(_platform: Task['platform'], _workspaceId: string) {
+    return null;
+  }
+  async getOrgForTask(_taskId: string) {
+    return 'org_default';
+  }
+  async recordWebhookEvent(_orgId: string, input: { platform: string; externalEventId: string }) {
     const key = `${input.platform}:${input.externalEventId}`;
     const existing = this.ledger.get(key);
     if (existing === undefined) {
@@ -35,10 +41,10 @@ class CountingStore implements CoordinationStore {
     }
     return { fresh: false, alreadyProcessed: existing === 'processed' };
   }
-  async markWebhookProcessed(input: { platform: string; externalEventId: string }) {
+  async markWebhookProcessed(_orgId: string, input: { platform: string; externalEventId: string }) {
     this.ledger.set(`${input.platform}:${input.externalEventId}`, 'processed');
   }
-  async getOrCreateTask(input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }): Promise<Task> {
+  async getOrCreateTask(_orgId: string, input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }): Promise<Task> {
     if (this.failCreateOnce) {
       this.failCreateOnce = false;
       throw new Error('db blip mid-orchestration');
@@ -63,12 +69,12 @@ class CountingStore implements CoordinationStore {
     return task;
   }
   async getTask() { return null; }
-  async setTierEstimate(_id: string, _e: TierEstimate) {}
-  async setStatus(_id: string, _s: TaskStatus) {}
-  async recordFailureAndTransition(_id: string, threshold: number) {
+  async setTierEstimate(_org: string, _id: string, _e: TierEstimate) {}
+  async setStatus(_org: string, _id: string, _s: TaskStatus) {}
+  async recordFailureAndTransition(_org: string, _id: string, threshold: number) {
     return { failureCount: 1, tripped: 1 >= threshold };
   }
-  async recordRunnerFailure(_id: string, threshold: number) {
+  async recordRunnerFailure(_org: string, _id: string, threshold: number) {
     return { acted: true, failureCount: 1, tripped: 1 >= threshold };
   }
   async recordRoutingDecision() {}
@@ -84,7 +90,7 @@ class CountingStore implements CoordinationStore {
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }
   async listRoutingDecisions() { return []; }
-  async listPullRequestsForTask() { return []; }
+  async listPullRequestsForTask(_orgId: string, _taskId: string) { return []; }
   async listConnections() { return []; }
 }
 

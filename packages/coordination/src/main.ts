@@ -41,6 +41,7 @@ import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
+import { DEFAULT_ORG_ID } from './resolve-org';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -251,7 +252,11 @@ async function main(): Promise<void> {
     githubInstallationHandler = async (rawBody: string) => {
       const mapping = parseInstallationEvent(rawBody);
       if (!mapping) return;
-      await store.upsertGitHubInstallation({
+      // Install EDGE: the App-install event is org-agnostic (GitHub telling us an account
+      // installed the App). Record the connection on the default org; onboarding (slice 5)
+      // re-homes an installation to its customer org. getOrgForConnection then resolves
+      // this workspace's webhooks to the same org.
+      await store.upsertGitHubInstallation(DEFAULT_ORG_ID, {
         workspaceId: mapping.accountLogin,
         installationId: mapping.installationId,
       });

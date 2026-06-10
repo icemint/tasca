@@ -15,20 +15,20 @@ class FakeWriteStore {
   retierResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   reassignResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   interruptResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
-  async escalateTask(id: string): Promise<TaskWriteOutcome> {
+  async escalateTask(_orgId: string, id: string): Promise<TaskWriteOutcome> {
     this.calls.push(`escalate:${id}`);
     return this.escalateResult;
   }
-  async overrideTierEstimate(id: string, tier: Tier): Promise<TaskWriteOutcome> {
+  async overrideTierEstimate(_orgId: string, id: string, tier: Tier): Promise<TaskWriteOutcome> {
     this.calls.push(`retier:${id}`);
     this.lastTier = tier;
     return this.retierResult;
   }
-  async reassignTask(id: string): Promise<TaskWriteOutcome> {
+  async reassignTask(_orgId: string, id: string): Promise<TaskWriteOutcome> {
     this.calls.push(`reassign:${id}`);
     return this.reassignResult;
   }
-  async interruptTask(id: string): Promise<TaskWriteOutcome> {
+  async interruptTask(_orgId: string, id: string): Promise<TaskWriteOutcome> {
     this.calls.push(`interrupt:${id}`);
     return this.interruptResult;
   }

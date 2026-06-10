@@ -227,11 +227,54 @@ DO $$ BEGIN
 END $$;`;
 
 /**
+ * The CONTRACT half of the org-scoping migration (slice 3b-2), applied after ORG_SCOPING_DDL
+ * (the expand half, 3a). It is COUPLED with the store's query change in the SAME slice — the
+ * store's ON CONFLICT clauses now reference the org-prefixed uniques created here, and every
+ * store writer now sets org_id explicitly, so the transitional default is dropped:
+ *   1. re-prefix the tenant uniques with org_id (drop the un-prefixed, create org-scoped).
+ *      SAFE on backfilled data: every row is on the SAME default org, and the OLD uniques
+ *      guaranteed the sub-key (e.g. (platform, external_story_id)) unique, so
+ *      (org_id, platform, external_story_id) is still unique — no collision possible.
+ *   2. drop the transitional column DEFAULT 'org_default' on the FIVE store-written tenant
+ *      tables — now that the store sets org_id explicitly (required-orgId signatures), the
+ *      data-layer fallback must not outlive the type-layer enforcement (a forgotten org would
+ *      otherwise silently default).
+ *
+ * dispatch_job is DELIBERATELY EXCLUDED from the default drop: it is written by the QUEUE
+ * (PgDispatchQueue.enqueue), NOT the store, and the queue does not set org_id until slice 3c.
+ * Dropping its default here would break every enqueue between 3b-2 and 3c. Its default is
+ * dropped in 3c, in lockstep with enqueue starting to set org_id — the same expand/contract
+ * discipline, applied per writer: a table's default goes only when ITS writer is updated.
+ * Idempotent: DROP ... IF EXISTS, CREATE ... IF NOT EXISTS, DROP DEFAULT is a no-op when absent.
+ */
+export const ORG_CONTRACT_DDL = `
+-- 1. org-prefix the tenant uniques (drop the un-prefixed; the store's ON CONFLICT now targets
+--    the new ones, in lockstep — see PgCoordinationStore getOrCreateTask / recordWebhookEvent /
+--    upsertGitHubInstallation).
+DROP INDEX IF EXISTS task_platform_story_uniq;
+CREATE UNIQUE INDEX IF NOT EXISTS task_org_platform_story_uniq ON task (org_id, platform, external_story_id);
+ALTER TABLE platform_connection DROP CONSTRAINT IF EXISTS platform_connection_platform_workspace_id_key;
+DROP INDEX IF EXISTS platform_connection_platform_workspace_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS platform_connection_org_platform_workspace_uniq ON platform_connection (org_id, platform, workspace_id);
+ALTER TABLE webhook_event DROP CONSTRAINT IF EXISTS webhook_event_platform_external_event_id_key;
+DROP INDEX IF EXISTS webhook_event_platform_external_event_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS webhook_event_org_platform_event_uniq ON webhook_event (org_id, platform, external_event_id);
+
+-- 2. drop the transitional default on the FIVE store-written tables (the store now sets
+--    org_id explicitly). dispatch_job is EXCLUDED — its writer (the queue) doesn't set org_id
+--    until 3c, so its default drop lives there, in lockstep with that change.
+ALTER TABLE task ALTER COLUMN org_id DROP DEFAULT;
+ALTER TABLE routing_decision ALTER COLUMN org_id DROP DEFAULT;
+ALTER TABLE pull_request ALTER COLUMN org_id DROP DEFAULT;
+ALTER TABLE platform_connection ALTER COLUMN org_id DROP DEFAULT;
+ALTER TABLE webhook_event ALTER COLUMN org_id DROP DEFAULT;`;
+
+/**
  * All coordination DDL in dependency order. `task` must exist first (it is the
  * @tasca/db base table — apply TASK_TABLE_DDL before this), then the columns are
  * layered on, then the dependent tables (routing_decision / pull_request FK the
- * task). platform_connection and webhook_event are independent. ORG_SCOPING_DDL is
- * LAST — it ALTERs all of the above (+ dispatch_job, guarded) once they exist.
+ * task). platform_connection and webhook_event are independent. ORG_SCOPING_DDL (expand)
+ * then ORG_CONTRACT_DDL (contract) are LAST — they ALTER all of the above once they exist.
  *
  * Apply order to a clean Postgres:  TASK_TABLE_DDL + DISPATCH_JOB_DDL (from @tasca/db) → these.
  */
@@ -242,4 +285,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   ROUTING_DECISION_TABLE_DDL,
   PULL_REQUEST_TABLE_DDL,
   ORG_SCOPING_DDL,
+  ORG_CONTRACT_DDL,
 ];

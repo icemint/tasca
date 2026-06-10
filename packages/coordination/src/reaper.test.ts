@@ -57,21 +57,25 @@ function fakeQueue(opts: { finished: FinishedJob[]; sweep?: SweepResult }): { qu
 function fakeStore(over: Partial<CoordinationStore> = {}): { store: CoordinationStore; calls: { setStatus: Array<[string, string]>; recordedPrs: string[]; failures: string[] } } {
   const calls = { setStatus: [] as Array<[string, string]>, recordedPrs: [] as string[], failures: [] as string[] };
   const store = {
-    async listPullRequestsForTask() {
+    // The reaper resolves the task's org first (cross-org worker path) — single-org fake.
+    async getOrgForTask() {
+      return 'org_default';
+    },
+    async listPullRequestsForTask(_orgId: string, _taskId: string) {
       return [];
     },
-    async recordPullRequest(input: { taskId: string; url: string }) {
+    async recordPullRequest(_orgId: string, input: { taskId: string; url: string }) {
       calls.recordedPrs.push(input.url);
     },
-    async recordFailureAndTransition(taskId: string) {
+    async recordFailureAndTransition(_orgId: string, taskId: string) {
       calls.failures.push(taskId);
       return { failureCount: 1, tripped: false };
     },
-    async recordRunnerFailure(taskId: string) {
+    async recordRunnerFailure(_orgId: string, taskId: string) {
       calls.failures.push(taskId);
       return { acted: true, failureCount: 1, tripped: false };
     },
-    async setStatus(taskId: string, status: string) {
+    async setStatus(_orgId: string, taskId: string, status: string) {
       calls.setStatus.push([taskId, status]);
     },
     ...over,
@@ -113,7 +117,7 @@ describe('makeReaper — finalizes runner-completed jobs from the coordination s
   it('IDEMPOTENT: a re-finalized DONE job does NOT re-record the PR nor re-post the customer status', async () => {
     const { queue, reaped } = fakeQueue({ finished: [doneJob()] });
     const { store, calls } = fakeStore({
-      async listPullRequestsForTask() {
+      async listPullRequestsForTask(_orgId: string, _taskId: string) {
         return [{ url: 'https://github.com/acme/widgets/pull/7' }] as never;
       },
     });

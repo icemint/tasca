@@ -18,9 +18,10 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { AdapterEventSchema, type AdapterEvent } from '@tasca/contracts';
 import type { CoordinationStore } from './store';
 import type { WebhookVerifier, Logger } from './ports';
-import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
+import { orchestrateTaskAssigned, workspaceForEvent, type OrchestrationDeps } from './orchestrate';
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
+import { DEFAULT_ORG_ID } from './resolve-org';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
   /**
@@ -170,11 +171,34 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       }
     }
 
-    // Idempotency ledger: record this event as `received`. Only an event that
-    // already reached `processed` is a true duplicate to drop — a row still
-    // `received` (a prior attempt recorded it then crashed before finishing) is
-    // re-driven, so a post-record crash can't silently consume the event.
-    const { alreadyProcessed } = await deps.store.recordWebhookEvent({
+    // Validate parsed events through the shared trust-boundary schema before they
+    // drive orchestration. The fields derive from untrusted webhook input, so a
+    // malformed event (e.g. empty externalStoryId/agentExternalId) is dropped +
+    // logged here rather than reaching the loop. This is the adapter→coordination
+    // contract enforcement for AdapterEventSchema. Parsed BEFORE the ledger so the
+    // delivery's org (derived from its workspace) scopes the ledger row consistently
+    // with the tasks orchestration creates from the same events.
+    const events: AdapterEvent[] = [];
+    for (const candidate of verifier.parse(verified)) {
+      const parsed = AdapterEventSchema.safeParse(candidate);
+      if (parsed.success) events.push(parsed.data);
+      else safeLog('coordination: dropped malformed adapter event', { platform: verified.platform });
+    }
+
+    // Resolve the delivery's org at the webhook EDGE: a delivery is from one workspace, so
+    // the first event's workspace owns it; its connection's org (or the default org for an
+    // unconnected workspace) scopes the ledger. A zero-event delivery (e.g. a non-task
+    // webhook) has no workspace → default org, which is sufficient to dedup its redeliveries.
+    const ledgerWorkspace = events[0] ? workspaceForEvent(events[0]) : null;
+    const orgId =
+      (await deps.store.getOrgForConnection(verified.platform, ledgerWorkspace ?? '')) ??
+      DEFAULT_ORG_ID;
+
+    // Idempotency ledger: record this event as `received` under the delivery's org. Only an
+    // event that already reached `processed` is a true duplicate to drop — a row still
+    // `received` (a prior attempt recorded it then crashed before finishing) is re-driven,
+    // so a post-record crash can't silently consume the event.
+    const { alreadyProcessed } = await deps.store.recordWebhookEvent(orgId, {
       platform: verified.platform,
       externalEventId: verified.externalEventId,
       payload: verified.payload,
@@ -184,17 +208,6 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       return;
     }
 
-    // Validate parsed events through the shared trust-boundary schema before they
-    // drive orchestration. The fields derive from untrusted webhook input, so a
-    // malformed event (e.g. empty externalStoryId/agentExternalId) is dropped +
-    // logged here rather than reaching the loop. This is the adapter→coordination
-    // contract enforcement for AdapterEventSchema.
-    const events: AdapterEvent[] = [];
-    for (const candidate of verifier.parse(verified)) {
-      const parsed = AdapterEventSchema.safeParse(candidate);
-      if (parsed.success) events.push(parsed.data);
-      else safeLog('coordination: dropped malformed adapter event', { platform: verified.platform });
-    }
     const ledgerKey = {
       platform: verified.platform,
       externalEventId: verified.externalEventId,
@@ -229,7 +242,7 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
             taskId: outcome.taskId,
           });
         }
-        await deps.store.markWebhookProcessed(ledgerKey);
+        await deps.store.markWebhookProcessed(orgId, ledgerKey);
       } catch (err) {
         safeLog('coordination: orchestration failed after ack', {
           ...ledgerKey,

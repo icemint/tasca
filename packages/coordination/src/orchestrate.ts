@@ -35,6 +35,7 @@ import type { DispatchQueue } from '@tasca/db';
 import { ExecutionError, type ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
 import type { StatusReporter, Logger } from './ports';
+import { DEFAULT_ORG_ID } from './resolve-org';
 
 /**
  * Supplies the routing candidates (capability profile + live state + active
@@ -214,6 +215,24 @@ export type OrchestrationOutcome =
   | { kind: 'preempted'; taskId: string; agentId: string };
 
 /**
+ * The workspace an event belongs to (for resolving its org via a platform_connection).
+ * GitHub: the account/owner login (the `owner` of `owner/repo` — from repoHint, else the
+ * `owner/repo#n` story id). Shortcut/Linear carry no workspace in the event yet (their
+ * connection mapping arrives with onboarding, slice 5), so they resolve to null → the
+ * webhook edge uses the default org. Exported so the server's ledger edge derives the same
+ * workspace as the orchestration path, keeping a delivery's ledger + tasks on one org.
+ */
+export function workspaceForEvent(
+  event: Pick<AdapterEvent, 'platform' | 'externalStoryId' | 'repoHint'>
+): string | null {
+  if (event.platform !== 'github') return null;
+  const fromHint = event.repoHint?.split('/')[0];
+  if (fromHint) return fromHint;
+  const m = /^([^/#]+)\//.exec(event.externalStoryId);
+  return m ? m[1]! : null;
+}
+
+/**
  * Run the forward path for one task.assigned event. Returns a structured
  * outcome so the caller (HTTP entry / tests) can assert on what happened.
  */
@@ -225,11 +244,19 @@ export async function orchestrateTaskAssigned(
   const perProjectLimit = deps.perProjectLimit ?? 1;
   const agentTimeoutMs = deps.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
 
+  // Resolve the org this event acts in (the webhook EDGE): the workspace's connection
+  // owns an org; an unconnected workspace falls to the default org (single-org until
+  // onboarding, slice 5). This is the ONLY default-org materialization on this path —
+  // the store has no fallback, so every store call below carries an explicit org.
+  const orgId =
+    (await deps.store.getOrgForConnection(event.platform, workspaceForEvent(event) ?? '')) ??
+    DEFAULT_ORG_ID;
+
   // §6.4 — ingest: get-or-create the task for this story (routable, v0 on first
   // delivery; the existing row on re-delivery / re-assignment). Re-driving the
   // same row is what lets failure_count accumulate toward the breaker (§6.14).
   const repoRef = event.repoHint ?? null;
-  const task = await deps.store.getOrCreateTask({
+  const task = await deps.store.getOrCreateTask(orgId, {
     externalStoryId: event.externalStoryId,
     platform: event.platform,
     repoRef,
@@ -264,7 +291,7 @@ export async function orchestrateTaskAssigned(
       content,
       deps.classifier ? { classifier: deps.classifier } : {}
     );
-    await deps.store.setTierEstimate(task.id, estimate);
+    await deps.store.setTierEstimate(orgId, task.id, estimate);
 
     // §6.6 — match capability over eligible agents.
     const taskForMatch: Task = { ...task, tierEstimate: estimate };
@@ -272,7 +299,7 @@ export async function orchestrateTaskAssigned(
     const ranked = matchCapability(estimate, candidates);
     const winner = ranked.find((m) => m.eligible) ?? null;
 
-    await deps.store.recordRoutingDecision({
+    await deps.store.recordRoutingDecision(orgId, {
       taskId: task.id,
       tierEstimate: estimate,
       candidates: ranked,
@@ -328,7 +355,7 @@ export async function orchestrateTaskAssigned(
     // re-drivable. Re-running the agent + opening a SECOND PR on a real customer
     // repo is the worst outcome — so if a PR is already recorded, skip dispatch
     // entirely and re-finalize (best-effort) against the existing PR.
-    const existingPrs = await deps.store.listPullRequestsForTask(task.id);
+    const existingPrs = await deps.store.listPullRequestsForTask(orgId, task.id);
     if (existingPrs.length > 0) {
       const prUrl = existingPrs[0]!.url;
       // The row was just re-claimed (claimed). Mirror the normal path's
@@ -336,13 +363,13 @@ export async function orchestrateTaskAssigned(
       // executing→in_review, and the write-path guard rejects claimed→in_review,
       // which would otherwise (silently, via finalize's best-effort wrapper) strand
       // the task in `claimed` with an open PR.
-      await deps.store.setStatus(task.id, 'executing');
-      await finalizeDispatch(deps, task.id, event, winner.agentId, principalId, prUrl);
+      await deps.store.setStatus(orgId, task.id, 'executing');
+      await finalizeDispatch(deps, orgId, task.id, event, winner.agentId, principalId, prUrl);
       return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl };
     }
 
     // §6.9-13 — dispatch → worktree + agent → PR → status-back.
-    await deps.store.setStatus(task.id, 'executing');
+    await deps.store.setStatus(orgId, task.id, 'executing');
 
     // The agent prompt (shared by the enqueued payload + the in-process path so a
     // runner and the fallback run the SAME task). content is the real story body.
@@ -405,7 +432,7 @@ export async function orchestrateTaskAssigned(
       // a runner outage is infra-unavailability, not an agent failure, so it must not burn
       // the task's retry budget. The reason is recorded in last_error for the operator.
       const reason = `no execution capacity: no agent-runner claimed within ${waitMs}ms`;
-      const acted = await deps.store.failNoCapacity(task.id, reason);
+      const acted = await deps.store.failNoCapacity(orgId, task.id, reason);
       if (!acted) {
         // The guard missed: an operator cancel/reassign moved the task out of executing
         // during the wait. They own it — don't claim a no_capacity we didn't apply.
@@ -505,10 +532,10 @@ export async function orchestrateTaskAssigned(
       title: `Tasca: ${event.externalStoryId}`,
       ...(prToken ? { token: prToken } : {}),
     });
-    await deps.store.recordPullRequest({ taskId: task.id, url: pr.url });
+    await deps.store.recordPullRequest(orgId, { taskId: task.id, url: pr.url });
 
     // §6.12 — finalize (audit + status-back + in_review): best-effort, never throws.
-    await finalizeDispatch(deps, task.id, event, winner.agentId, principalId, pr.url);
+    await finalizeDispatch(deps, orgId, task.id, event, winner.agentId, principalId, pr.url);
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
@@ -520,6 +547,7 @@ export async function orchestrateTaskAssigned(
     // re-driven, not replaced. Folding the increment + transition into one write
     // removes the crash window that could strand the task between them.
     const { failureCount, tripped } = await deps.store.recordFailureAndTransition(
+      orgId,
       task.id,
       breakerThreshold
     );
@@ -694,6 +722,7 @@ function runAgentToCompletion(
  */
 export async function finalizeDispatch(
   deps: FinalizeDeps,
+  orgId: string,
   taskId: string,
   event: FinalizeEvent,
   agentId: string,
@@ -736,7 +765,7 @@ export async function finalizeDispatch(
       })
     );
   }
-  await safe('set.in_review', () => deps.store.setStatus(taskId, 'in_review'));
+  await safe('set.in_review', () => deps.store.setStatus(orgId, taskId, 'in_review'));
   if (firstFinalize) {
     await safe('audit.status.post', () =>
       audit(deps, principalId, agentId, event, {
