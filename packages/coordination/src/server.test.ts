@@ -91,6 +91,7 @@ class CountingStore implements CoordinationStore {
   async getInstallationIdForOwner() { return null; }
   async updateInstallationByAccount() { return false; }
   async revokeInstallationByAccount() { return false; }
+  async retireUnroutable() { return false; }
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }
@@ -117,6 +118,7 @@ const noopContent: TaskContentSource = { async fetch() { return { title: 't', bo
 // No eligible agents → orchestration stops at no_candidate (fine for intake tests).
 const emptyDirectory: AgentDirectory = {
   async listCandidates() { return []; },
+  async findHiredAgentByName() { return null; },
   async principalIdFor() { return null; },
 };
 

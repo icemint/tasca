@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
 import type { OrgMembershipRepo, OrgRole, OrgMemberSummary, MemberWriteOutcome, UserOrgSummary } from './membership';
+import type { OrgRosterRepo, HiredAgent, HireOutcome } from './roster';
 
 // ── fakes (real state, no mocking framework) ─────────────────────────────────
 
@@ -60,6 +61,35 @@ class FakeOrgRepo implements OrgMembershipRepo {
   }
 }
 
+class FakeRoster implements OrgRosterRepo {
+  hired: HiredAgent[] = [];
+  hires: Array<{ orgId: string; agentId: string }> = [];
+  unhires: Array<{ orgId: string; agentId: string }> = [];
+  nextHireOutcome: HireOutcome = 'ok';
+  nextUnhireRemoved = true;
+
+  async hire(orgId: string, agentId: string) {
+    this.hires.push({ orgId, agentId });
+    return this.nextHireOutcome;
+  }
+  async unhire(orgId: string, agentId: string) {
+    this.unhires.push({ orgId, agentId });
+    return this.nextUnhireRemoved;
+  }
+  async listHired() {
+    return this.hired;
+  }
+  async hiredAgentIds() {
+    return this.hired.map((h) => h.agentId);
+  }
+  async isHired(_orgId: string, agentId: string) {
+    return this.hired.some((h) => h.agentId === agentId);
+  }
+  async findHiredAgentByName(_orgId: string, name: string) {
+    return this.hired.find((h) => h.name.toLowerCase() === name.toLowerCase())?.agentId ?? null;
+  }
+}
+
 function fakeReq(
   method: string,
   url: string,
@@ -105,7 +135,7 @@ const csrf = (extra: Record<string, string | string[]> = {}) => ({
 });
 
 function deps(repo: FakeOrgRepo, over: Partial<OrgApiDeps> = {}): OrgApiDeps {
-  return { membership: repo, verifySession: () => ({ userId: 'u1' }), ...over };
+  return { membership: repo, roster: new FakeRoster(), verifySession: () => ({ userId: 'u1' }), ...over };
 }
 
 async function run(d: OrgApiDeps, req: IncomingMessage) {
@@ -139,7 +169,7 @@ describe('auth + CSRF gates', () => {
     expect(r.statusCode).toBe(401);
   });
   it('503 when no verifier is wired and not explicitly opened', async () => {
-    const r = await run({ membership: new FakeOrgRepo() }, fakeReq('GET', '/api/orgs'));
+    const r = await run({ membership: new FakeOrgRepo(), roster: new FakeRoster() }, fakeReq('GET', '/api/orgs'));
     expect(r.statusCode).toBe(503);
   });
   it('POST /api/orgs without CSRF → 403, no org created', async () => {
@@ -249,5 +279,100 @@ describe('member management — OWNER-gated (slice 5b)', () => {
     const r = await run(deps(repo), fakeReq('POST', '/api/orgs/members', { headers: csrf(), body: JSON.stringify({ email: 'x@x', role: 'superuser' }) }));
     expect(r.statusCode).toBe(400);
     expect(repo.added).toEqual([]);
+  });
+});
+
+describe('roster management — ADMIN-gated (slice 5d)', () => {
+  it('GET /api/orgs/agents — ANY member may list the hired roster', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    const roster = new FakeRoster();
+    roster.hired = [{ agentId: 'agent-elvis', name: 'Elvis', status: 'active' }];
+    const r = await run(deps(repo, { roster }), fakeReq('GET', '/api/orgs/agents'));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ agents: [{ agentId: 'agent-elvis', name: 'Elvis', status: 'active' }] });
+  });
+
+  it('an ADMIN hires an agent → 200, the hire is recorded', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'admin';
+    const roster = new FakeRoster();
+    const r = await run(
+      deps(repo, { roster }),
+      fakeReq('POST', '/api/orgs/agents', { headers: csrf(), body: JSON.stringify({ agentId: 'agent-elvis' }) })
+    );
+    expect(r.statusCode).toBe(200);
+    expect(roster.hires).toEqual([{ orgId: 'org_default', agentId: 'agent-elvis' }]);
+  });
+
+  it('PRIV-ESC BLOCK: a MEMBER cannot hire (403) — the roster boundary is gated on the endpoint, no hire recorded', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    const roster = new FakeRoster();
+    const r = await run(
+      deps(repo, { roster }),
+      fakeReq('POST', '/api/orgs/agents', { headers: csrf(), body: JSON.stringify({ agentId: 'agent-elvis' }) })
+    );
+    expect(r.statusCode).toBe(403);
+    expect(roster.hires).toEqual([]); // never reached the repo
+  });
+
+  it('PRIV-ESC BLOCK: a MEMBER cannot unhire (403), no unhire recorded', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    const roster = new FakeRoster();
+    const r = await run(deps(repo, { roster }), fakeReq('DELETE', '/api/orgs/agents/agent-elvis', { headers: csrf() }));
+    expect(r.statusCode).toBe(403);
+    expect(roster.unhires).toEqual([]);
+  });
+
+  it('hire of an unknown agent → 404; hire of an already-hired agent → 409', async () => {
+    const notFound = new FakeRoster();
+    notFound.nextHireOutcome = 'not_found';
+    const r404 = await run(
+      deps(new FakeOrgRepo(), { roster: notFound }),
+      fakeReq('POST', '/api/orgs/agents', { headers: csrf(), body: JSON.stringify({ agentId: 'ghost' }) })
+    );
+    expect(r404.statusCode).toBe(404);
+
+    const dup = new FakeRoster();
+    dup.nextHireOutcome = 'already_hired';
+    const r409 = await run(
+      deps(new FakeOrgRepo(), { roster: dup }),
+      fakeReq('POST', '/api/orgs/agents', { headers: csrf(), body: JSON.stringify({ agentId: 'agent-elvis' }) })
+    );
+    expect(r409.statusCode).toBe(409);
+    expect(JSON.parse(r409.body).code).toBe('already_hired');
+  });
+
+  it('an OWNER unhires an agent → 200; unhiring a not-hired agent → 404', async () => {
+    const repo = new FakeOrgRepo(); // owner by default
+    const roster = new FakeRoster();
+    const ok = await run(deps(repo, { roster }), fakeReq('DELETE', '/api/orgs/agents/agent-elvis', { headers: csrf() }));
+    expect(ok.statusCode).toBe(200);
+    expect(roster.unhires).toEqual([{ orgId: 'org_default', agentId: 'agent-elvis' }]);
+
+    const missing = new FakeRoster();
+    missing.nextUnhireRemoved = false;
+    const r404 = await run(deps(new FakeOrgRepo(), { roster: missing }), fakeReq('DELETE', '/api/orgs/agents/nope', { headers: csrf() }));
+    expect(r404.statusCode).toBe(404);
+  });
+
+  it('hire requires CSRF (403) and a non-empty agentId (400)', async () => {
+    const noCsrf = new FakeRoster();
+    const rCsrf = await run(
+      deps(new FakeOrgRepo(), { roster: noCsrf }),
+      fakeReq('POST', '/api/orgs/agents', { body: JSON.stringify({ agentId: 'agent-elvis' }) })
+    );
+    expect(rCsrf.statusCode).toBe(403);
+    expect(noCsrf.hires).toEqual([]);
+
+    const bad = new FakeRoster();
+    const rBad = await run(
+      deps(new FakeOrgRepo(), { roster: bad }),
+      fakeReq('POST', '/api/orgs/agents', { headers: csrf(), body: JSON.stringify({ agentId: '' }) })
+    );
+    expect(rBad.statusCode).toBe(400);
+    expect(bad.hires).toEqual([]);
   });
 });

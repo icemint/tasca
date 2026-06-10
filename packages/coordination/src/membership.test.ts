@@ -6,6 +6,8 @@ import { PgCoordinationStore } from './store';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import { ORG_MEMBERSHIP_TABLE_DDL, USER_ACTIVE_ORG_TABLE_DDL, ORG_MEMBERSHIP_BACKFILL_DDL, PgOrgMembershipRepo } from './membership';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
+import { ORG_AGENT_TABLE_DDL, PgOrgRosterRepo } from './roster';
+import { IDENTITY_SCHEMA_DDL } from '@tasca/identity';
 import { resolveOrg, DEFAULT_ORG_ID } from './resolve-org';
 
 // DB-backed proof of the slice-4 RBAC membership model. Skipped without DATABASE_URL.
@@ -371,5 +373,84 @@ run('github connect: install-state nonce + connection store (Postgres, slice 5c)
     // The same org re-binding (idempotent re-install) is fine — refreshes installation_id.
     await store.upsertGitHubInstallation('cu_org', { workspaceId: 'beta', installationId: '3' });
     expect(await store.getInstallationIdForOwner('beta')).toBe('3');
+  });
+});
+
+run('org roster (Postgres) — hire/unhire, org-scoped candidate set, label resolution (slice 5d)', () => {
+  const SCHEMA = 'roster_slice5d_test';
+  let pool: Pool;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of IDENTITY_SCHEMA_DDL) await pool.query(ddl); // rbac_role + agent + ...
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl); // organization (+ org_default)
+    await pool.query(ORG_AGENT_TABLE_DDL); // the org↔agent join (FKs organization + agent)
+    // Two orgs, three global agents (agents stay GLOBAL — no org_id on the agent table).
+    await pool.query(`INSERT INTO organization (id, name) VALUES ('o_a','A'),('o_b','B') ON CONFLICT (id) DO NOTHING`);
+    await pool.query(
+      `INSERT INTO agent (id, name, model, status) VALUES
+         ('agent-elvis','Elvis','claude-x','active'),
+         ('agent-mona','Mona','gpt-x','active'),
+         ('agent-qwen','Qwen-1','local-x','paused')`
+    );
+  });
+  afterAll(async () => {
+    await pool?.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`).catch(() => {});
+    await pool?.end();
+  });
+
+  it('hire is idempotent (ok then already_hired); unknown agent → not_found', async () => {
+    const roster = new PgOrgRosterRepo(pool);
+    expect(await roster.hire('o_a', 'agent-elvis')).toBe('ok');
+    expect(await roster.hire('o_a', 'agent-elvis')).toBe('already_hired'); // PK makes it idempotent
+    expect(await roster.hire('o_a', 'ghost')).toBe('not_found'); // FK violation → not_found, not a throw
+    expect(await roster.isHired('o_a', 'agent-elvis')).toBe(true);
+    await roster.unhire('o_a', 'agent-elvis'); // clean up for later tests
+  });
+
+  it('the candidate set is ORG-SCOPED: org A never sees an agent only org B hired', async () => {
+    const roster = new PgOrgRosterRepo(pool);
+    await roster.hire('o_a', 'agent-elvis');
+    await roster.hire('o_b', 'agent-mona');
+    // A's roster is exactly {elvis}; B's is exactly {mona}. A global agent the org hasn't hired
+    // (mona for A, elvis for B) is STRUCTURALLY ABSENT from the org's candidate ids — the tenant
+    // boundary on the candidate set, so routing in A can never pick mona.
+    expect(await roster.hiredAgentIds('o_a')).toEqual(['agent-elvis']);
+    expect(await roster.hiredAgentIds('o_b')).toEqual(['agent-mona']);
+    expect(await roster.isHired('o_a', 'agent-mona')).toBe(false); // available globally, NOT hired by A
+    // unhire is org-scoped too: B unhiring elvis (which B never hired) removes nothing.
+    expect(await roster.unhire('o_b', 'agent-elvis')).toBe(false);
+    expect(await roster.hiredAgentIds('o_b')).toEqual(['agent-mona']); // unchanged
+  });
+
+  it('listHired joins name+status; findHiredAgentByName resolves WITHIN the hired set, case-insensitively', async () => {
+    const roster = new PgOrgRosterRepo(pool);
+    // o_a currently has elvis hired (from the previous test); add qwen.
+    await roster.hire('o_a', 'agent-qwen');
+    const hired = await roster.listHired('o_a');
+    expect(hired).toEqual([
+      { agentId: 'agent-elvis', name: 'Elvis', status: 'active' },
+      { agentId: 'agent-qwen', name: 'Qwen-1', status: 'paused' },
+    ]); // ordered by name
+    // Label resolution is a preference WITHIN the hired set, case-insensitive on name.
+    expect(await roster.findHiredAgentByName('o_a', 'elvis')).toBe('agent-elvis');
+    expect(await roster.findHiredAgentByName('o_a', 'ELVIS')).toBe('agent-elvis');
+    // mona is global+available but NOT hired by A → label resolves to null (fail-closed boundary).
+    expect(await roster.findHiredAgentByName('o_a', 'Mona')).toBeNull();
+    expect(await roster.findHiredAgentByName('o_a', 'nobody')).toBeNull();
+  });
+
+  it('ON DELETE CASCADE: retiring an agent drops its roster rows', async () => {
+    const roster = new PgOrgRosterRepo(pool);
+    await roster.hire('o_b', 'agent-qwen');
+    expect(await roster.isHired('o_b', 'agent-qwen')).toBe(true);
+    await pool.query(`DELETE FROM agent WHERE id = 'agent-qwen'`); // global retire
+    expect(await roster.isHired('o_b', 'agent-qwen')).toBe(false); // roster row cascaded away
+    expect(await roster.isHired('o_a', 'agent-qwen')).toBe(false);
   });
 });

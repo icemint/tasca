@@ -43,6 +43,7 @@ import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
+import { ORG_AGENT_TABLE_DDL } from './roster';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -99,6 +100,7 @@ async function applySchema(pool: Pool): Promise<void> {
     ...ORG_MEMBERSHIP_DDL, // user↔org membership + one-time backfill (FKs app_user + organization → last)
     GITHUB_INSTALL_STATE_TABLE_DDL, // slice 5c connect nonce (FKs app_user + organization)
     GITHUB_CONNECTION_UNIQUE_DDL, // slice 5c: one github account → one connection (DB-enforced re-bind guard)
+    ORG_AGENT_TABLE_DDL, // slice 5d: org↔agent roster join (FKs organization + agent)
   ];
   for (const ddl of statements) {
     await pool.query(ddl);

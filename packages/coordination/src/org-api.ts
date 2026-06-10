@@ -14,11 +14,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
-import type { OrgMembershipRepo, OrgRole, MemberWriteOutcome } from './membership';
+import { atLeast, type OrgMembershipRepo, type OrgRole, type MemberWriteOutcome } from './membership';
+import type { OrgRosterRepo } from './roster';
 import { sendJson, readJsonBody, verifyCsrf } from './http-util';
 
 export interface OrgApiDeps {
   membership: OrgMembershipRepo;
+  /** The org roster (slice 5d): hire/unhire managed agents into the active org. */
+  roster: OrgRosterRepo;
   /** Verify the request's session (same contract as the read/write API). */
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
   /** Fail-closed escape hatch: no verifier wired → 503 unless explicitly opened (dev/tests only). */
@@ -36,7 +39,10 @@ type Route =
   | { kind: 'list-members' }
   | { kind: 'add-member' }
   | { kind: 'set-role'; userId: string }
-  | { kind: 'remove-member'; userId: string };
+  | { kind: 'remove-member'; userId: string }
+  | { kind: 'list-agents' }
+  | { kind: 'hire-agent' }
+  | { kind: 'unhire-agent'; agentId: string };
 
 function matchRoute(method: string, path: string): Route | null {
   if (path === '/api/orgs') {
@@ -50,6 +56,13 @@ function matchRoute(method: string, path: string): Route | null {
     if (method === 'POST') return { kind: 'add-member' };
     return null;
   }
+  if (path === '/api/orgs/agents') {
+    if (method === 'GET') return { kind: 'list-agents' };
+    if (method === 'POST') return { kind: 'hire-agent' };
+    return null;
+  }
+  const agentM = /^\/api\/orgs\/agents\/([^/]+)$/.exec(path);
+  if (agentM && method === 'DELETE') return { kind: 'unhire-agent', agentId: decodeURIComponent(agentM[1]!) };
   const roleM = /^\/api\/orgs\/members\/([^/]+)\/role$/.exec(path);
   if (roleM && method === 'POST') return { kind: 'set-role', userId: decodeURIComponent(roleM[1]!) };
   const memM = /^\/api\/orgs\/members\/([^/]+)$/.exec(path);
@@ -112,6 +125,16 @@ export async function orgApiHandler(
       sendJson(res, 200, { members: await deps.membership.listMembers(orgId) });
       return true;
     }
+    // GET /api/orgs/agents — the active org's hired roster (any member may see it).
+    if (route.kind === 'list-agents') {
+      const orgId = await deps.membership.getActiveOrg(userId);
+      if (orgId === null) {
+        sendJson(res, 403, { error: 'no organization membership' });
+        return true;
+      }
+      sendJson(res, 200, { agents: await deps.roster.listHired(orgId) });
+      return true;
+    }
 
     // ── mutations: CSRF double-submit ─────────────────────────────────────────
     if (!verifyCsrf(req)) {
@@ -149,20 +172,47 @@ export async function orgApiHandler(
       return true;
     }
 
-    // ── member management on the ACTIVE org: OWNER only (slice 5b) ─────────────
     const orgId = await deps.membership.getActiveOrg(userId);
     if (orgId === null) {
       sendJson(res, 403, { error: 'no organization membership' });
       return true;
     }
-    // The role gate, server-side on the endpoint (not the UI): a member calling this → 403. A user
-    // cannot self-promote — changing roles requires OWNER, which a member/admin does not have.
-    if (session) {
-      const role = await deps.membership.getRole(userId, orgId);
-      if (role !== 'owner') {
-        sendJson(res, 403, { error: 'only an owner may manage members' });
+    const callerRole = session ? await deps.membership.getRole(userId, orgId) : 'owner'; // dev = full access
+
+    // ── roster management on the ACTIVE org: ADMIN+ (slice 5b: roster = admin) ──
+    // Hiring/unhiring agents is a roster write — gate on the endpoint (a member calling → 403),
+    // server-side. The org_agent join is the tenant boundary on the candidate set, so only an
+    // admin+ can change which agents serve this org's tasks.
+    if (route.kind === 'hire-agent' || route.kind === 'unhire-agent') {
+      if (callerRole === null || !atLeast(callerRole, 'admin')) {
+        sendJson(res, 403, { error: 'admin role required to manage the roster' });
         return true;
       }
+      if (route.kind === 'hire-agent') {
+        const body = await readBody(req, res);
+        if (body === undefined) return true;
+        const agentId = (body as { agentId?: unknown }).agentId;
+        if (typeof agentId !== 'string' || agentId.length === 0) {
+          sendJson(res, 400, { error: 'agentId is required' });
+          return true;
+        }
+        const outcome = await deps.roster.hire(orgId, agentId);
+        if (outcome === 'ok') return sendJson(res, 200, { ok: true }), true;
+        if (outcome === 'not_found') return sendJson(res, 404, { error: 'no such agent' }), true;
+        return sendJson(res, 409, { error: 'already hired', code: 'already_hired' }), true;
+      }
+      // unhire-agent
+      const removed = await deps.roster.unhire(orgId, route.agentId);
+      sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'agent not hired by this org' });
+      return true;
+    }
+
+    // ── member management on the ACTIVE org: OWNER only (slice 5b) ─────────────
+    // The role gate, server-side on the endpoint (not the UI): a member calling this → 403. A user
+    // cannot self-promote — changing roles requires OWNER, which a member/admin does not have.
+    if (callerRole !== 'owner') {
+      sendJson(res, 403, { error: 'only an owner may manage members' });
+      return true;
     }
 
     if (route.kind === 'add-member') {

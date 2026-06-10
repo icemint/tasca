@@ -43,8 +43,14 @@ import { DEFAULT_ORG_ID } from './resolve-org';
  * @tasca/identity (profiles) + the store (active counts); tests fake it.
  */
 export interface AgentDirectory {
-  /** Eligible agents for a task, as routing MatchCandidates. */
-  listCandidates(task: Task): Promise<MatchCandidate[]>;
+  /** The org's HIRED agents eligible for a task, as routing MatchCandidates (slice 5d). Scoped to
+   *  `orgId` (the task's org): routing only ever considers agents the org has hired — a global agent
+   *  the org hasn't hired is structurally absent here, so it can never be routed to. */
+  listCandidates(orgId: string, task: Task): Promise<MatchCandidate[]>;
+  /** Resolve an `agent:<name>` label to a HIRED agent's id for `orgId`, or null when the org hasn't
+   *  hired an agent by that name (slice 5d). null → the caller fails closed (never routes to an
+   *  unhired agent); the label is a preference within the hired set, not a bypass of it. */
+  findHiredAgentByName(orgId: string, name: string): Promise<string | null>;
   /** The agent's stable audit principal id (for audit_event attribution). */
   principalIdFor(agentId: string): Promise<string | null>;
 }
@@ -216,7 +222,13 @@ export type OrchestrationOutcome =
   // A GitHub work event for an UNCONNECTED workspace (slice 5c): the App is installed but not bound
   // to an org, so we FAIL CLOSED — no task, no agent run, never the default tenant. The customer
   // completes Connect to bind the workspace's org. No taskId (nothing was created).
-  | { kind: 'unconnected'; taskId: null; platform: AdapterEvent['platform']; workspace: string | null };
+  | { kind: 'unconnected'; taskId: null; platform: AdapterEvent['platform']; workspace: string | null }
+  // The org has hired NO agents (slice 5d) → the task is retired to needs_attention ("no agents
+  // hired"). Fail-closed honesty, never a default agent.
+  | { kind: 'no_roster'; taskId: string }
+  // An `agent:<name>` label named an agent the org has NOT hired (slice 5d) → needs_attention. The
+  // label is a preference within the hired set, not a bypass — so an unhired name fails closed.
+  | { kind: 'agent_not_hired'; taskId: string };
 
 /**
  * Resolve the org a webhook event acts in (slice 5c). A CONNECTED workspace resolves to its real
@@ -226,6 +238,16 @@ export type OrchestrationOutcome =
  *  - Platforms without a connect flow yet (shortcut/linear) → the documented single-tenant
  *    grandfather DEFAULT_ORG_ID, removed when those platforms get their own connect flow.
  */
+/** Extract the agent name from an `agent:<name>` label (case-insensitive; first match wins), or
+ *  null. The assignment-intake override signal (slice 5d). */
+export function agentLabel(labels: string[] | undefined): string | null {
+  for (const l of labels ?? []) {
+    const m = /^agent:(.+)$/i.exec(l.trim());
+    if (m) return m[1]!.trim();
+  }
+  return null;
+}
+
 export async function resolveWebhookOrg(
   store: Pick<CoordinationStore, 'getOrgForConnection'>,
   platform: AdapterEvent['platform'],
@@ -320,23 +342,62 @@ export async function orchestrateTaskAssigned(
     );
     await deps.store.setTierEstimate(orgId, task.id, estimate);
 
-    // §6.6 — match capability over eligible agents.
+    // §6.6 — match capability over the org's HIRED agents (slice 5d). The candidate set is
+    // org-scoped: routing only ever considers agents this org hired.
     const taskForMatch: Task = { ...task, tierEstimate: estimate };
-    const candidates = await deps.directory.listCandidates(taskForMatch);
+    const candidates = await deps.directory.listCandidates(orgId, taskForMatch);
+
+    // §5d — EMPTY ROSTER: the org has hired no agents → fail closed honestly (needs_attention with a
+    // reason), never a crash or a default agent.
+    if (candidates.length === 0) {
+      await deps.store.recordRoutingDecision(orgId, {
+        taskId: task.id,
+        tierEstimate: estimate,
+        candidates: [],
+        winnerAgentId: null,
+      });
+      await deps.store.retireUnroutable(orgId, task.id, 'no agents hired');
+      deps.logger?.info?.('coordination: org has hired no agents — task → needs_attention', { taskId: task.id });
+      return { kind: 'no_roster', taskId: task.id };
+    }
+
     const ranked = matchCapability(estimate, candidates);
-    const winner = ranked.find((m) => m.eligible) ?? null;
+
+    // §5d — ASSIGNMENT INTAKE: an `agent:<name>` label picks a specific agent; otherwise the routing
+    // engine (the crown jewel) picks the top eligible candidate. The label is a preference WITHIN the
+    // hired set — a label naming an agent the org has NOT hired fails closed (needs_attention), never
+    // a route to an unhired agent.
+    const labelName = agentLabel(content.labels);
+    let winnerId: string | null = null;
+    let unhiredLabel = false;
+    if (labelName) {
+      const namedId = await deps.directory.findHiredAgentByName(orgId, labelName);
+      if (namedId && candidates.some((c) => c.profile.agentId === namedId)) {
+        winnerId = namedId; // labeled a HIRED agent → override the routing pick
+      } else {
+        unhiredLabel = true; // labeled an agent the org hasn't hired → fail closed below
+      }
+    } else {
+      winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
+    }
 
     await deps.store.recordRoutingDecision(orgId, {
       taskId: task.id,
       tierEstimate: estimate,
       candidates: ranked,
-      winnerAgentId: winner?.agentId ?? null,
+      winnerAgentId: winnerId,
     });
 
-    if (!winner) {
+    if (unhiredLabel) {
+      await deps.store.retireUnroutable(orgId, task.id, `requested agent '${labelName}' is not hired`);
+      deps.logger?.info?.('coordination: labeled agent not hired — task → needs_attention', { taskId: task.id, requested: labelName });
+      return { kind: 'agent_not_hired', taskId: task.id };
+    }
+    if (winnerId === null) {
       return { kind: 'no_candidate', taskId: task.id };
     }
 
+    const winner = { agentId: winnerId };
     const winningCandidate = candidates.find((c) => c.profile.agentId === winner.agentId)!;
 
     // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out).

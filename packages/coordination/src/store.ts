@@ -210,6 +210,14 @@ export interface CoordinationStore {
    */
   failNoCapacity(orgId: string, taskId: string, reason: string): Promise<boolean>;
 
+  /**
+   * Retire a still-`routable` task to `needs_attention` with a human-readable reason, WITHOUT
+   * touching the breaker (slice 5d routing fail-close: "no agents hired" / "agent X not hired").
+   * Guarded to `routable` so it only fires pre-claim and can't fight a concurrent claim. Returns
+   * true if it acted.
+   */
+  retireUnroutable(orgId: string, taskId: string, reason: string): Promise<boolean>;
+
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
   recordRoutingDecision(
     orgId: string,
@@ -704,6 +712,18 @@ export class PgCoordinationStore implements CoordinationStore {
       `UPDATE task
           SET status = 'needs_attention', last_error = $3, version = version + 1, updated_at = now()
         WHERE org_id = $1 AND id = $2 AND status IN ('executing','claimed')`,
+      [orgId, taskId, reason]
+    );
+    return res.rowCount === 1;
+  }
+
+  async retireUnroutable(orgId: string, taskId: string, reason: string): Promise<boolean> {
+    // Pre-claim retire to needs_attention (routing fail-close, slice 5d). Guarded to `routable` so a
+    // concurrent claim that already moved the task wins and this no-ops. Breaker untouched.
+    const res = await this.db.query(
+      `UPDATE task
+          SET status = 'needs_attention', last_error = $3, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status = 'routable'`,
       [orgId, taskId, reason]
     );
     return res.rowCount === 1;
