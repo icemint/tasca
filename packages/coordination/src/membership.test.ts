@@ -5,6 +5,7 @@ import { AUTH_SCHEMA_DDL } from '@tasca/auth';
 import { PgCoordinationStore } from './store';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import { ORG_MEMBERSHIP_TABLE_DDL, USER_ACTIVE_ORG_TABLE_DDL, ORG_MEMBERSHIP_BACKFILL_DDL, PgOrgMembershipRepo } from './membership';
+import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
 import { resolveOrg, DEFAULT_ORG_ID } from './resolve-org';
 
 // DB-backed proof of the slice-4 RBAC membership model. Skipped without DATABASE_URL.
@@ -292,5 +293,83 @@ run('role matrix + member management (Postgres, slice 5b)', () => {
     expect([r1, r2].filter((r) => r === 'last_owner')).toHaveLength(1); // the other was refused
     const owners = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM org_membership WHERE org_id='cc' AND role='owner'`);
     expect(Number(owners.rows[0]!.n)).toBe(1); // org still has exactly one owner — never stranded
+  });
+});
+
+run('github connect: install-state nonce + connection store (Postgres, slice 5c)', () => {
+  const SCHEMA = 'connect_slice5c_test';
+  let pool: Pool;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of AUTH_SCHEMA_DDL) await pool.query(ddl);
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
+    await pool.query(ORG_MEMBERSHIP_TABLE_DDL);
+    await pool.query(GITHUB_INSTALL_STATE_TABLE_DDL);
+    await pool.query(GITHUB_CONNECTION_UNIQUE_DDL);
+    await pool.query(`INSERT INTO app_user (id, email) VALUES ('cu','cu@x.test')`);
+    await pool.query(`INSERT INTO organization (id, name) VALUES ('cu_org','CU') ON CONFLICT (id) DO NOTHING`);
+  });
+  afterAll(async () => {
+    await pool?.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`).catch(() => {});
+    await pool?.end();
+  });
+
+  it('install-state nonce is SINGLE-USE: consume returns the binding once, then null (replay fails)', async () => {
+    const repo = new PgGitHubInstallStateRepo(pool);
+    const state = await repo.issue('cu', 'cu_org');
+    expect(await repo.consume(state)).toEqual({ userId: 'cu', orgId: 'cu_org' }); // first consume binds
+    expect(await repo.consume(state)).toBeNull(); // replay → gone (deleted on consume)
+    expect(await repo.consume('never-issued')).toBeNull();
+  });
+
+  it('an EXPIRED nonce does not consume', async () => {
+    const repo = new PgGitHubInstallStateRepo(pool);
+    const state = await repo.issue('cu', 'cu_org');
+    await pool.query(`UPDATE github_install_state SET expires_at = now() - interval '1 second' WHERE state = $1`, [state]);
+    expect(await repo.consume(state)).toBeNull(); // expired → refused
+  });
+
+  it('connection store: callback upsert binds org; webhook update refreshes installation_id; revoke marks revoked', async () => {
+    const store = new PgCoordinationStore(pool);
+    // The connect callback binds the account to the real org.
+    await store.upsertGitHubInstallation('cu_org', { workspaceId: 'acme', installationId: '111' });
+    expect(await store.getOrgForConnection('github', 'acme')).toBe('cu_org'); // resolves to the real org
+    expect(await store.getInstallationIdForOwner('acme')).toBe('111');
+
+    // The install webhook (confirmation) refreshes installation_id WITHOUT touching org.
+    expect(await store.updateInstallationByAccount('acme', '222')).toBe(true);
+    expect(await store.getInstallationIdForOwner('acme')).toBe('222');
+    expect(await store.getOrgForConnection('github', 'acme')).toBe('cu_org'); // org unchanged by the webhook
+
+    // Uninstall → revoked → STOPS RESOLVING (fail-closed): a revoked account's webhooks/token-mints
+    // must not run in the formerly-bound tenant.
+    expect(await store.revokeInstallationByAccount('acme')).toBe(true);
+    const h = await pool.query<{ health: string }>(`SELECT health FROM platform_connection WHERE workspace_id='acme'`);
+    expect(h.rows[0]!.health).toBe('revoked');
+    expect(await store.getOrgForConnection('github', 'acme')).toBeNull(); // revoked → no longer resolves
+    expect(await store.getInstallationIdForOwner('acme')).toBeNull(); // revoked → no token-mint/write-back
+
+    // A webhook for an account with NO connection is a no-op (the callback hasn't created it yet).
+    expect(await store.updateInstallationByAccount('never-installed', '999')).toBe(false);
+  });
+
+  it('DB-ENFORCED re-bind guard: one github account cannot be bound to TWO orgs (the partial unique blocks it)', async () => {
+    const store = new PgCoordinationStore(pool);
+    await pool.query(`INSERT INTO organization (id, name) VALUES ('cu_org2','CU2') ON CONFLICT (id) DO NOTHING`);
+    await store.upsertGitHubInstallation('cu_org', { workspaceId: 'beta', installationId: '1' });
+    // A DIFFERENT org binding the SAME github account violates the github-account unique → throws.
+    // (This is the hard guarantee behind the connect callback's re-bind guard, race-proof.)
+    await expect(
+      store.upsertGitHubInstallation('cu_org2', { workspaceId: 'beta', installationId: '2' })
+    ).rejects.toThrow();
+    // The same org re-binding (idempotent re-install) is fine — refreshes installation_id.
+    await store.upsertGitHubInstallation('cu_org', { workspaceId: 'beta', installationId: '3' });
+    expect(await store.getInstallationIdForOwner('beta')).toBe('3');
   });
 });

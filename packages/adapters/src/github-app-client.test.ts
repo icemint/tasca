@@ -249,3 +249,26 @@ describe('GitHubAppClient — private key normalization + boot decode-check', ()
     expect(() => client.validateSigningKey()).toThrow(/failed to decode\/sign — check GITHUB_APP_PRIVATE_KEY/);
   });
 });
+
+describe('GitHubAppClient.getInstallationAccount (slice 5c connect callback)', () => {
+  it('GETs /app/installations/{id} with the App JWT and returns account.login', async () => {
+    let captured: { url: string; init: RequestInit } | undefined;
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init: init ?? {} };
+      return new Response(JSON.stringify({ account: { login: 'acme' } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const client = new GitHubAppClient({ appId: APP_ID, privateKey, apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+
+    const login = await client.getInstallationAccount('99');
+    expect(login).toBe('acme');
+    expect(captured?.url).toBe('https://api.example.test/app/installations/99');
+    expect(captured?.init.method).toBe('GET');
+    expect((captured?.init.headers as Record<string, string>)['Authorization']).toMatch(/^Bearer .+\..+\..+$/);
+  });
+
+  it('throws when the installation response has no account.login', async () => {
+    const fakeFetch = (async () => new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+    const client = new GitHubAppClient({ appId: APP_ID, privateKey, apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+    await expect(client.getInstallationAccount('99')).rejects.toThrow(/account\.login/);
+  });
+});

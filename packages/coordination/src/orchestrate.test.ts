@@ -36,10 +36,12 @@ class FakeStore implements CoordinationStore {
   pullRequests: Array<{ taskId: string; url: string }> = [];
   events = new Map<string, 'received' | 'processed'>();
 
-  // Cross-org resolvers (single-org fake): no connection → null (orchestrate then uses the
-  // default org); getOrgForTask returns the default org for a known task, else null.
+  // Cross-org resolvers. connectionOrg is the org a workspace resolves to (slice 5c): default
+  // 'org_default' = a connected/grandfathered workspace; set null to simulate an UNCONNECTED
+  // workspace (a github event then fails closed via resolveWebhookOrg).
+  connectionOrg: string | null = 'org_default';
   async getOrgForConnection(_platform: Task['platform'], _workspaceId: string) {
-    return null;
+    return this.connectionOrg;
   }
   async getOrgForTask(taskId: string) {
     return this.tasks.has(taskId) ? 'org_default' : null;
@@ -123,6 +125,12 @@ class FakeStore implements CoordinationStore {
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() {
     return null;
+  }
+  async updateInstallationByAccount() {
+    return false;
+  }
+  async revokeInstallationByAccount() {
+    return false;
   }
   async recordRoutingDecision(_orgId: string, input: { taskId: string; winnerAgentId: string | null }) {
     this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
@@ -416,6 +424,27 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     );
     expect(outcome.kind).toBe('dispatched');
     expect(status.updates[0]!.platform).toBe('github');
+  });
+
+  it('FAIL-CLOSED: a github event for an UNCONNECTED workspace → unconnected, no task, no agent run', async () => {
+    store.connectionOrg = null; // the workspace has no platform_connection (install not bound)
+    const githubEvent: AdapterEvent = {
+      type: 'task.assigned',
+      platform: 'github',
+      externalStoryId: 'stranger/repo#1',
+      agentExternalId: '5550001',
+      repoHint: 'stranger/repo',
+    };
+    const outcome = await orchestrateTaskAssigned(githubEvent, makeDeps({ store, execution, status, audit }));
+    expect(outcome.kind).toBe('unconnected'); // fail closed — NOT dispatched into the default org
+    expect(store.tasks.size).toBe(0); // no task created
+    expect(execution.spawnCalls).toBe(0); // no agent run
+  });
+
+  it('a SHORTCUT event for an unconnected workspace still resolves to the grandfather default (no connect flow yet)', async () => {
+    store.connectionOrg = null;
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit }));
+    expect(outcome.kind).toBe('dispatched'); // shortcut keeps the documented default, not fail-closed
   });
 
   it('empty roster → no_candidate, no dispatch, decision still persisted', async () => {

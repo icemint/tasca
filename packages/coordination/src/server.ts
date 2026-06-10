@@ -18,11 +18,11 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { AdapterEventSchema, type AdapterEvent } from '@tasca/contracts';
 import type { CoordinationStore } from './store';
 import type { WebhookVerifier, Logger } from './ports';
-import { orchestrateTaskAssigned, workspaceForEvent, type OrchestrationDeps } from './orchestrate';
+import { orchestrateTaskAssigned, workspaceForEvent, resolveWebhookOrg, type OrchestrationDeps } from './orchestrate';
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
-import { DEFAULT_ORG_ID } from './resolve-org';
+import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
   /**
@@ -42,6 +42,11 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * POSTs CSRF-gated. Absent → those paths fall through to 404 (additive).
    */
   orgApi?: OrgApiDeps;
+  /**
+   * The GitHub connect API (slice 5c: GET /api/connect/github + .../callback). Session-gated;
+   * binds a customer's GitHub install to their org. Absent → those paths fall through to 404.
+   */
+  connectApi?: GitHubConnectDeps;
   /** The Shortcut webhook verifier (POST /webhooks/shortcut). */
   verifier: WebhookVerifier;
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
@@ -196,9 +201,18 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // unconnected workspace) scopes the ledger. A zero-event delivery (e.g. a non-task
     // webhook) has no workspace → default org, which is sufficient to dedup its redeliveries.
     const ledgerWorkspace = events[0] ? workspaceForEvent(events[0]) : null;
-    const orgId =
-      (await deps.store.getOrgForConnection(verified.platform, ledgerWorkspace ?? '')) ??
-      DEFAULT_ORG_ID;
+    const orgId = await resolveWebhookOrg(deps.store, verified.platform, ledgerWorkspace);
+    if (orgId === null) {
+      // GitHub delivery for an UNCONNECTED workspace (slice 5c) → fail closed: ack so GitHub doesn't
+      // retry-storm, but record NO ledger and orchestrate NOTHING. An installed-but-unbound account's
+      // work is dropped, never run in the default tenant. The customer completes Connect to bind it.
+      safeInfo('coordination: github webhook for an unconnected workspace — dropped (fail closed)', {
+        platform: verified.platform,
+        externalEventId: verified.externalEventId,
+      });
+      res.writeHead(202).end('accepted');
+      return;
+    }
 
     // Idempotency ledger: record this event as `received` under the delivery's org. Only an
     // event that already reached `processed` is a true duplicate to drop — a row still
@@ -280,6 +294,9 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     if (deps.authHandler && (await deps.authHandler(req, res))) {
       return;
     }
+
+    // GitHub connect API (only when wired). Handles GET /api/connect/github + .../callback.
+    if (deps.connectApi && (await githubConnectHandler(req, res, deps.connectApi))) return;
 
     // Org-management API (only when wired). Handles GET/POST /api/orgs + POST /api/active-org —
     // before the read/write API, which don't claim those paths.

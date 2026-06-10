@@ -232,6 +232,9 @@ export interface InstallationMapping {
   installationId: string;
   /** The installing account/org login — the `owner` half of `owner/repo`. */
   accountLogin: string;
+  /** The webhook action: `created`/`deleted` (install/uninstall) etc. Drives the connect handler
+   *  (slice 5c) — confirm an install, revoke on uninstall. */
+  action: string;
 }
 
 /**
@@ -251,5 +254,5 @@ export function parseInstallationEvent(rawBody: string): InstallationMapping | n
   if (!parsed.success) return null;
   const login = parsed.data.installation.account?.login;
   if (!login) return null;
-  return { installationId: String(parsed.data.installation.id), accountLogin: login };
+  return { installationId: String(parsed.data.installation.id), accountLogin: login, action: parsed.data.action };
 }

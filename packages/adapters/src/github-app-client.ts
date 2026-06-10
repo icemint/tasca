@@ -206,6 +206,33 @@ export class GitHubAppClient {
   }
 
   /**
+   * Resolve an installation's account login (slice 5c connect callback). GETs
+   * `${apiBase}/app/installations/{id}` authenticated by the App JWT and returns `account.login`
+   * — the workspace key the connection binds to. The callback has only the `installation_id` from
+   * the redirect, so this is how it learns which GitHub account just installed.
+   */
+  async getInstallationAccount(installationId: string): Promise<string> {
+    const jwt = this.mintAppJwt();
+    const res = await this.fetchImpl(`${this.apiBase}/app/installations/${installationId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`github get-installation failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+    const json = (await res.json()) as { account?: { login?: string } };
+    const login = json.account?.login;
+    if (!login) throw new Error('github get-installation: response missing account.login');
+    return login;
+  }
+
+  /**
    * Mint an installation token SCOPED to specific repositories with minimal
    * permissions — the credential broker uses this to hand the agent-runner a
    * per-task token. Unlike getInstallationToken this is NOT cached and NOT broad:
