@@ -88,7 +88,7 @@ const csrf = (extra: Record<string, string | string[]> = {}) => ({
 });
 
 /** A membership reader that maps any user to one org (or null for the no-membership case). */
-const membershipFor = (org: string | null) => ({ async getOrgForUser() { return org; } });
+const membershipFor = (org: string | null) => ({ async getActiveOrg() { return org; } });
 
 function deps(store: FakeWriteStore, over: Partial<WriteApiDeps> = {}): WriteApiDeps {
   return {

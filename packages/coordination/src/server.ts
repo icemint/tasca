@@ -21,6 +21,7 @@ import type { WebhookVerifier, Logger } from './ports';
 import { orchestrateTaskAssigned, workspaceForEvent, type OrchestrationDeps } from './orchestrate';
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
+import { orgApiHandler, type OrgApiDeps } from './org-api';
 import { DEFAULT_ORG_ID } from './resolve-org';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
@@ -36,6 +37,11 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * (additive; webhook/healthz/read paths unaffected).
    */
   writeApi?: WriteApiDeps;
+  /**
+   * The org-management API (slice 5a: GET/POST /api/orgs, POST /api/active-org). Session-gated;
+   * POSTs CSRF-gated. Absent → those paths fall through to 404 (additive).
+   */
+  orgApi?: OrgApiDeps;
   /** The Shortcut webhook verifier (POST /webhooks/shortcut). */
   verifier: WebhookVerifier;
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
@@ -274,6 +280,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     if (deps.authHandler && (await deps.authHandler(req, res))) {
       return;
     }
+
+    // Org-management API (only when wired). Handles GET/POST /api/orgs + POST /api/active-org —
+    // before the read/write API, which don't claim those paths.
+    if (deps.orgApi && (await orgApiHandler(req, res, deps.orgApi))) return;
 
     // Read API (only when wired). Handles GET /api/* read endpoints.
     if (deps.readApi && (await readApiHandler(req, res, deps.readApi))) return;

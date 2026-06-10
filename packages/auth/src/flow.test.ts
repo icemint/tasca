@@ -197,6 +197,31 @@ describe('completeAuth', () => {
     expect(second).toEqual({ ok: false, error: 'state_mismatch' });
   });
 
+  it('slice 5a: onLogin runs with the user id on a successful login (before the session is minted)', async () => {
+    const repo = new FakeRepo();
+    const { oauthCookie } = await beginAuth('github', depsWith(repo));
+    const calls: string[] = [];
+    const res = await completeAuth(
+      'github',
+      { code: 'c', state: oauthCookie, oauthCookieState: oauthCookie },
+      { ...depsWith(repo, githubSuccessFetch), onLogin: async (uid) => { calls.push(uid); } }
+    );
+    expect(res.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeTruthy(); // the upserted user's id — org provisioning gets it
+  });
+
+  it('slice 5a: an onLogin failure FAILS the login (no session handed out without an org)', async () => {
+    const repo = new FakeRepo();
+    const { oauthCookie } = await beginAuth('github', depsWith(repo));
+    const res = await completeAuth(
+      'github',
+      { code: 'c', state: oauthCookie, oauthCookieState: oauthCookie },
+      { ...depsWith(repo, githubSuccessFetch), onLogin: async () => { throw new Error('org provisioning down'); } }
+    );
+    expect(res).toEqual({ ok: false, error: 'provider_unavailable' });
+  });
+
   it('state_mismatch when the persisted state is for a different provider', async () => {
     const repo = new FakeRepo();
     const { oauthCookie } = await beginAuth('github', depsWith(repo));

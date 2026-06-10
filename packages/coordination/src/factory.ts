@@ -12,7 +12,7 @@ import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
 import type { LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
-import { PgOrgMembershipReader } from './membership';
+import { PgOrgMembershipRepo } from './membership';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
@@ -132,9 +132,9 @@ export function createCoordination(
 ): Coordination {
   const store = new PgCoordinationStore(input.pool);
   const claim = new PgClaimRepository(input.pool);
-  // The session→org resolver backing (slice 4). Reads org_membership to turn a verified session
-  // into the user's real org; a user with no membership resolves to null → the API fails closed.
-  const membership = new PgOrgMembershipReader(input.pool);
+  // The membership repo (slice 4 + 5a). Backs resolveOrg (the active org → tenant boundary) AND the
+  // org-management API (list/create/switch + the login-time ensurePersonalOrg).
+  const membership = new PgOrgMembershipRepo(input.pool);
   const identity = new PgIdentityRepository(input.pool);
   const directory = new IdentityAgentDirectory(identity, input.agentIds);
   const audit = new IdentityAuditSink(identity);
@@ -164,6 +164,13 @@ export function createCoordination(
     writeApi: {
       store,
       identity,
+      membership,
+      ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+      ...(input.logger !== undefined ? { logger: input.logger } : {}),
+    },
+    // The org-management API (slice 5a): list/create/switch orgs. Same session posture; not
+    // org-scoped (it operates on the membership layer that decides the active org).
+    orgApi: {
       membership,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),

@@ -28,6 +28,14 @@ export interface FlowDeps {
   clientIds: Record<Provider, string>;
   clientSecrets: Record<Provider, string>;
   fetchImpl?: typeof fetch;
+  /**
+   * Post-login hook, run after the user is upserted and BEFORE the session is minted (slice 5a).
+   * The composition root injects org provisioning here (ensurePersonalOrg), so a logged-in user
+   * always has an org by their first request — no no-org window. Opaque to auth: it takes the
+   * user id and returns nothing; auth knows nothing about orgs. A throw FAILS the login (the user
+   * is never handed a session without an org), surfaced as `provider_unavailable`.
+   */
+  onLogin?: (userId: string) => Promise<void>;
 }
 
 export interface BeginAuthResult {
@@ -164,6 +172,17 @@ export async function completeAuth(
     displayName: identity.displayName,
     avatarUrl: identity.avatarUrl,
   });
+
+  // Provision the user's org BEFORE minting the session (slice 5a), so a logged-in user always has
+  // an org by their first request. A failure here fails the login rather than handing out a session
+  // with no org (which would dead-end at a 403) — the user simply retries; the hook is idempotent.
+  if (deps.onLogin) {
+    try {
+      await deps.onLogin(user.id);
+    } catch {
+      return { ok: false, error: 'provider_unavailable' };
+    }
+  }
 
   const sessionToken = await deps.repo.createSession(user.id, SESSION_TTL_SEC);
   return { ok: true, sessionToken };

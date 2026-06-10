@@ -42,7 +42,7 @@ import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
 import { DEFAULT_ORG_ID } from './resolve-org';
-import { ORG_MEMBERSHIP_DDL } from './membership';
+import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -355,6 +355,10 @@ async function main(): Promise<void> {
   let verifySession: ((req: IncomingMessage) => Promise<{ userId: string } | null>) | undefined;
   if (authEnv) {
     const authRepo = new PgAuthRepository(pool);
+    // Slice 5a: every login provisions the user's org (auto personal org on first login) BEFORE the
+    // session is minted, so a logged-in user always has an org by their first request — no no-org
+    // window that would silently default. Idempotent + race-safe (ensurePersonalOrg).
+    const onboardingRepo = new PgOrgMembershipRepo(pool);
     verifySession = async (req) => {
       const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
       if (!sid) return null;
@@ -366,6 +370,9 @@ async function main(): Promise<void> {
       redirectBase: authEnv.OAUTH_REDIRECT_BASE,
       clientIds: { github: authEnv.GITHUB_OAUTH_CLIENT_ID, google: authEnv.GOOGLE_OAUTH_CLIENT_ID },
       clientSecrets: { github: authEnv.GITHUB_OAUTH_CLIENT_SECRET, google: authEnv.GOOGLE_OAUTH_CLIENT_SECRET },
+      onLogin: async (userId) => {
+        await onboardingRepo.ensurePersonalOrg(userId);
+      },
     });
     // Hourly sweep of expired sessions + oauth-state rows. unref() so it never
     // holds the process open during shutdown.

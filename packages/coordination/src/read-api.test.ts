@@ -151,7 +151,7 @@ function fakeRes(): CapturedRes {
 }
 
 /** A membership reader that maps any user to one org (or null for the no-membership case). */
-const membershipFor = (org: string | null) => ({ async getOrgForUser() { return org; } });
+const membershipFor = (org: string | null) => ({ async getActiveOrg() { return org; } });
 
 function deps(store: FakeStore, identity: FakeIdentity, over: Partial<ReadApiDeps> = {}): ReadApiDeps {
   // Endpoint tests run with the unauthenticated opt-in so they exercise the
