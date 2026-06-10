@@ -21,6 +21,7 @@ import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity'
 import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
+import { resolveOrg } from './resolve-org';
 
 /** The agent-write surface the write-API needs (a subset of PgIdentityRepository). */
 export interface AgentWriter {
@@ -211,6 +212,9 @@ export async function writeApiHandler(
     return true;
   }
   const userId = session?.userId ?? '(dev)';
+  // Resolve the org this write acts in (the EDGE stub; RBAC swaps it in slice 4). Every
+  // task write below is scoped to it, so an operator can only ever mutate this tenant's tasks.
+  const orgId = resolveOrg(session);
 
   // ── CSRF double-submit ──────────────────────────────────────────────────────
   const cookie = readCookie(req, CSRF_COOKIE);
@@ -222,7 +226,7 @@ export async function writeApiHandler(
   }
 
   try {
-    await handleWrite(route, req, res, deps, userId);
+    await handleWrite(route, req, res, deps, userId, orgId);
   } catch (err) {
     deps.logger?.error('write-api: handler failed', { path: url.pathname, err: String(err) });
     sendJson(res, 500, { error: 'internal error' });
@@ -235,7 +239,8 @@ async function handleWrite(
   req: IncomingMessage,
   res: ServerResponse,
   deps: WriteApiDeps,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<void> {
   const audit = async (action: string, outcome: string, payload?: Record<string, unknown>) => {
     deps.logger?.info?.('write-api: human write', { userId, action, target: route.id, outcome, ...payload });
@@ -248,17 +253,17 @@ async function handleWrite(
 
   switch (route.kind) {
     case 'escalate': {
-      const outcome = await deps.store.escalateTask(route.id);
+      const outcome = await deps.store.escalateTask(orgId, route.id);
       await audit('task.escalate', sendOutcome(res, outcome));
       return;
     }
     case 'reassign': {
-      const outcome = await deps.store.reassignTask(route.id);
+      const outcome = await deps.store.reassignTask(orgId, route.id);
       await audit('task.reassign', sendOutcome(res, outcome));
       return;
     }
     case 'interrupt': {
-      const outcome = await deps.store.interruptTask(route.id);
+      const outcome = await deps.store.interruptTask(orgId, route.id);
       await audit('task.interrupt', sendOutcome(res, outcome));
       return;
     }
@@ -277,7 +282,7 @@ async function handleWrite(
         await audit('task.retier', 'bad_request');
         return;
       }
-      const outcome = await deps.store.overrideTierEstimate(route.id, tier as Tier);
+      const outcome = await deps.store.overrideTierEstimate(orgId, route.id, tier as Tier);
       await audit('task.retier', sendOutcome(res, outcome), { tier });
       return;
     }

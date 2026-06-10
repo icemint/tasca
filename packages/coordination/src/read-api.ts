@@ -31,6 +31,7 @@ import type {
   TaskSummary,
 } from './store';
 import type { Logger } from './ports';
+import { resolveOrg } from './resolve-org';
 
 // ── Read-side seams (narrow; the factory injects the concrete @tasca/identity repo) ─
 import type { AgentRecord, AgentWithProfile } from '@tasca/identity';
@@ -215,8 +216,8 @@ export async function readApiHandler(
   if (!matched) return false;
 
   // ── session enforcement ──────────────────────────────────────────────────
+  let session: SessionInfo | null = null;
   if (deps.verifySession) {
-    let session: SessionInfo | null = null;
     try {
       session = await deps.verifySession(req);
     } catch (err) {
@@ -236,8 +237,12 @@ export async function readApiHandler(
   }
   // else: explicit allowUnauthenticated (local dev/tests) → serve without a session.
 
+  // Resolve the org this request reads in (the EDGE stub; RBAC swaps it in slice 4). Every
+  // store call below is scoped to it, so the read API can only ever serve this tenant's rows.
+  const orgId = resolveOrg(session);
+
   try {
-    await dispatch(matched, url, res, deps);
+    await dispatch(matched, url, res, deps, orgId);
   } catch (err) {
     deps.logger?.error('read-api: handler failed', { path, err: String(err) });
     sendJson(res, 500, { error: 'internal error' });
@@ -269,13 +274,14 @@ async function dispatch(
   route: Route,
   url: URL,
   res: ServerResponse,
-  deps: ReadApiDeps
+  deps: ReadApiDeps,
+  orgId: string
 ): Promise<void> {
   switch (route.kind) {
     case 'agents': {
       const [agents, tasks] = await Promise.all([
         deps.identity.listAgentsWithProfiles(),
-        deps.store.listTasks({ limit: 200 }),
+        deps.store.listTasks(orgId, { limit: 200 }),
       ]);
       const current = claimedTaskMap(tasks);
       sendJson(res, 200, agents.map((a) => agentJson(a, current)));
@@ -289,7 +295,7 @@ async function dispatch(
       }
       const [bindings, tasks] = await Promise.all([
         deps.identity.listBindings(route.id),
-        deps.store.listTasks({ limit: 200 }),
+        deps.store.listTasks(orgId, { limit: 200 }),
       ]);
       const current = claimedTaskMap(tasks);
       const recentTasks = tasks.filter((t) => t.claimedBy === route.id).slice(0, 10);
@@ -310,7 +316,7 @@ async function dispatch(
       const statusParam = url.searchParams.get('status') ?? undefined;
       const limitParam = url.searchParams.get('limit');
       const limit = limitParam ? Number(limitParam) : undefined;
-      const tasks = await deps.store.listTasks({
+      const tasks = await deps.store.listTasks(orgId, {
         ...(statusParam ? { status: statusParam as TaskSummary['status'] } : {}),
         ...(limit !== undefined ? { limit } : {}),
       });
@@ -318,14 +324,14 @@ async function dispatch(
       return;
     }
     case 'task': {
-      const task = await deps.store.getTask(route.id);
+      const task = await deps.store.getTask(orgId, route.id);
       if (!task) {
         sendJson(res, 404, { error: 'task not found' });
         return;
       }
       const [decision, prs] = await Promise.all([
-        deps.store.getRoutingDecisionForTask(route.id),
-        deps.store.listPullRequestsForTask(route.id),
+        deps.store.getRoutingDecisionForTask(orgId, route.id),
+        deps.store.listPullRequestsForTask(orgId, route.id),
       ]);
       sendJson(res, 200, {
         id: task.id,
@@ -345,12 +351,12 @@ async function dispatch(
     case 'routing-decisions': {
       const limitParam = url.searchParams.get('limit');
       const limit = limitParam ? Number(limitParam) : undefined;
-      const decisions = await deps.store.listRoutingDecisions(limit);
+      const decisions = await deps.store.listRoutingDecisions(orgId, limit);
       sendJson(res, 200, decisions.map(routingDecisionJson));
       return;
     }
     case 'connections': {
-      const connections = await deps.store.listConnections();
+      const connections = await deps.store.listConnections(orgId);
       sendJson(res, 200, connectionsJson(connections));
       return;
     }

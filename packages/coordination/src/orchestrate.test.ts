@@ -36,7 +36,15 @@ class FakeStore implements CoordinationStore {
   pullRequests: Array<{ taskId: string; url: string }> = [];
   events = new Map<string, 'received' | 'processed'>();
 
-  async recordWebhookEvent(input: { platform: string; externalEventId: string }) {
+  // Cross-org resolvers (single-org fake): no connection → null (orchestrate then uses the
+  // default org); getOrgForTask returns the default org for a known task, else null.
+  async getOrgForConnection(_platform: Task['platform'], _workspaceId: string) {
+    return null;
+  }
+  async getOrgForTask(taskId: string) {
+    return this.tasks.has(taskId) ? 'org_default' : null;
+  }
+  async recordWebhookEvent(_orgId: string, input: { platform: string; externalEventId: string }) {
     const key = `${input.platform}:${input.externalEventId}`;
     const existing = this.events.get(key);
     if (existing === undefined) {
@@ -45,10 +53,10 @@ class FakeStore implements CoordinationStore {
     }
     return { fresh: false, alreadyProcessed: existing === 'processed' };
   }
-  async markWebhookProcessed(input: { platform: string; externalEventId: string }) {
+  async markWebhookProcessed(_orgId: string, input: { platform: string; externalEventId: string }) {
     this.events.set(`${input.platform}:${input.externalEventId}`, 'processed');
   }
-  async getOrCreateTask(input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }) {
+  async getOrCreateTask(_orgId: string, input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }) {
     // Get-or-create keyed by (platform, externalStoryId), mirroring the PG unique.
     for (const t of this.tasks.values()) {
       if (t.platform === input.platform && t.externalStoryId === input.externalStoryId) return t;
@@ -68,19 +76,19 @@ class FakeStore implements CoordinationStore {
     this.tasks.set(task.id, task);
     return task;
   }
-  async getTask(taskId: string) {
+  async getTask(_orgId: string, taskId: string) {
     return this.tasks.get(taskId) ?? null;
   }
-  async setTierEstimate(taskId: string, estimate: TierEstimate) {
+  async setTierEstimate(_orgId: string, taskId: string, estimate: TierEstimate) {
     const t = this.tasks.get(taskId)!;
     t.tierEstimate = estimate;
   }
-  async setStatus(taskId: string, status: TaskStatus) {
+  async setStatus(_orgId: string, taskId: string, status: TaskStatus) {
     const t = this.tasks.get(taskId)!;
     t.status = status;
     t.version += 1;
   }
-  async recordFailureAndTransition(taskId: string, breakerThreshold: number) {
+  async recordFailureAndTransition(_orgId: string, taskId: string, breakerThreshold: number) {
     // Mirror the atomic SQL: increment, then trip-or-reset by threshold.
     const t = this.tasks.get(taskId)!;
     t.failureCount += 1;
@@ -94,16 +102,16 @@ class FakeStore implements CoordinationStore {
     t.version += 1;
     return { failureCount: t.failureCount, tripped };
   }
-  async recordRunnerFailure(taskId: string, breakerThreshold: number) {
+  async recordRunnerFailure(orgId: string, taskId: string, breakerThreshold: number) {
     const t = this.tasks.get(taskId)!;
     if (t.status !== 'executing' && t.status !== 'claimed') {
       return { acted: false, failureCount: t.failureCount, tripped: false };
     }
-    const r = await this.recordFailureAndTransition(taskId, breakerThreshold);
+    const r = await this.recordFailureAndTransition(orgId, taskId, breakerThreshold);
     return { acted: true, ...r };
   }
   noCapacityCalls: Array<{ taskId: string; reason: string }> = [];
-  async failNoCapacity(taskId: string, reason: string): Promise<boolean> {
+  async failNoCapacity(_orgId: string, taskId: string, reason: string): Promise<boolean> {
     this.noCapacityCalls.push({ taskId, reason });
     const t = this.tasks.get(taskId)!;
     if (t.status !== 'executing' && t.status !== 'claimed') return false;
@@ -116,11 +124,11 @@ class FakeStore implements CoordinationStore {
   async getInstallationIdForOwner() {
     return null;
   }
-  async recordRoutingDecision(input: { taskId: string; winnerAgentId: string | null }) {
+  async recordRoutingDecision(_orgId: string, input: { taskId: string; winnerAgentId: string | null }) {
     this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
   }
   failRecordOnce = false;
-  async recordPullRequest(input: { taskId: string; url: string }) {
+  async recordPullRequest(_orgId: string, input: { taskId: string; url: string }) {
     if (this.failRecordOnce) {
       this.failRecordOnce = false;
       throw new Error('pull_request INSERT failed (connection dropped)');
@@ -144,7 +152,7 @@ class FakeStore implements CoordinationStore {
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }
   async listRoutingDecisions() { return []; }
-  async listPullRequestsForTask(taskId: string) {
+  async listPullRequestsForTask(_orgId: string, taskId: string) {
     return this.pullRequests
       .filter((p) => p.taskId === taskId)
       .map((p) => ({ url: p.url, state: 'open' as const, createdAt: '2026-01-01T00:00:00Z' }));
@@ -577,12 +585,12 @@ describe('orchestrateTaskAssigned — duplicate-PR guard (#198)', () => {
     // Simulate a re-drive: the task is routable again (a prior attempt was reset
     // for retry) but it ALREADY has a recorded PR from that prior attempt.
     const store = new FakeStore();
-    const seeded = await store.getOrCreateTask({
+    const seeded = await store.getOrCreateTask('org_default', {
       externalStoryId: EVENT.externalStoryId,
       platform: 'shortcut',
       repoRef: '/repos/demo',
     });
-    await store.recordPullRequest({ taskId: seeded.id, url: 'https://github.com/icemint/tasca/pull/7' });
+    await store.recordPullRequest('org_default', { taskId: seeded.id, url: 'https://github.com/icemint/tasca/pull/7' });
 
     const execution = new FakeExecution();
     const status = new FakeStatus();

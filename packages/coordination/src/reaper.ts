@@ -76,7 +76,7 @@ export function makeReaper(deps: ReaperDeps): Reaper {
 
   const finalizeDeps = { store: deps.store, status: deps.status, audit: deps.audit, ...(deps.logger ? { logger: deps.logger } : {}) };
 
-  async function finalizeDone(job: FinishedJob): Promise<void> {
+  async function finalizeDone(job: FinishedJob, orgId: string): Promise<void> {
     const payload = job.payload as Partial<DispatchPayload>;
     const prUrl = typeof job.result?.['prUrl'] === 'string' ? (job.result['prUrl'] as string) : null;
     if (!prUrl) {
@@ -84,7 +84,7 @@ export function makeReaper(deps: ReaperDeps): Reaper {
       // Don't silently reap into a task stranded at `executing` — drive the breaker so
       // it re-routes (below threshold) or escalates to needs_attention (a human looks).
       deps.logger?.error('reaper: done job has no PR url; driving the failure path instead', { jobId: job.id, taskId: job.taskId });
-      await finalizeFailed(job);
+      await finalizeFailed(job, orgId);
       return;
     }
     const event = finalizeEvent(payload);
@@ -92,23 +92,23 @@ export function makeReaper(deps: ReaperDeps): Reaper {
     // Idempotency: if a PR is already recorded for this task (a prior tick finalized,
     // or the in-process path did), DON'T record a second one, and SUPPRESS the customer
     // status-post (firstFinalize=false) — only reconcile the task status.
-    const existing = await deps.store.listPullRequestsForTask(job.taskId);
+    const existing = await deps.store.listPullRequestsForTask(orgId, job.taskId);
     const firstFinalize = existing.length === 0;
     if (firstFinalize) {
-      await deps.store.recordPullRequest({ taskId: job.taskId, url: prUrl });
+      await deps.store.recordPullRequest(orgId, { taskId: job.taskId, url: prUrl });
     }
     const principalId = await deps.principalIdFor(agentId);
-    await finalizeDispatch(finalizeDeps, job.taskId, event, agentId, principalId, prUrl, firstFinalize);
+    await finalizeDispatch(finalizeDeps, orgId, job.taskId, event, agentId, principalId, prUrl, firstFinalize);
   }
 
-  async function finalizeFailed(job: FinishedJob): Promise<void> {
+  async function finalizeFailed(job: FinishedJob, orgId: string): Promise<void> {
     const payload = job.payload as Partial<DispatchPayload>;
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : '(runner)';
     // Drive the breaker — but IDEMPOTENTLY: recordRunnerFailure only acts while the task
     // is still in a live post-claim state, so a re-leased job (crash / failed markReaped)
     // can't double-count the breaker (→ premature needs_attention). acted=false = already
     // finalized; skip the audit so it isn't duplicated either.
-    const { acted, failureCount, tripped } = await deps.store.recordRunnerFailure(job.taskId, breakerThreshold);
+    const { acted, failureCount, tripped } = await deps.store.recordRunnerFailure(orgId, job.taskId, breakerThreshold);
     if (!acted) {
       deps.logger?.info?.('reaper: failed job already finalized (idempotent no-op)', { jobId: job.id, taskId: job.taskId });
       return;
@@ -150,19 +150,28 @@ export function makeReaper(deps: ReaperDeps): Reaper {
     const finished = await deps.queue.claimFinished(batchSize, reapLeaseSeconds);
     for (const job of finished) {
       try {
-        if (job.status === 'done') {
-          await finalizeDone(job);
-          result.finalizedDone += 1;
-        } else if (job.status === 'cancelled') {
+        if (job.status === 'cancelled') {
           // Operator interrupt: the runner already aborted + revoked its token, and the
           // CANCELLER (the write-API) owns the task's post-cancel state. The reaper just
           // reaps the job — it must NOT re-transition the task (that would fight the
-          // operator's chosen target state).
+          // operator's chosen target state). No org resolution needed (no task write).
           deps.logger?.info?.('reaper: reaped a cancelled job (task state owned by the canceller)', { jobId: job.id, taskId: job.taskId });
           result.cancelled += 1;
         } else {
-          await finalizeFailed(job);
-          result.finalizedFailed += 1;
+          // CROSS-ORG worker path: the reaper holds only a taskId, so it resolves the task's
+          // org to scope its finalize writes (the ONLY unscoped tenant read on this path).
+          // A vanished task (org null) has nothing to finalize and no org to invent — just
+          // reap the terminal job below so it doesn't re-lease forever.
+          const orgId = await deps.store.getOrgForTask(job.taskId);
+          if (orgId === null) {
+            deps.logger?.info?.('reaper: terminal job whose task is gone; reaping without finalize', { jobId: job.id, taskId: job.taskId, status: job.status });
+          } else if (job.status === 'done') {
+            await finalizeDone(job, orgId);
+            result.finalizedDone += 1;
+          } else {
+            await finalizeFailed(job, orgId);
+            result.finalizedFailed += 1;
+          }
         }
         await deps.queue.markReaped(job.id);
       } catch (err) {

@@ -131,17 +131,23 @@ export interface CoordinationStore {
    * returns `{fresh:false, alreadyProcessed:false}` so a crashed prior attempt is
    * re-driven on redelivery.
    */
-  recordWebhookEvent(input: {
-    platform: 'shortcut' | 'github' | 'linear';
-    externalEventId: string;
-    payload?: unknown;
-  }): Promise<RecordWebhookResult>;
+  recordWebhookEvent(
+    orgId: string,
+    input: {
+      platform: 'shortcut' | 'github' | 'linear';
+      externalEventId: string;
+      payload?: unknown;
+    }
+  ): Promise<RecordWebhookResult>;
 
   /** Flip a ledger row to `processed` once orchestration has durably completed. */
-  markWebhookProcessed(input: {
-    platform: 'shortcut' | 'github' | 'linear';
-    externalEventId: string;
-  }): Promise<void>;
+  markWebhookProcessed(
+    orgId: string,
+    input: {
+      platform: 'shortcut' | 'github' | 'linear';
+      externalEventId: string;
+    }
+  ): Promise<void>;
 
   /**
    * Get-or-create the task for a source story. A task is identified by
@@ -150,15 +156,15 @@ export interface CoordinationStore {
    * row as-is (whatever its current status, version, failure_count). This is what
    * lets a re-assigned story re-drive the same task and accumulate failures.
    */
-  getOrCreateTask(input: CreateTaskInput): Promise<Task>;
+  getOrCreateTask(orgId: string, input: CreateTaskInput): Promise<Task>;
 
-  getTask(taskId: string): Promise<Task | null>;
+  getTask(orgId: string, taskId: string): Promise<Task | null>;
 
   /** Persist the inspectable tier estimate onto the task. */
-  setTierEstimate(taskId: string, estimate: TierEstimate): Promise<void>;
+  setTierEstimate(orgId: string, taskId: string, estimate: TierEstimate): Promise<void>;
 
   /** Move a task to a new status, incrementing its version. */
-  setStatus(taskId: string, status: TaskStatus): Promise<void>;
+  setStatus(orgId: string, taskId: string, status: TaskStatus): Promise<void>;
 
   /**
    * Record one failed attempt and transition the task in a SINGLE atomic UPDATE
@@ -171,6 +177,7 @@ export interface CoordinationStore {
    * reset). Returns the new failure_count and whether the breaker tripped.
    */
   recordFailureAndTransition(
+    orgId: string,
     taskId: string,
     breakerThreshold: number
   ): Promise<{ failureCount: number; tripped: boolean }>;
@@ -187,6 +194,7 @@ export interface CoordinationStore {
    * PRE-claim failures, where the task is still `routable`.)
    */
   recordRunnerFailure(
+    orgId: string,
     taskId: string,
     breakerThreshold: number
   ): Promise<{ acted: boolean; failureCount: number; tripped: boolean }>;
@@ -200,18 +208,21 @@ export interface CoordinationStore {
    * (`executing`/`claimed`) so it can't fight a concurrent operator cancel/reassign that
    * already moved the task. Returns true if it acted.
    */
-  failNoCapacity(taskId: string, reason: string): Promise<boolean>;
+  failNoCapacity(orgId: string, taskId: string, reason: string): Promise<boolean>;
 
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
-  recordRoutingDecision(input: {
-    taskId: string;
-    tierEstimate: TierEstimate;
-    candidates: CapabilityMatch[];
-    winnerAgentId: string | null;
-  }): Promise<void>;
+  recordRoutingDecision(
+    orgId: string,
+    input: {
+      taskId: string;
+      tierEstimate: TierEstimate;
+      candidates: CapabilityMatch[];
+      winnerAgentId: string | null;
+    }
+  ): Promise<void>;
 
   /** Persist the PR a run opened and link it to the task. */
-  recordPullRequest(input: { taskId: string; url: string }): Promise<void>;
+  recordPullRequest(orgId: string, input: { taskId: string; url: string }): Promise<void>;
 
   // ── Human write-API: PM/operator task interventions ──────────────────────────
   // These are deliberate ADMIN overrides invoked from the app (session-gated), so
@@ -225,11 +236,11 @@ export interface CoordinationStore {
    *  status OTHER than `needs_attention`; a `conflict` when already `needs_attention`
    *  (avoids a spurious version bump that would needlessly fail an in-flight CAS) or
    *  `done` (terminal). */
-  escalateTask(taskId: string): Promise<TaskWriteOutcome>;
+  escalateTask(orgId: string, taskId: string): Promise<TaskWriteOutcome>;
 
   /** Manually override the routing tier (sets `tier_estimate.tier`, preserving any
    *  other estimate fields). Rejected (`conflict`) once the task is `done`. */
-  overrideTierEstimate(taskId: string, tier: Tier): Promise<TaskWriteOutcome>;
+  overrideTierEstimate(orgId: string, taskId: string, tier: Tier): Promise<TaskWriteOutcome>;
 
   /** Release a task's claim so it re-routes from a clean slate (status → `routable`,
    *  `claimed_by` cleared, `failure_count` reset). Works from the non-executing reassignable
@@ -238,48 +249,82 @@ export interface CoordinationStore {
    *  atomically with the task transition, then re-routed. `too_late` if the runner had
    *  already committed to finishing; `no_inflight` if it is running in-process (no job to
    *  cancel); `conflict` if `done`/`in_review`; `not_found` if absent. */
-  reassignTask(taskId: string): Promise<TaskWriteOutcome>;
+  reassignTask(orgId: string, taskId: string): Promise<TaskWriteOutcome>;
 
   /** Interrupt a LIVE run and flag the task for a human (status → `needs_attention`).
    *  Cancels the executing task's runner job (the #244 seam) atomically with the task
    *  transition. `too_late` if the runner had already committed to finishing; `no_inflight`
    *  if it is running in-process; `conflict` if the task isn't executing (nothing live to
    *  interrupt); `not_found` if absent. */
-  interruptTask(taskId: string): Promise<TaskWriteOutcome>;
+  interruptTask(orgId: string, taskId: string): Promise<TaskWriteOutcome>;
 
   // ── GitHub App installation (write-back installation resolution) ──────────────
 
   /**
    * Record (or update) the GitHub App installation for a workspace. The
    * `workspaceId` is the GitHub account/org login (the `owner` half of an
-   * `owner/repo`); upserts on the platform_connection UNIQUE(platform,workspace_id)
-   * with platform='github'. The install webhook is the source of this mapping.
+   * `owner/repo`); upserts on the org-scoped platform_connection
+   * UNIQUE(org_id, platform, workspace_id) with platform='github'. The install
+   * webhook is the source of this mapping; `orgId` is resolved at the install edge.
    */
-  upsertGitHubInstallation(input: { workspaceId: string; installationId: string }): Promise<void>;
+  upsertGitHubInstallation(
+    orgId: string,
+    input: { workspaceId: string; installationId: string }
+  ): Promise<void>;
 
   /**
    * Resolve the GitHub App installation id for a repo owner (account/org login),
    * or null when no install is recorded for it. The status reporter splits
    * `externalStoryId` ("owner/repo#number") to get the owner.
+   *
+   * CROSS-ORG resolver: an installation is keyed by (platform, workspace_id) across
+   * all tenants, so this deliberately does NOT take an orgId — it is one of the three
+   * unscoped tenant paths (with getOrgForConnection / getOrgForTask). A worker uses it
+   * to mint a repo-scoped token; the org-scoped task writes happen separately.
    */
   getInstallationIdForOwner(owner: string): Promise<string | null>;
+
+  // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────
+  // These DISCOVER which org a request/job belongs to, so they cannot themselves be
+  // org-scoped. Each returns null when nothing matches; the EDGE (orchestrate / reaper /
+  // server) decides what to do with a miss (default-org for an unconnected workspace at
+  // the webhook edge; skip for a vanished task in the reaper). They never default here.
+
+  /**
+   * The org that owns a platform connection (webhook → org). Looks up the
+   * platform_connection by (platform, workspace_id) and returns its org_id, or null
+   * when no connection is recorded for that workspace. The webhook edge maps a null to
+   * the default org (an unconnected workspace is single-org until onboarding, slice 5).
+   */
+  getOrgForConnection(
+    platform: 'shortcut' | 'github' | 'linear',
+    workspaceId: string
+  ): Promise<string | null>;
+
+  /**
+   * The org that owns a task (worker → org). The reaper finalizes runner jobs out of
+   * band and has only a taskId; this resolves the task's org_id so the finalize writes
+   * are scoped. Returns null when the task no longer exists (the reaper then just reaps
+   * the job — there is nothing to finalize and no org to invent).
+   */
+  getOrgForTask(taskId: string): Promise<string | null>;
 
   // ── Read-side (the read-only API serves these; query-only, no writes) ───────
 
   /** List task summaries, newest first; optionally filtered by status, capped by limit. */
-  listTasks(filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]>;
+  listTasks(orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]>;
 
   /** The most recent routing decision for a task, or null if none recorded yet. */
-  getRoutingDecisionForTask(taskId: string): Promise<RoutingDecisionRecord | null>;
+  getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null>;
 
-  /** Recent routing decisions across all tasks, newest first. */
-  listRoutingDecisions(limit?: number): Promise<RoutingDecisionRecord[]>;
+  /** Recent routing decisions across all tasks (in this org), newest first. */
+  listRoutingDecisions(orgId: string, limit?: number): Promise<RoutingDecisionRecord[]>;
 
   /** Pull requests linked to a task, newest first. */
-  listPullRequestsForTask(taskId: string): Promise<PullRequestRecord[]>;
+  listPullRequestsForTask(orgId: string, taskId: string): Promise<PullRequestRecord[]>;
 
   /** Per-platform connection summaries with 24h webhook delivery counters. */
-  listConnections(): Promise<ConnectionSummary[]>;
+  listConnections(orgId: string): Promise<ConnectionSummary[]>;
 }
 
 interface TaskRow {
@@ -318,86 +363,97 @@ function mapTask(row: TaskRow): Task {
 export class PgCoordinationStore implements CoordinationStore {
   constructor(private readonly db: Queryable) {}
 
-  async recordWebhookEvent(input: {
-    platform: 'shortcut' | 'github' | 'linear';
-    externalEventId: string;
-    payload?: unknown;
-  }): Promise<RecordWebhookResult> {
-    // Insert the ledger row as `received`. ON CONFLICT DO NOTHING means a fresh
-    // delivery returns a row (rowCount 1); a redelivery returns none. For a
-    // redelivery we must distinguish a genuine duplicate (existing row already
-    // `processed`) from a crashed prior attempt (`received`) — so we read the
-    // existing status and re-drive only the latter.
+  async recordWebhookEvent(
+    orgId: string,
+    input: {
+      platform: 'shortcut' | 'github' | 'linear';
+      externalEventId: string;
+      payload?: unknown;
+    }
+  ): Promise<RecordWebhookResult> {
+    // Insert the ledger row as `received`, scoped to org. ON CONFLICT DO NOTHING means a
+    // fresh delivery returns a row (rowCount 1); a redelivery returns none. The conflict
+    // target is the org-prefixed unique (org_id, platform, external_event_id) created by
+    // ORG_CONTRACT_DDL, in lockstep with the column set below. For a redelivery we must
+    // distinguish a genuine duplicate (existing row already `processed`) from a crashed
+    // prior attempt (`received`) — so we read the existing status and re-drive only the
+    // latter, scoped to the same org so it can't read another tenant's ledger.
     const inserted = await this.db.query(
-      `INSERT INTO webhook_event (id, platform, external_event_id, payload, status)
-       VALUES ($1,$2,$3,$4::jsonb,'received')
-       ON CONFLICT (platform, external_event_id) DO NOTHING
+      `INSERT INTO webhook_event (id, org_id, platform, external_event_id, payload, status)
+       VALUES ($1,$2,$3,$4,$5::jsonb,'received')
+       ON CONFLICT (org_id, platform, external_event_id) DO NOTHING
        RETURNING id`,
-      [randomUUID(), input.platform, input.externalEventId, JSON.stringify(input.payload ?? {})]
+      [randomUUID(), orgId, input.platform, input.externalEventId, JSON.stringify(input.payload ?? {})]
     );
     if (inserted.rowCount === 1) {
       return { fresh: true, alreadyProcessed: false };
     }
     const existing = await this.db.query<{ status: string }>(
-      `SELECT status FROM webhook_event WHERE platform = $1 AND external_event_id = $2`,
-      [input.platform, input.externalEventId]
+      `SELECT status FROM webhook_event WHERE org_id = $1 AND platform = $2 AND external_event_id = $3`,
+      [orgId, input.platform, input.externalEventId]
     );
     return { fresh: false, alreadyProcessed: existing.rows[0]?.status === 'processed' };
   }
 
-  async markWebhookProcessed(input: {
-    platform: 'shortcut' | 'github' | 'linear';
-    externalEventId: string;
-  }): Promise<void> {
+  async markWebhookProcessed(
+    orgId: string,
+    input: {
+      platform: 'shortcut' | 'github' | 'linear';
+      externalEventId: string;
+    }
+  ): Promise<void> {
     await this.db.query(
       `UPDATE webhook_event SET status = 'processed', processed_at = now()
-        WHERE platform = $1 AND external_event_id = $2`,
-      [input.platform, input.externalEventId]
+        WHERE org_id = $1 AND platform = $2 AND external_event_id = $3`,
+      [orgId, input.platform, input.externalEventId]
     );
   }
 
-  async getOrCreateTask(input: CreateTaskInput): Promise<Task> {
-    // Get-or-create on (platform, external_story_id). The no-op DO UPDATE makes
+  async getOrCreateTask(orgId: string, input: CreateTaskInput): Promise<Task> {
+    // Get-or-create on (org_id, platform, external_story_id). The no-op DO UPDATE makes
     // RETURNING fire on conflict too, so we always get the live row back — a new
     // one on first delivery, the existing one (with its accumulated version /
-    // failure_count / status) on re-delivery.
+    // failure_count / status) on re-delivery. The conflict target is the org-prefixed
+    // unique created by ORG_CONTRACT_DDL, in lockstep with org_id in the column set.
     const res = await this.db.query<TaskRow>(
-      `INSERT INTO task (id, external_story_id, platform, status, version, failure_count, repo_ref)
-       VALUES ($1,$2,$3,'routable',0,0,$4)
-       ON CONFLICT (platform, external_story_id)
+      `INSERT INTO task (id, org_id, external_story_id, platform, status, version, failure_count, repo_ref)
+       VALUES ($1,$2,$3,$4,'routable',0,0,$5)
+       ON CONFLICT (org_id, platform, external_story_id)
          DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
        RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate`,
-      [randomUUID(), input.externalStoryId, input.platform, input.repoRef ?? null]
+      [randomUUID(), orgId, input.externalStoryId, input.platform, input.repoRef ?? null]
     );
     return mapTask(res.rows[0]!);
   }
 
-  async getTask(taskId: string): Promise<Task | null> {
+  async getTask(orgId: string, taskId: string): Promise<Task | null> {
     const res = await this.db.query<TaskRow>(
       `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error
-         FROM task WHERE id = $1`,
-      [taskId]
+         FROM task WHERE org_id = $1 AND id = $2`,
+      [orgId, taskId]
     );
     const row = res.rows[0];
     return row ? mapTask(row) : null;
   }
 
-  async setTierEstimate(taskId: string, estimate: TierEstimate): Promise<void> {
+  async setTierEstimate(orgId: string, taskId: string, estimate: TierEstimate): Promise<void> {
     await this.db.query(
-      `UPDATE task SET tier_estimate = $2::jsonb, updated_at = now() WHERE id = $1`,
-      [taskId, JSON.stringify(estimate)]
+      `UPDATE task SET tier_estimate = $3::jsonb, updated_at = now() WHERE org_id = $1 AND id = $2`,
+      [orgId, taskId, JSON.stringify(estimate)]
     );
   }
 
   /** Map a guarded UPDATE that RETURNs the new status to a TaskWriteOutcome: a row
    *  returned → ok; else a PK probe distinguishes `not_found` from `conflict`
-   *  (exists but its status failed the guard). */
+   *  (exists but its status failed the guard). The probe is org-scoped, so a task in
+   *  ANOTHER org reads as `not_found` — never `conflict` (which would leak its existence). */
   private async taskWrite(
     sql: string,
     params: unknown[],
+    orgId: string,
     taskId: string
   ): Promise<TaskWriteOutcome> {
-    return this.taskWriteOn(this.db, sql, params, taskId);
+    return this.taskWriteOn(this.db, sql, params, orgId, taskId);
   }
 
   /** taskWrite against a specific Queryable (the tx client for the cancel-coupled path). */
@@ -405,11 +461,12 @@ export class PgCoordinationStore implements CoordinationStore {
     db: Queryable,
     sql: string,
     params: unknown[],
+    orgId: string,
     taskId: string
   ): Promise<TaskWriteOutcome> {
     const res = await db.query<{ status: string }>(sql, params);
     if (res.rowCount && res.rows[0]) return { ok: true, status: res.rows[0].status as TaskStatus };
-    const exists = await db.query(`SELECT 1 FROM task WHERE id = $1`, [taskId]);
+    const exists = await db.query(`SELECT 1 FROM task WHERE org_id = $1 AND id = $2`, [orgId, taskId]);
     return { ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' };
   }
 
@@ -442,11 +499,19 @@ export class PgCoordinationStore implements CoordinationStore {
    * executing (reassign re-routes it; interrupt rejects it).
    */
   private async cancelCoupledWrite(
+    orgId: string,
     taskId: string,
     target: 'routable' | 'needs_attention',
     nonExecuting: (db: Queryable) => Promise<TaskWriteOutcome>
   ): Promise<TaskWriteOutcome> {
     return this.withTaskTx(async (db) => {
+      // ORG-OWNERSHIP GATE — first, inside the tx, BEFORE requestCancelForTask. A task in
+      // another org (or absent) is `not_found`, and a cross-org request must NOT cancel its
+      // runner job as a side effect. dispatch_job carries no org filter yet (slice 3c), so
+      // gating on the task's org here is what keeps the job cancel from crossing tenants.
+      const owned = await db.query(`SELECT 1 FROM task WHERE org_id = $1 AND id = $2`, [orgId, taskId]);
+      if (!owned.rowCount) return { ok: false, reason: 'not_found' };
+
       const cancel = await new PgDispatchQueue(db).requestCancelForTask(taskId);
       if (cancel === 'too_late') return { ok: false, reason: 'too_late' };
       if (cancel === 'removed' || cancel === 'signalled') {
@@ -457,17 +522,21 @@ export class PgCoordinationStore implements CoordinationStore {
         return this.taskWriteOn(
           db,
           `UPDATE task
-              SET status = $2, claimed_by = NULL, failure_count = 0,
+              SET status = $3, claimed_by = NULL, failure_count = 0,
                   version = version + 1, updated_at = now()
-            WHERE id = $1 AND status = 'executing'
+            WHERE org_id = $1 AND id = $2 AND status = 'executing'
            RETURNING status`,
-          [taskId, target],
+          [orgId, taskId, target],
+          orgId,
           taskId
         );
       }
       // cancel === 'no_job': no runner job. An executing/in_review task is running in-process
       // (this seam can't interrupt it) → no_inflight; otherwise defer to the non-executing path.
-      const cur = await db.query<{ status: string }>(`SELECT status FROM task WHERE id = $1`, [taskId]);
+      const cur = await db.query<{ status: string }>(
+        `SELECT status FROM task WHERE org_id = $1 AND id = $2`,
+        [orgId, taskId]
+      );
       if (!cur.rowCount) return { ok: false, reason: 'not_found' };
       const status = cur.rows[0]!.status;
       if (status === 'executing' || status === 'in_review') return { ok: false, reason: 'no_inflight' };
@@ -475,19 +544,20 @@ export class PgCoordinationStore implements CoordinationStore {
     });
   }
 
-  async escalateTask(taskId: string): Promise<TaskWriteOutcome> {
+  async escalateTask(orgId: string, taskId: string): Promise<TaskWriteOutcome> {
     // Admin override: force needs_attention from any non-terminal status.
     return this.taskWrite(
       `UPDATE task
           SET status = 'needs_attention', version = version + 1, updated_at = now()
-        WHERE id = $1 AND status <> 'done' AND status <> 'needs_attention'
+        WHERE org_id = $1 AND id = $2 AND status <> 'done' AND status <> 'needs_attention'
        RETURNING status`,
-      [taskId],
+      [orgId, taskId],
+      orgId,
       taskId
     );
   }
 
-  async overrideTierEstimate(taskId: string, tier: Tier): Promise<TaskWriteOutcome> {
+  async overrideTierEstimate(orgId: string, taskId: string, tier: Tier): Promise<TaskWriteOutcome> {
     // Set only tier_estimate.tier, preserving any existing estimate fields (or
     // seeding a minimal manual estimate when none was recorded). The read path
     // projects only `.tier`, so a manual estimate needs no classifier signals.
@@ -495,42 +565,44 @@ export class PgCoordinationStore implements CoordinationStore {
       `UPDATE task
           SET tier_estimate = jsonb_set(
                 COALESCE(tier_estimate, '{"confidence":1,"signals":{},"classifierUsed":false}'::jsonb),
-                '{tier}', to_jsonb($2::text)),
+                '{tier}', to_jsonb($3::text)),
               version = version + 1, updated_at = now()
-        WHERE id = $1 AND status <> 'done'
+        WHERE org_id = $1 AND id = $2 AND status <> 'done'
        RETURNING status`,
-      [taskId, tier],
+      [orgId, taskId, tier],
+      orgId,
       taskId
     );
   }
 
-  async reassignTask(taskId: string): Promise<TaskWriteOutcome> {
+  async reassignTask(orgId: string, taskId: string): Promise<TaskWriteOutcome> {
     // Cancel any live run, then release the claim → re-route from a clean slate. For an
     // executing task the #244 cancel seam runs first (atomically with the transition); for
     // the non-executing reassignable states it is a plain guarded CAS.
-    return this.cancelCoupledWrite(taskId, 'routable', (db) =>
+    return this.cancelCoupledWrite(orgId, taskId, 'routable', (db) =>
       this.taskWriteOn(
         db,
         `UPDATE task
             SET status = 'routable', claimed_by = NULL, failure_count = 0,
                 version = version + 1, updated_at = now()
-          WHERE id = $1 AND status IN ('routable','claimed','needs_attention','failed')
+          WHERE org_id = $1 AND id = $2 AND status IN ('routable','claimed','needs_attention','failed')
          RETURNING status`,
-        [taskId],
+        [orgId, taskId],
+        orgId,
         taskId
       )
     );
   }
 
-  async interruptTask(taskId: string): Promise<TaskWriteOutcome> {
+  async interruptTask(orgId: string, taskId: string): Promise<TaskWriteOutcome> {
     // Halt a live run and flag for a human (→ needs_attention). Only meaningful while
     // executing; a non-executing task has nothing live to interrupt → conflict.
-    return this.cancelCoupledWrite(taskId, 'needs_attention', () =>
+    return this.cancelCoupledWrite(orgId, taskId, 'needs_attention', () =>
       Promise.resolve({ ok: false, reason: 'conflict' })
     );
   }
 
-  async setStatus(taskId: string, status: TaskStatus): Promise<void> {
+  async setStatus(orgId: string, taskId: string, status: TaskStatus): Promise<void> {
     // Enforce the domain transition rules at the write boundary: the row only moves
     // to `status` when its current status legally precedes it (TASK_TRANSITIONS),
     // checked IN the UPDATE so there's no read-then-write race. No identity special
@@ -539,19 +611,19 @@ export class PgCoordinationStore implements CoordinationStore {
     // already carries; terminal `done` therefore cannot be re-written.
     const allowedFrom = VALID_PREDECESSORS[status];
     const res = await this.db.query(
-      `UPDATE task SET status = $2, version = version + 1, updated_at = now()
-         WHERE id = $1 AND status = ANY($3::text[])`,
-      [taskId, status, allowedFrom]
+      `UPDATE task SET status = $3, version = version + 1, updated_at = now()
+         WHERE org_id = $1 AND id = $2 AND status = ANY($4::text[])`,
+      [orgId, taskId, status, allowedFrom]
     );
     if (res.rowCount === 0) {
-      // Nothing moved: the task is gone, or its current status doesn't legally
-      // precede `status`. Read it back for a precise error. (The read is a separate
-      // snapshot — a concurrent writer could have changed the row between the UPDATE
-      // and here; we don't try to distinguish that, since the on-disk state is
+      // Nothing moved: the task is gone (or in another org), or its current status doesn't
+      // legally precede `status`. Read it back (org-scoped) for a precise error. (The read
+      // is a separate snapshot — a concurrent writer could have changed the row between the
+      // UPDATE and here; we don't try to distinguish that, since the on-disk state is
       // correct either way and the message reports the status we observed.)
       const cur = await this.db.query<{ status: TaskStatus }>(
-        `SELECT status FROM task WHERE id = $1`,
-        [taskId]
+        `SELECT status FROM task WHERE org_id = $1 AND id = $2`,
+        [orgId, taskId]
       );
       if (cur.rowCount === 0) {
         throw new Error(`setStatus: task ${taskId} not found`);
@@ -561,6 +633,7 @@ export class PgCoordinationStore implements CoordinationStore {
   }
 
   async recordFailureAndTransition(
+    orgId: string,
     taskId: string,
     breakerThreshold: number
   ): Promise<{ failureCount: number; tripped: boolean }> {
@@ -573,19 +646,20 @@ export class PgCoordinationStore implements CoordinationStore {
     const res = await this.db.query<{ failure_count: number; status: string }>(
       `UPDATE task
           SET failure_count = failure_count + 1,
-              status     = CASE WHEN failure_count + 1 >= $2 THEN 'needs_attention' ELSE 'routable' END,
-              claimed_by = CASE WHEN failure_count + 1 >= $2 THEN claimed_by ELSE NULL END,
+              status     = CASE WHEN failure_count + 1 >= $3 THEN 'needs_attention' ELSE 'routable' END,
+              claimed_by = CASE WHEN failure_count + 1 >= $3 THEN claimed_by ELSE NULL END,
               version    = version + 1,
               updated_at = now()
-        WHERE id = $1
+        WHERE org_id = $1 AND id = $2
        RETURNING failure_count, status`,
-      [taskId, breakerThreshold]
+      [orgId, taskId, breakerThreshold]
     );
     const row = res.rows[0]!;
     return { failureCount: row.failure_count, tripped: row.status === 'needs_attention' };
   }
 
   async recordRunnerFailure(
+    orgId: string,
     taskId: string,
     breakerThreshold: number
   ): Promise<{ acted: boolean; failureCount: number; tripped: boolean }> {
@@ -594,43 +668,47 @@ export class PgCoordinationStore implements CoordinationStore {
     const res = await this.db.query<{ failure_count: number; status: string }>(
       `UPDATE task
           SET failure_count = failure_count + 1,
-              status     = CASE WHEN failure_count + 1 >= $2 THEN 'needs_attention' ELSE 'routable' END,
-              claimed_by = CASE WHEN failure_count + 1 >= $2 THEN claimed_by ELSE NULL END,
+              status     = CASE WHEN failure_count + 1 >= $3 THEN 'needs_attention' ELSE 'routable' END,
+              claimed_by = CASE WHEN failure_count + 1 >= $3 THEN claimed_by ELSE NULL END,
               version    = version + 1,
               updated_at = now()
-        WHERE id = $1 AND status IN ('executing','claimed')
+        WHERE org_id = $1 AND id = $2 AND status IN ('executing','claimed')
        RETURNING failure_count, status`,
-      [taskId, breakerThreshold]
+      [orgId, taskId, breakerThreshold]
     );
     if (res.rowCount !== 1) return { acted: false, failureCount: 0, tripped: false };
     const row = res.rows[0]!;
     return { acted: true, failureCount: row.failure_count, tripped: row.status === 'needs_attention' };
   }
 
-  async failNoCapacity(taskId: string, reason: string): Promise<boolean> {
+  async failNoCapacity(orgId: string, taskId: string, reason: string): Promise<boolean> {
     // → needs_attention WITHOUT touching failure_count (infra-unavailability, not an agent
     // failure). Records the reason in last_error. Guarded to a still-dispatched status so a
     // concurrent operator cancel/reassign (which already moved the task) wins and this no-ops.
     const res = await this.db.query(
       `UPDATE task
-          SET status = 'needs_attention', last_error = $2, version = version + 1, updated_at = now()
-        WHERE id = $1 AND status IN ('executing','claimed')`,
-      [taskId, reason]
+          SET status = 'needs_attention', last_error = $3, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status IN ('executing','claimed')`,
+      [orgId, taskId, reason]
     );
     return res.rowCount === 1;
   }
 
-  async recordRoutingDecision(input: {
-    taskId: string;
-    tierEstimate: TierEstimate;
-    candidates: CapabilityMatch[];
-    winnerAgentId: string | null;
-  }): Promise<void> {
+  async recordRoutingDecision(
+    orgId: string,
+    input: {
+      taskId: string;
+      tierEstimate: TierEstimate;
+      candidates: CapabilityMatch[];
+      winnerAgentId: string | null;
+    }
+  ): Promise<void> {
     await this.db.query(
-      `INSERT INTO routing_decision (id, task_id, tier_estimate, candidates, winner_agent_id)
-       VALUES ($1,$2,$3::jsonb,$4::jsonb,$5)`,
+      `INSERT INTO routing_decision (id, org_id, task_id, tier_estimate, candidates, winner_agent_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,
       [
         randomUUID(),
+        orgId,
         input.taskId,
         JSON.stringify(input.tierEstimate),
         JSON.stringify(input.candidates),
@@ -639,35 +717,43 @@ export class PgCoordinationStore implements CoordinationStore {
     );
   }
 
-  async recordPullRequest(input: { taskId: string; url: string }): Promise<void> {
+  async recordPullRequest(orgId: string, input: { taskId: string; url: string }): Promise<void> {
     // Idempotent on (task_id, url): a re-finalize (reaper at-least-once) is a no-op
     // rather than a duplicate PR row — the hard storage-layer guarantee behind the
-    // reaper's read-then-write check.
+    // reaper's read-then-write check. org_id is set on insert (the row is the task's org);
+    // the (task_id, url) unique stays sufficient since task_id is globally unique.
     await this.db.query(
-      `INSERT INTO pull_request (id, task_id, url) VALUES ($1,$2,$3)
+      `INSERT INTO pull_request (id, org_id, task_id, url) VALUES ($1,$2,$3,$4)
        ON CONFLICT (task_id, url) DO NOTHING`,
-      [randomUUID(), input.taskId, input.url]
+      [randomUUID(), orgId, input.taskId, input.url]
     );
   }
 
   // ── GitHub App installation ───────────────────────────────────────────────────
 
-  async upsertGitHubInstallation(input: {
-    workspaceId: string;
-    installationId: string;
-  }): Promise<void> {
-    // Upsert on UNIQUE(platform, workspace_id) with platform='github'. The no-op
-    // for everything but installation_id keeps an existing connection's health.
+  async upsertGitHubInstallation(
+    orgId: string,
+    input: {
+      workspaceId: string;
+      installationId: string;
+    }
+  ): Promise<void> {
+    // Upsert on UNIQUE(org_id, platform, workspace_id) with platform='github' — the
+    // org-prefixed unique created by ORG_CONTRACT_DDL, in lockstep with org_id in the
+    // column set. The no-op for everything but installation_id keeps an existing
+    // connection's health.
     await this.db.query(
-      `INSERT INTO platform_connection (id, platform, workspace_id, installation_id)
-       VALUES ($1,'github',$2,$3)
-       ON CONFLICT (platform, workspace_id) DO UPDATE SET
+      `INSERT INTO platform_connection (id, org_id, platform, workspace_id, installation_id)
+       VALUES ($1,$2,'github',$3,$4)
+       ON CONFLICT (org_id, platform, workspace_id) DO UPDATE SET
          installation_id = EXCLUDED.installation_id`,
-      [randomUUID(), input.workspaceId, input.installationId]
+      [randomUUID(), orgId, input.workspaceId, input.installationId]
     );
   }
 
   async getInstallationIdForOwner(owner: string): Promise<string | null> {
+    // CROSS-ORG (see the interface note): an installation is keyed by (platform,
+    // workspace_id) across all tenants, so this resolves regardless of org.
     const res = await this.db.query<{ installation_id: string | null }>(
       `SELECT installation_id FROM platform_connection
         WHERE platform = 'github' AND workspace_id = $1`,
@@ -676,17 +762,43 @@ export class PgCoordinationStore implements CoordinationStore {
     return res.rows[0]?.installation_id ?? null;
   }
 
+  // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────
+
+  async getOrgForConnection(
+    platform: 'shortcut' | 'github' | 'linear',
+    workspaceId: string
+  ): Promise<string | null> {
+    // Discover the org that owns a workspace's connection (webhook → org). Unscoped by
+    // design: it is resolving WHICH org, so it cannot already be org-scoped. null = no
+    // connection (the webhook edge maps that to the default org).
+    const res = await this.db.query<{ org_id: string }>(
+      `SELECT org_id FROM platform_connection WHERE platform = $1 AND workspace_id = $2`,
+      [platform, workspaceId]
+    );
+    return res.rows[0]?.org_id ?? null;
+  }
+
+  async getOrgForTask(taskId: string): Promise<string | null> {
+    // Discover the org that owns a task (worker → org). Unscoped by design (resolving
+    // WHICH org). null = the task is gone (the reaper then just reaps its job).
+    const res = await this.db.query<{ org_id: string }>(
+      `SELECT org_id FROM task WHERE id = $1`,
+      [taskId]
+    );
+    return res.rows[0]?.org_id ?? null;
+  }
+
   // ── Read-side queries ───────────────────────────────────────────────────────
 
-  async listTasks(filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
-    // Newest-first by created_at; status filter is optional. The limit is clamped
-    // to a sane ceiling so a hostile/oversized ?limit can't ask for the whole table.
+  async listTasks(orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
+    // Newest-first by created_at, scoped to org; status filter is optional. The limit is
+    // clamped to a sane ceiling so a hostile/oversized ?limit can't ask for the whole table.
     const limit = clampLimit(filter?.limit, 50, 200);
-    const params: unknown[] = [];
-    let where = '';
+    const params: unknown[] = [orgId];
+    let where = `WHERE org_id = $1`;
     if (filter?.status) {
       params.push(filter.status);
-      where = `WHERE status = $1`;
+      where += ` AND status = $${params.length}`;
     }
     params.push(limit);
     const res = await this.db.query<TaskRow>(
@@ -697,30 +809,30 @@ export class PgCoordinationStore implements CoordinationStore {
     return res.rows.map(mapTaskSummary);
   }
 
-  async getRoutingDecisionForTask(taskId: string): Promise<RoutingDecisionRecord | null> {
+  async getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null> {
     const res = await this.db.query<RoutingDecisionRow>(
       `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, created_at
-         FROM routing_decision WHERE task_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [taskId]
+         FROM routing_decision WHERE org_id = $1 AND task_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [orgId, taskId]
     );
     const row = res.rows[0];
     return row ? mapRoutingDecision(row) : null;
   }
 
-  async listRoutingDecisions(limit?: number): Promise<RoutingDecisionRecord[]> {
+  async listRoutingDecisions(orgId: string, limit?: number): Promise<RoutingDecisionRecord[]> {
     const capped = clampLimit(limit, 50, 200);
     const res = await this.db.query<RoutingDecisionRow>(
       `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, created_at
-         FROM routing_decision ORDER BY created_at DESC, id DESC LIMIT $1`,
-      [capped]
+         FROM routing_decision WHERE org_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+      [orgId, capped]
     );
     return res.rows.map(mapRoutingDecision);
   }
 
-  async listPullRequestsForTask(taskId: string): Promise<PullRequestRecord[]> {
+  async listPullRequestsForTask(orgId: string, taskId: string): Promise<PullRequestRecord[]> {
     const res = await this.db.query<PullRequestRow>(
-      `SELECT url, state, created_at FROM pull_request WHERE task_id = $1 ORDER BY created_at DESC`,
-      [taskId]
+      `SELECT url, state, created_at FROM pull_request WHERE org_id = $1 AND task_id = $2 ORDER BY created_at DESC`,
+      [orgId, taskId]
     );
     return res.rows.map((r) => ({
       url: r.url,
@@ -729,10 +841,11 @@ export class PgCoordinationStore implements CoordinationStore {
     }));
   }
 
-  async listConnections(): Promise<ConnectionSummary[]> {
-    // One row per configured platform_connection. Webhook counters are derived
-    // from the webhook_event ledger over the last 24h — real counts, not seeded;
-    // a platform with no events shows honest zeros and a null last-received.
+  async listConnections(orgId: string): Promise<ConnectionSummary[]> {
+    // One row per configured platform_connection IN THIS ORG. Webhook counters are derived
+    // from the webhook_event ledger over the last 24h — real counts, not seeded; a platform
+    // with no events shows honest zeros and a null last-received. The ledger subquery is
+    // org-scoped too, so counters reflect only this tenant's deliveries.
     const res = await this.db.query<ConnectionRow>(
       `SELECT
          pc.platform,
@@ -747,9 +860,11 @@ export class PgCoordinationStore implements CoordinationStore {
                 count(*) FILTER (WHERE received_at >= now() - interval '24 hours')                          AS received_24h,
                 count(*) FILTER (WHERE status = 'processed' AND processed_at >= now() - interval '24 hours') AS processed_24h,
                 max(received_at)                                                                             AS last_received_at
-           FROM webhook_event GROUP BY platform
+           FROM webhook_event WHERE org_id = $1 GROUP BY platform
        ) w ON w.platform = pc.platform
-       ORDER BY pc.platform`
+       WHERE pc.org_id = $1
+       ORDER BY pc.platform`,
+      [orgId]
     );
     return res.rows.map((r) => ({
       platform: r.platform as ConnectionSummary['platform'],

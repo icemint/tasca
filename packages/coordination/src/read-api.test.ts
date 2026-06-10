@@ -55,25 +55,25 @@ class FakeStore {
   prs: PullRequestRecord[] = [];
   connections: ConnectionSummary[] = [];
 
-  async listTasks(filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
+  async listTasks(_orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
     let rows = this.tasks.slice();
     if (filter?.status) rows = rows.filter((t) => t.status === filter.status);
     if (filter?.limit !== undefined) rows = rows.slice(0, filter.limit);
     return rows.map(summary);
   }
-  async getTask(id: string): Promise<Task | null> {
+  async getTask(_orgId: string, id: string): Promise<Task | null> {
     return this.tasks.find((t) => t.id === id) ?? null;
   }
-  async getRoutingDecisionForTask(taskId: string): Promise<RoutingDecisionRecord | null> {
+  async getRoutingDecisionForTask(_orgId: string, taskId: string): Promise<RoutingDecisionRecord | null> {
     return this.decisions.find((d) => d.taskId === taskId) ?? null;
   }
-  async listRoutingDecisions(limit?: number): Promise<RoutingDecisionRecord[]> {
+  async listRoutingDecisions(_orgId: string, limit?: number): Promise<RoutingDecisionRecord[]> {
     return limit !== undefined ? this.decisions.slice(0, limit) : this.decisions.slice();
   }
-  async listPullRequestsForTask(taskId: string): Promise<PullRequestRecord[]> {
+  async listPullRequestsForTask(_orgId: string, taskId: string): Promise<PullRequestRecord[]> {
     return taskId ? this.prs.slice() : [];
   }
-  async listConnections(): Promise<ConnectionSummary[]> {
+  async listConnections(_orgId: string): Promise<ConnectionSummary[]> {
     return this.connections.slice();
   }
 }
