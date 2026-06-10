@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-06-10
 - **Deciders:** maintainer
-- **Slices:** 3a (#249), 3b-1 (#250), 3b-2 (#251), 3c (#253) — shipped; slice 4 (RBAC — `resolveOrg` becomes a real membership lookup) — shipping
+- **Slices:** 3a (#249), 3b-1 (#250), 3b-2 (#251), 3c (#253), slice 4 (#254 — RBAC, `resolveOrg` = real membership lookup) — shipped; slice 5 onboarding in progress (5a — `resolveOrg` resolves the validated *active* org from `user_active_org`; auto personal org at login; active-org switcher)
 
 ## Context
 

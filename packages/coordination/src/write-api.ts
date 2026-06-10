@@ -14,7 +14,6 @@
 // Auth posture mirrors the read API: a verifier MUST be wired, else fail closed
 // (503) — never silently accept a mutation without authentication.
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { TIERS, type Tier, type AgentStatus } from '@tasca/domain';
 import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity';
@@ -22,6 +21,7 @@ import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
 import { resolveOrg, type OrgMembershipReader } from './resolve-org';
+import { sendJson, readJsonBody, issueCsrfToken, verifyCsrf } from './http-util';
 
 /** The agent-write surface the write-API needs (a subset of PgIdentityRepository). */
 export interface AgentWriter {
@@ -59,47 +59,6 @@ export interface WriteApiDeps {
   /** Marks the CSRF cookie `Secure` (prod, https). Default true; set false for http dev. */
   secureCookies?: boolean;
   logger?: Logger;
-}
-
-const CSRF_COOKIE = 'tasca_csrf';
-const MAX_BODY_BYTES = 64 * 1024;
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
-}
-
-/** Read a cookie value from the request header (no external dep). */
-function readCookie(req: IncomingMessage, name: string): string | null {
-  const header = req.headers.cookie;
-  if (!header) return null;
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
-  }
-  return null;
-}
-
-/** Constant-time string compare that never throws on length mismatch. */
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-/** Read a small JSON body, capped. Returns {} for an empty body. */
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    total += chunk.length;
-    if (total > MAX_BODY_BYTES) throw new Error('body too large');
-    chunks.push(chunk as Buffer);
-  }
-  if (total === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 type WriteRoute =
@@ -188,12 +147,7 @@ export async function writeApiHandler(
   // GET /api/csrf — issue the double-submit token (cookie + body). Public-but-harmless:
   // the token only authorizes a write WHEN paired with a valid session below.
   if (route.kind === 'csrf') {
-    const token = randomBytes(32).toString('hex');
-    const secure = deps.secureCookies !== false ? '; Secure' : '';
-    // HttpOnly is safe (and hardens against XSS reads): the client echoes the token
-    // from THIS response's JSON body, never by reading the cookie — the browser
-    // sends the cookie automatically and the server compares the two.
-    res.setHeader('set-cookie', `${CSRF_COOKIE}=${token}; Path=/; SameSite=Strict; HttpOnly${secure}`);
+    const token = issueCsrfToken(res, { secure: deps.secureCookies !== false });
     sendJson(res, 200, { token });
     return true;
   }
@@ -227,10 +181,7 @@ export async function writeApiHandler(
   }
 
   // ── CSRF double-submit ──────────────────────────────────────────────────────
-  const cookie = readCookie(req, CSRF_COOKIE);
-  const header = req.headers['x-csrf-token'];
-  const headerToken = Array.isArray(header) ? header[0] : header;
-  if (!cookie || !headerToken || !safeEqual(cookie, headerToken)) {
+  if (!verifyCsrf(req)) {
     sendJson(res, 403, { error: 'missing or invalid CSRF token' });
     return true;
   }

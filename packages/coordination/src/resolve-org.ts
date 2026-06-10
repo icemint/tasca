@@ -25,9 +25,11 @@ export const DEFAULT_ORG_ID = 'org_default';
  * switcher (multi-org-per-user).
  */
 export interface OrgMembershipReader {
-  /** The org the user belongs to (single-org resolution), or null when the user has NO
-   *  membership. RBAC is fail-closed, so a null MUST reject — never default to someone's data. */
-  getOrgForUser(userId: string): Promise<string | null>;
+  /** The user's ACTIVE org (slice 5a) — the validated active selection if it is still a membership,
+   *  else their first membership. null when the user has NO membership at all. RBAC is fail-closed,
+   *  so a null MUST reject — never default to someone's data. The active org is the tenant boundary:
+   *  a user with memberships in A and B, active = A, resolves to A and can only reach A's data. */
+  getActiveOrg(userId: string): Promise<string | null>;
 }
 
 /**
@@ -44,5 +46,5 @@ export async function resolveOrg(
   session: SessionInfo | null
 ): Promise<string | null> {
   if (session === null) return DEFAULT_ORG_ID; // dev/no-auth ONLY (allowUnauthenticated-gated)
-  return membership.getOrgForUser(session.userId); // prod: the user's org, or null → caller 403s
+  return membership.getActiveOrg(session.userId); // prod: the user's ACTIVE org, or null → caller 403s
 }
