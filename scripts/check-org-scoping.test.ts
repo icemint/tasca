@@ -33,6 +33,21 @@ describe('org-scoping guard — it MUST fire on raw tenant SQL outside the scope
     }
   });
 
+  it('catches the BYPASSES an adversary would try (no false negatives)', () => {
+    const nonScoped = 'packages/coordination/src/read-api.ts';
+    // TRUNCATE — a different DDL keyword.
+    expect(scanSourceForTenantSql(`await db.query('TRUNCATE task CASCADE')`, nonScoped).map((v) => v.table)).toContain('task');
+    expect(scanSourceForTenantSql(`await db.query('TRUNCATE TABLE dispatch_job')`, nonScoped).map((v) => v.table)).toContain('dispatch_job');
+    // Keyword and table split across lines (the per-line scan used to miss this).
+    expect(scanSourceForTenantSql('const r = db.query(`SELECT *\n  FROM\n    task WHERE id=$1`)', nonScoped).map((v) => v.table)).toContain('task');
+    // Quoted identifier.
+    expect(scanSourceForTenantSql(`db.query('SELECT * FROM "task" WHERE id=$1')`, nonScoped).map((v) => v.table)).toContain('task');
+    // Schema-qualified.
+    expect(scanSourceForTenantSql(`db.query('UPDATE public.task SET x=1')`, nonScoped).map((v) => v.table)).toContain('task');
+    // CTE / MERGE still caught (from/into present).
+    expect(scanSourceForTenantSql(`WITH x AS (SELECT id FROM webhook_event) SELECT 1`, nonScoped).map((v) => v.table)).toContain('webhook_event');
+  });
+
   it('PASSES the SCOPED LAYER — those files may contain tenant SQL (their methods are org-scoped)', () => {
     for (const f of SCOPED_LAYER) {
       expect(scanSourceForTenantSql(`SELECT * FROM task WHERE org_id = $1 AND id = $2`, f)).toEqual([]);

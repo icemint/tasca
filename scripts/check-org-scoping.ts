@@ -47,14 +47,26 @@ export interface OrgScopingViolation {
   snippet: string;
 }
 
-// SQL that references a tenant table by name after a clause keyword. Case-insensitive;
-// matches FROM/JOIN/INTO/UPDATE/DELETE FROM <table>. Heuristic (source-text, not a parser)
-// — deliberately conservative: the scoped layer is exempt, so a false positive only ever
-// means "move this SQL into the store", never a silent miss.
+// SQL that references a tenant table after a DML/DDL keyword. Case-insensitive; matches
+// FROM/JOIN/INTO/UPDATE/DELETE FROM/TRUNCATE [TABLE] <table>, where <table> may be quoted
+// ("task") and/or schema-qualified (public.task). The `\s+` spans newlines (so a query
+// split as `FROM\n  task` is still caught — the scan is over the whole comment-stripped
+// file, not line-by-line). Heuristic (source-text, not a parser) — deliberately
+// conservative: the scoped layer is exempt, so a false positive only ever means "move this
+// SQL into the store", never a silent miss. The `g` flag is added per-scan.
 const TENANT_SQL_RE = new RegExp(
-  `\\b(?:from|join|into|update|delete\\s+from)\\s+(${TENANT_TABLES.join('|')})\\b`,
+  `\\b(?:from|join|into|update|delete\\s+from|truncate(?:\\s+table)?)\\s+"?(?:\\w+\\.)?"?(${TENANT_TABLES.join('|')})"?\\b`,
   'i'
 );
+
+/** Replace comments with same-length whitespace (newlines preserved, so byte offsets and
+ *  line numbers are unchanged) — so prose like "derived from task labels" or dead SQL in a
+ *  comment never matches, without a fragile per-line comment heuristic. */
+function blankComments(s: string): string {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+}
 
 /** Scan one file's source for tenant-table SQL. Returns [] for the scoped layer + test
  *  files (tests legitimately seed data with raw SQL); violations otherwise. */
@@ -62,16 +74,13 @@ export function scanSourceForTenantSql(content: string, relPath: string): OrgSco
   const norm = relPath.split(path.sep).join('/');
   if (SCOPED_LAYER.has(norm) || norm.endsWith('.test.ts')) return [];
   const violations: OrgScopingViolation[] = [];
-  const lines = content.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    // Skip comment lines — English prose like "derived from task labels" is not SQL, and
-    // SQL inside a comment is dead anyway. (Query lines start with SELECT/FROM/UPDATE/etc.,
-    // never with a comment marker.)
-    const t = line.trimStart();
-    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue;
-    const m = TENANT_SQL_RE.exec(line);
-    if (m) violations.push({ file: norm, line: i + 1, table: m[1]!.toLowerCase(), snippet: line.trim() });
+  const scanned = blankComments(content);
+  const sourceLines = content.split('\n');
+  const re = new RegExp(TENANT_SQL_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(scanned)) !== null) {
+    const line = scanned.slice(0, m.index).split('\n').length; // 1-based
+    violations.push({ file: norm, line, table: m[1]!.toLowerCase(), snippet: (sourceLines[line - 1] ?? m[0]).trim() });
   }
   return violations;
 }
