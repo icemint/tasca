@@ -328,7 +328,7 @@ export async function orchestrateTaskAssigned(
 
     // §6.8 — atomic claim (CAS). The conditional write is the hard exactly-one
     // guarantee; on loss another worker already owns the task.
-    const claim = await atomicClaim(deps.claim, task.id, winner.agentId, task.version);
+    const claim = await atomicClaim(deps.claim, orgId, task.id, winner.agentId, task.version);
     if (!claim.won) {
       // Surface WHY the CAS missed (lost race vs stale version vs gone) for ops.
       deps.logger?.info?.('coordination: claim lost', {
@@ -399,6 +399,7 @@ export async function orchestrateTaskAssigned(
         headBranch: deterministicHeadBranch(event.externalStoryId),
       };
       const { id: jobId } = await deps.dispatchQueue.enqueue({
+        orgId,
         taskId: task.id,
         payload: payload as unknown as Record<string, unknown>,
       });

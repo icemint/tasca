@@ -227,7 +227,7 @@ describe('atomicClaim over an in-memory CAS port', () => {
     let version = initialVersion;
     let claimedBy: string | null = null;
     const port: ClaimPort = {
-      async tryClaim(_t, agentId, expected): Promise<ClaimOutcome> {
+      async tryClaim(_org, _t, agentId, expected): Promise<ClaimOutcome> {
         if (status === 'routable' && version === expected) {
           status = 'claimed';
           version += 1;
@@ -247,8 +247,8 @@ describe('atomicClaim over an in-memory CAS port', () => {
 
   it('first claim wins, stale-version claim loses', async () => {
     const store = inMemoryPort(0);
-    const a = await atomicClaim(store.port, 't1', 'a', 0);
-    const b = await atomicClaim(store.port, 't1', 'b', 0);
+    const a = await atomicClaim(store.port, 'org_default', 't1', 'a', 0);
+    const b = await atomicClaim(store.port, 'org_default', 't1', 'b', 0);
     expect(a.won).toBe(true);
     expect(a.newVersion).toBe(1);
     expect(b.won).toBe(false);
@@ -258,7 +258,7 @@ describe('atomicClaim over an in-memory CAS port', () => {
   it('exactly one wins across many attempts', async () => {
     const store = inMemoryPort(0);
     const results = await Promise.all(
-      Array.from({ length: 25 }, (_, i) => atomicClaim(store.port, 't', `a${i}`, 0))
+      Array.from({ length: 25 }, (_, i) => atomicClaim(store.port, 'org_default', 't', `a${i}`, 0))
     );
     expect(results.filter((r) => r.won).length).toBe(1);
   });
@@ -271,7 +271,7 @@ describe('atomicClaim over an in-memory CAS port', () => {
         return { won: false, newVersion: null, found: true, currentStatus: 'claimed', currentVersion: 3 };
       },
     };
-    expect(await atomicClaim(lostRace, 't', 'a', 0)).toMatchObject({
+    expect(await atomicClaim(lostRace, 'org_default', 't', 'a', 0)).toMatchObject({
       won: false,
       found: true,
       currentStatus: 'claimed',
@@ -283,7 +283,7 @@ describe('atomicClaim over an in-memory CAS port', () => {
         return { won: false, newVersion: null, found: false, currentStatus: null, currentVersion: null };
       },
     };
-    expect(await atomicClaim(missing, 't', 'a', 0)).toMatchObject({ won: false, found: false, currentStatus: null });
+    expect(await atomicClaim(missing, 'org_default', 't', 'a', 0)).toMatchObject({ won: false, found: false, currentStatus: null });
   });
 });
 

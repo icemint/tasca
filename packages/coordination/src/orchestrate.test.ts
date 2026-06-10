@@ -163,7 +163,7 @@ class FakeStore implements CoordinationStore {
 /** A claim port that wins iff the task is still routable at the expected version. */
 class FakeClaimPort implements ClaimPort {
   constructor(private readonly store: FakeStore) {}
-  async tryClaim(taskId: string, agentId: string, expectedVersion: number): Promise<ClaimOutcome> {
+  async tryClaim(_orgId: string, taskId: string, agentId: string, expectedVersion: number): Promise<ClaimOutcome> {
     const t = this.store.tasks.get(taskId);
     if (t && t.status === 'routable' && t.version === expectedVersion) {
       t.status = 'claimed';
