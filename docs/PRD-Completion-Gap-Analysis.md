@@ -174,7 +174,7 @@ Same flow per slice: **architect → slice → adversarial panel → merge on gr
 
 ## Part E — Ongoing
 
-- **Reconciliation pass is due** (5a–5d is a 4-PR batch; §10 cadence). Known drift to fix: the org-scoping ADR (`docs/decisions/2026-06-10-org-scoping-app-level.md`) still says "3c — pending". Fold a docs-reconciler pass into Wave-3 kickoff.
+- **Reconciliation pass** (5a–5d is a 4-PR batch; §10 cadence) ran at Wave-3 kickoff. Drift corrected: the org-scoping ADR's slice-5 line ("in progress") now reflects 5a–5d shipped (#255–#258); README + CLAUDE.md §19.4 de-greenfielded to the current build state.
 - **Report at every merge**; each wave fronts its locked decisions before the big diff.
 
 ---

@@ -13,11 +13,15 @@ has a name, a capability profile, a work history, and its own first-class presen
 Shortcut, GitHub, and Linear. You manage them like people — pause, reassign, escalate,
 review — with full visibility into what each one is doing and why it was routed there.
 
-> **Status: greenfield, design-first.** This repository was reset to a clean slate for
-> the pivot. The source of truth for *what we're building* is
-> [`docs/Tasca-PRD-v1.0-FINAL.md`](docs/Tasca-PRD-v1.0-FINAL.md); for *how it looks and
-> feels*, [`docs/Tasca-Design-Brief-v1.0.md`](docs/Tasca-Design-Brief-v1.0.md).
-> Implementation follows design review — no code has been ported yet.
+> **Status: build in progress, pre-release.** The engine is built and tested — routing,
+> agent-identity, multi-tenancy + RBAC, coordination, credential isolation, agent-runner —
+> and **GitHub is a complete end-to-end adapter** (Stages 1–2 shipped). Wave 3 is adding the
+> remaining PRD surfaces (PM-assistant, Shortcut/Linear parity, usage/billing, audit/keys);
+> Wave 4 the deepest isolation + design-surface completion. The source of truth for *what
+> we're building* is [`docs/Tasca-PRD-v1.0-FINAL.md`](docs/Tasca-PRD-v1.0-FINAL.md); for *how
+> it looks and feels*, [`docs/Tasca-Design-Brief-v1.0.md`](docs/Tasca-Design-Brief-v1.0.md);
+> for *what's done vs. remaining*, the
+> [completion gap analysis](docs/PRD-Completion-Gap-Analysis.md).
 
 ---
 
@@ -128,24 +132,38 @@ Delivery is staged so each stage stands on its own and proves the next.
   dashboard.
 - **Stage 5 — PM-assistant.** Advisory triage, decomposition, distribution, and reporting.
 
-Stages 3–5 are roadmap, not shipped — the product, docs, and site represent them as such.
+Stages 1–2 are shipped (GitHub is the reference adapter, end-to-end); Stages 3–5 are in
+progress across Waves 3–4. The product, docs, and site represent unshipped work honestly as
+such. See the [completion gap analysis](docs/PRD-Completion-Gap-Analysis.md) for the precise
+done / partial / not-built state of every surface.
 
 ---
 
 ## Repository layout
 
-The repo is intentionally bare at the pivot. Current contents:
+A pnpm + TypeScript monorepo. The control plane is a set of layered packages; the app is an
+Astro frontend; deploy is the production topology.
 
 ```
-docs/
-  Tasca-PRD-v1.0-FINAL.md     Product requirements — source of truth for what we build
-  Tasca-Design-Brief-v1.0.md  Visual + UX brief — source of truth for how it looks
-CLAUDE.md                     Working conventions for this repo
-README.md                     You are here
+packages/
+  domain/          Core types (Task, CapabilityProfile, Tier, …)
+  routing/         The crown jewel — tier estimation, capability match, atomic claim, breaker
+  identity/        Agent-identity primitive — service users, RBAC, profiles, bindings, audit
+  coordination/    The control plane — orchestration, org-scoping/RBAC, webhooks, read/write API
+  execution/       Headless Emdash fork — worktrees, PTY agent spawning, openPr (vendored submodule)
+  agent-runner/    Isolated runner — claim → mint creds → clone → spawn → openPr → revoke
+  broker/          Per-task scoped-token mint over a unix socket (master key stays worker-side)
+  anthropic-proxy/ Keyless credential-injecting streaming proxy for the agent
+  adapters/        Platform adapters — GitHub (reference), Shortcut (intake), Linear (planned)
+  db/              Postgres claim repo + dispatch queue
+  auth/            Human OAuth login, sessions, CSRF
+  contracts/       Webhook/event Zod schemas at the trust boundary
+app/               Astro control-plane UI (roster, monitoring, connections, task, agent, …)
+deploy/            Production topology — worker, non-root runner, egress allowlist proxy
+docs/              PRD, design brief, gap analysis, decision records (ADRs)
 ```
 
-The execution module, routing engine, adapters, control plane, app, and marketing site
-land here as the staged delivery proceeds.
+The design system lives in `design-system/`; the marketing site in `website/`.
 
 ---
 
