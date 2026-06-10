@@ -21,7 +21,7 @@ import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity'
 import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
-import { resolveOrg } from './resolve-org';
+import { resolveOrg, type OrgMembershipReader } from './resolve-org';
 
 /** The agent-write surface the write-API needs (a subset of PgIdentityRepository). */
 export interface AgentWriter {
@@ -44,6 +44,11 @@ export interface WriteApiDeps {
   store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask' | 'interruptTask'>;
   /** Agent-state writes (pause/resume/edit-profile). Absent → those routes 404. */
   identity?: AgentWriter;
+  /** Resolves a verified session's user to their org (slice 4 RBAC). A user with no membership
+   *  resolves to null → the write fails closed (403). With the org-scoped store writes, this also
+   *  blocks cross-tenant mutation: a member of org A acting on a B-task resolves to A, and the
+   *  org-scoped UPDATE then misses (404) — a user can only ever mutate their own org's tasks. */
+  membership: OrgMembershipReader;
   /** Verify the request's session (same contract as the read API). */
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
   /** Fail-closed escape hatch — when no verifier is wired, refuse (503) unless this
@@ -212,9 +217,14 @@ export async function writeApiHandler(
     return true;
   }
   const userId = session?.userId ?? '(dev)';
-  // Resolve the org this write acts in (the EDGE stub; RBAC swaps it in slice 4). Every
-  // task write below is scoped to it, so an operator can only ever mutate this tenant's tasks.
-  const orgId = resolveOrg(session);
+  // Resolve the org this write acts in from the user's membership (slice 4 RBAC). A verified user
+  // with NO membership fails CLOSED (403). Every task write below is org-scoped to the resolved
+  // org, so an operator can only ever mutate their own tenant's tasks (a cross-tenant target 404s).
+  const orgId = await resolveOrg(deps.membership, session);
+  if (orgId === null) {
+    sendJson(res, 403, { error: 'no organization membership' });
+    return true;
+  }
 
   // ── CSRF double-submit ──────────────────────────────────────────────────────
   const cookie = readCookie(req, CSRF_COOKIE);

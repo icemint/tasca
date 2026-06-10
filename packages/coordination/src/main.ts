@@ -42,6 +42,7 @@ import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
 import { DEFAULT_ORG_ID } from './resolve-org';
+import { ORG_MEMBERSHIP_DDL } from './membership';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -95,6 +96,7 @@ async function applySchema(pool: Pool): Promise<void> {
     ...IDENTITY_SCHEMA_DDL, // agent/service_user/rbac/profile/binding/delegation/audit
     ...AUTH_SCHEMA_DDL, // human login: app_user/auth_identity/oauth_state/session (no hard FK to the above)
     ...COORDINATION_SCHEMA_DDL, // task coordination columns + routing_decision/pull_request/ledger
+    ...ORG_MEMBERSHIP_DDL, // user↔org membership + one-time backfill (FKs app_user + organization → last)
   ];
   for (const ddl of statements) {
     await pool.query(ddl);

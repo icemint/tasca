@@ -11,11 +11,15 @@ import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity'
 class FakeWriteStore {
   calls: string[] = [];
   lastTier: string | undefined;
+  /** The org the store was last called with — proves the membership-resolved org (not a default)
+   *  is threaded into the write, which is what scopes a mutation to the caller's own tenant. */
+  lastOrgId: string | undefined;
   escalateResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
   retierResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   reassignResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   interruptResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
-  async escalateTask(_orgId: string, id: string): Promise<TaskWriteOutcome> {
+  async escalateTask(orgId: string, id: string): Promise<TaskWriteOutcome> {
+    this.lastOrgId = orgId;
     this.calls.push(`escalate:${id}`);
     return this.escalateResult;
   }
@@ -83,9 +87,13 @@ const csrf = (extra: Record<string, string | string[]> = {}) => ({
   ...extra,
 });
 
+/** A membership reader that maps any user to one org (or null for the no-membership case). */
+const membershipFor = (org: string | null) => ({ async getOrgForUser() { return org; } });
+
 function deps(store: FakeWriteStore, over: Partial<WriteApiDeps> = {}): WriteApiDeps {
   return {
     store,
+    membership: membershipFor('org_default'),
     verifySession: () => ({ userId: 'user-1' }),
     secureCookies: false,
     ...over,
@@ -123,7 +131,7 @@ describe('write auth + CSRF gates', () => {
   });
 
   it('503 when no verifier is wired and not explicitly opened (fail closed)', async () => {
-    const r = await run({ store: new FakeWriteStore() }, fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }));
+    const r = await run({ store: new FakeWriteStore(), membership: membershipFor('org_default') }, fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }));
     expect(r.statusCode).toBe(503);
   });
 
@@ -142,6 +150,42 @@ describe('write auth + CSRF gates', () => {
     await run(deps(store, { verifySession: () => null }), fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }));
     await run(deps(store), fakeReq('POST', '/api/tasks/t1/escalate', { headers: { cookie: `tasca_csrf=${TOK}` } }));
     expect(store.calls).toEqual([]);
+  });
+});
+
+describe('RBAC org membership (slice 4)', () => {
+  it('fail-closed: a verified user with NO membership is rejected (403), and the store is never touched', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(
+      deps(store, { verifySession: () => ({ userId: 'u-orphan' }), membership: membershipFor(null) }),
+      fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() })
+    );
+    expect(r.statusCode).toBe(403); // no membership → fail closed, never DEFAULT_ORG_ID
+    expect(store.calls).toEqual([]); // and no mutation attempted
+  });
+
+  it('the write is scoped to the user’s RESOLVED org (membership), not a default', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(
+      deps(store, { verifySession: () => ({ userId: 'u-a' }), membership: membershipFor('org_a') }),
+      fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() })
+    );
+    expect(r.statusCode).toBe(200);
+    expect(store.lastOrgId).toBe('org_a'); // the membership org threads to the store, not org_default
+  });
+
+  it('CROSS-TENANT block: a member of org A mutating an org-B task is rejected (404) — the org-scoped write misses', async () => {
+    // The store is org-scoped (slice 3b-2): escalateTask(orgId, taskId) only matches a task IN
+    // orgId, returning not_found otherwise. So a user resolved to org A acting on a B-task gets a
+    // store not_found → 404. (404, not 403: it does not even leak that the task exists elsewhere.)
+    const store = new FakeWriteStore();
+    store.escalateResult = { ok: false, reason: 'not_found' }; // the org-A-scoped UPDATE misses the org-B task
+    const r = await run(
+      deps(store, { verifySession: () => ({ userId: 'u-a' }), membership: membershipFor('org_a') }),
+      fakeReq('POST', '/api/tasks/t-in-org-b/escalate', { headers: csrf() })
+    );
+    expect(r.statusCode).toBe(404);
+    expect(store.lastOrgId).toBe('org_a'); // it WAS scoped to the actor's org (A), so the B-task is unreachable
   });
 });
 
@@ -214,7 +258,7 @@ describe('task interventions (session + CSRF satisfied)', () => {
 
   it('allowUnauthenticated opens the gate for dev (CSRF still required)', async () => {
     const store = new FakeWriteStore();
-    const d: WriteApiDeps = { store, allowUnauthenticated: true, secureCookies: false };
+    const d: WriteApiDeps = { store, membership: membershipFor('org_default'), allowUnauthenticated: true, secureCookies: false };
     expect((await run(d, fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }))).statusCode).toBe(200);
     expect((await run(d, fakeReq('POST', '/api/tasks/t1/escalate', {}))).statusCode).toBe(403); // CSRF still enforced
   });
@@ -238,7 +282,7 @@ class FakeAgentWriter implements AgentWriter {
 
 describe('agent-state writes (optimistic concurrency via version)', () => {
   function agentDeps(identity: FakeAgentWriter): WriteApiDeps {
-    return { store: new FakeWriteStore(), identity, verifySession: () => ({ userId: 'u1' }), secureCookies: false };
+    return { store: new FakeWriteStore(), identity, membership: membershipFor('org_default'), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
   }
 
   it('pause/resume require the version and pass the right status', async () => {
@@ -284,14 +328,14 @@ describe('agent-state writes (optimistic concurrency via version)', () => {
   });
 
   it('agent routes 503 (not 404) when no identity writer is wired (honest "not enabled")', async () => {
-    const d: WriteApiDeps = { store: new FakeWriteStore(), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
+    const d: WriteApiDeps = { store: new FakeWriteStore(), membership: membershipFor('org_default'), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
     const r = await run(d, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }));
     expect(r.statusCode).toBe(503);
   });
 
   it('still session+CSRF gated', async () => {
     const id = new FakeAgentWriter();
-    expect((await run({ store: new FakeWriteStore(), identity: id, verifySession: () => null, secureCookies: false }, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(401);
+    expect((await run({ store: new FakeWriteStore(), identity: id, membership: membershipFor('org_default'), verifySession: () => null, secureCookies: false }, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(401);
     expect((await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/pause', { body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(403);
   });
 });

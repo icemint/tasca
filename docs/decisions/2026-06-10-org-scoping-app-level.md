@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-06-10
 - **Deciders:** maintainer
-- **Slices:** 3a (#249), 3b-1 (#250), 3b-2 (#251) — shipped; 3c — pending
+- **Slices:** 3a (#249), 3b-1 (#250), 3b-2 (#251), 3c (#253) — shipped; slice 4 (RBAC — `resolveOrg` becomes a real membership lookup) — shipping
 
 ## Context
 
@@ -99,8 +99,10 @@ The migration is an expand/contract split so no in-flight query ever breaks:
 - **+** The deliberately cross-org workers (reaper/runner/orchestrate webhook resolution) need no
   special second pool or `BYPASSRLS` — they call the explicit cross-org resolvers, which are the
   named, auditable exceptions.
-- **+** Slice 4 (RBAC) swaps a **single function** (`resolveOrg`) from "always default org" to a
-  real session→membership lookup; nothing else in the request path changes.
+- **+** Slice 4 (RBAC) swapped a **single function** (`resolveOrg`) from "always default org" to a
+  real session→membership lookup (`org_membership`), as designed — the rest of the request path was
+  unchanged. It is now async + fail-closed: a verified user with no membership → 403, never the
+  default org in a request context.
 - **−** Isolation is only as strong as the type+CI discipline — there is no database-level backstop
   yet. A query authored *inside* the scoped layer could still omit a `WHERE org_id` (the guard
   confines *where* tenant SQL lives, not that each statement scopes correctly); that residual is
