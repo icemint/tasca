@@ -31,6 +31,16 @@ export const RoutingProposalSchema = z.object({
 });
 export type RoutingProposal = z.infer<typeof RoutingProposalSchema>;
 
+/** A triage proposal's payload (slice W3-S1b): a suggested tier for a task, with a plain-English
+ *  rationale + confidence. Accepting it applies the tier via overrideTierEstimate (version-fenced,
+ *  done-guarded) — never a status/claim/routing write. The tier is validated here at the boundary. */
+export const TriageProposalSchema = z.object({
+  tier: TierSchema,
+  why: z.string().min(1).max(2000),
+  confidence: z.number().min(0).max(1),
+});
+export type TriageProposal = z.infer<typeof TriageProposalSchema>;
+
 /** Normalized inbound platform event (adapters emit this; coordination consumes it). */
 export const AdapterEventSchema = z.object({
   type: z.literal('task.assigned'),

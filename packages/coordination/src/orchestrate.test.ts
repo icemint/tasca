@@ -186,6 +186,7 @@ class FakeStore implements CoordinationStore {
   }
   async dismissProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async acceptRoutingProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async acceptTriageProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
 }
 
 /** A claim port that wins iff the task is still routable at the expected version. */

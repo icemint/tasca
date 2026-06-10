@@ -127,9 +127,16 @@ export type SessionResponse =
   | { authenticated: false };
 
 // ── PM-assistant proposals (slice W3-S1) ──────────────────────────────────────
-/** A routing proposal's payload (the only kind in S1a). */
+/** A routing proposal's payload. */
 export interface RoutingProposalPayload {
   agentName: string;
+  why: string;
+  confidence: number;
+}
+
+/** A triage proposal's payload (W3-S1b): a suggested tier + rationale. */
+export interface TriageProposalPayload {
+  tier: Tier;
   why: string;
   confidence: number;
 }
@@ -139,7 +146,7 @@ export interface ProposalSummary {
   kind: 'triage' | 'decomposition' | 'routing' | 'standup';
   targetTaskId: string | null;
   targetVersion: number | null;
-  payload: RoutingProposalPayload | Record<string, unknown>;
+  payload: RoutingProposalPayload | TriageProposalPayload | Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   version: number;
   createdAt: string;

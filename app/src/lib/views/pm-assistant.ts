@@ -10,7 +10,7 @@ import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction, type LiveActionOpts } from '../live';
 import { I, esc, taskRef, tierTag, roControl } from '../ui';
-import type { ProposalSummary, RoutingProposalPayload, TaskSummary } from '../contract';
+import type { ProposalSummary, RoutingProposalPayload, TriageProposalPayload, TaskSummary, Tier } from '../contract';
 import type { WriteResult } from '../api';
 
 const SPARK = I.spark;
@@ -82,21 +82,47 @@ function routingCard(p: ProposalSummary): string {
       </div></div></div>`;
 }
 
-/** A routable/blocked task that has a tier estimate is a candidate for an on-demand suggestion. */
+function triageCard(p: ProposalSummary): string {
+  const pay = p.payload as TriageProposalPayload;
+  const conf = Math.round(Math.max(0, Math.min(1, Number(pay.confidence) || 0)) * 100);
+  const target = p.targetTaskId
+    ? `<a class="pms-target mono" href="/tasks?id=${encodeURIComponent(p.targetTaskId)}">${taskRef(p.targetTaskId)}</a>`
+    : '';
+  return `<div class="pm-suggestion" data-proposal="${esc(p.id)}">
+    <div class="pms-top"><span class="pm-cap-ic sm">${CAP_IC.triage}</span><span class="pms-tag">Triage</span>
+      <span class="pm-badge advisory sm">Suggestion · not applied</span></div>
+    <div class="pms-title">Estimate ${tierTag(pay.tier as Tier)} ${target}</div>
+    <div class="pms-body">${esc(pay.why)}</div>
+    <div class="pms-foot"><span class="pms-meta mono dim">confidence ${conf}% · you confirm before it re-tiers</span>
+      <div class="pms-act">
+        <button class="ictl pm-ctl" type="button" data-action="dismiss" data-proposal="${esc(p.id)}" aria-label="Dismiss this suggestion">Dismiss</button>
+        ${roControl('Edit', { gate: 'Editing a proposal arrives with the next sub-slice' })}
+        <button class="ictl signal pm-ctl" type="button" data-action="accept" data-proposal="${esc(p.id)}" aria-label="Accept — set the tier">Accept</button>
+      </div></div></div>`;
+}
+
+/** A task is a candidate for an on-demand suggestion: any routable/blocked task can be triaged;
+ *  routing additionally needs a tier estimate (the server returns no suggestion otherwise). */
 function suggestRow(t: TaskSummary): string {
+  const route = t.tierEstimate !== null
+    ? `<button class="ictl pm-ctl" type="button" data-action="generate" data-kind="routing" data-task-id="${esc(t.id)}" aria-label="Suggest a routing for ${esc(t.id)}">Route</button>`
+    : '';
   return `<div class="pm-srow">
     <span class="pm-srow-id">${taskRef(t.id)} ${tierTag(t.tierEstimate)}</span>
-    <button class="ictl pm-ctl" type="button" data-action="generate" data-task-id="${esc(t.id)}" aria-label="Suggest a routing for ${esc(t.id)}">${SPARK} Suggest routing</button>
+    <span class="pm-srow-act">
+      <button class="ictl pm-ctl" type="button" data-action="generate" data-kind="triage" data-task-id="${esc(t.id)}" aria-label="Suggest a triage for ${esc(t.id)}">${SPARK} Triage</button>
+      ${route}
+    </span>
   </div>`;
 }
 
 function onState(proposals: ProposalSummary[], suggestable: TaskSummary[]): string {
-  const routing = proposals.filter((p) => p.kind === 'routing');
-  const cards = routing.length
-    ? `<div class="pm-suggestions">${routing.map(routingCard).join('')}</div>`
-    : empty('No suggestions yet', 'Generate a routing suggestion from one of your tasks below — nothing is applied until you accept it.', SPARK);
+  const cardsFor = proposals.filter((p) => p.kind === 'routing' || p.kind === 'triage');
+  const cards = cardsFor.length
+    ? `<div class="pm-suggestions">${cardsFor.map((p) => (p.kind === 'triage' ? triageCard(p) : routingCard(p))).join('')}</div>`
+    : empty('No suggestions yet', 'Generate a triage or routing suggestion from one of your tasks below — nothing is applied until you accept it.', SPARK);
   const gen = suggestable.length
-    ? `<div class="pm-gen"><div class="pm-gen-h mono">Generate a routing suggestion</div>${suggestable.map(suggestRow).join('')}</div>`
+    ? `<div class="pm-gen"><div class="pm-gen-h mono">Generate a suggestion</div>${suggestable.map(suggestRow).join('')}</div>`
     : '';
   return `<div class="pm-on">
     <div class="pm-on-head"><div><div class="pm-on-t"><span class="pm-mark sm">${SPARK}</span> PM assistant <span class="pm-badge advisory sm">Advisory · on</span></div>
@@ -110,12 +136,11 @@ export async function loadPmAssistant(): Promise<LoadResult> {
   if (!res.data.enabled) {
     return { kind: 'ok', html: `${head()}<div class="pm-body">${offState()}</div>` };
   }
-  // On: also pull the routable backlog for the on-demand "Suggest routing" list.
+  // On: also pull the backlog for the on-demand suggestion list. Triage applies to any open task;
+  // routing needs an estimate (the Route button only shows then).
+  const OPEN = new Set(['ingested', 'routable', 'needs_attention', 'failed']);
   const tasks = await getTasks({ limit: 50 });
-  const suggestable =
-    tasks.kind === 'ok'
-      ? tasks.data.filter((t) => t.tierEstimate !== null && (t.status === 'routable' || t.status === 'needs_attention'))
-      : [];
+  const suggestable = tasks.kind === 'ok' ? tasks.data.filter((t) => OPEN.has(t.status)) : [];
   return { kind: 'ok', html: `${head()}<div class="pm-body">${onState(res.data.proposals, suggestable)}</div>` };
 }
 
@@ -145,7 +170,8 @@ export function wirePmAssistant(el: HTMLElement, rerun: () => Promise<void>): vo
         write: () => {
           if (action === 'accept') return acceptProposal(btn.dataset.proposal ?? '');
           if (action === 'dismiss') return dismissProposal(btn.dataset.proposal ?? '');
-          return generateProposal(btn.dataset.taskId ?? '');
+          const kind = btn.dataset.kind === 'triage' ? 'triage' : 'routing';
+          return generateProposal(btn.dataset.taskId ?? '', kind);
         },
       };
       void liveAction(opts);

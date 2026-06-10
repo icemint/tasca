@@ -38,8 +38,10 @@ class FakeProposalStore {
   proposals = new Map<string, Proposal>();
   created: CreateProposalInput[] = [];
   accepted: Array<{ id: string; agentId: string }> = [];
+  triaged: Array<{ id: string; tier: string }> = [];
   dismissed: string[] = [];
   nextAccept: ProposalWriteOutcome = { ok: true };
+  nextTriage: ProposalWriteOutcome = { ok: true };
   nextDismiss: ProposalWriteOutcome = { ok: true };
 
   async getTask(_orgId: string, taskId: string) {
@@ -73,6 +75,10 @@ class FakeProposalStore {
   async acceptRoutingProposal(_orgId: string, id: string, agentId: string): Promise<ProposalWriteOutcome> {
     this.accepted.push({ id, agentId });
     return this.nextAccept;
+  }
+  async acceptTriageProposal(_orgId: string, id: string, tier: string): Promise<ProposalWriteOutcome> {
+    this.triaged.push({ id, tier });
+    return this.nextTriage;
   }
 }
 
@@ -169,11 +175,15 @@ function deps(f: Fakes, over: Partial<ProposalApiDeps> = {}): ProposalApiDeps {
     membership: f.membership as unknown as ProposalApiDeps['membership'],
     roster: f.roster as unknown as ProposalApiDeps['roster'],
     directory: f.directory,
-    proposer: new (class {
+    proposer: {
       async proposeRouting() {
         return { agentName: 'Mona', why: 'best fit for a medium task', confidence: 0.8 };
-      }
-    })(),
+      },
+      async proposeTriage() {
+        return { tier: 'hard' as const, why: 'reasoning language + multi-file scope', confidence: 0.72 };
+      },
+    },
+    content: { async fetch() { return { title: 'Refactor auth', body: 'redesign the token flow' }; } },
     enabled: true,
     verifySession: () => ({ userId: 'u1' }),
     ...over,
@@ -285,7 +295,10 @@ describe('POST /api/proposals/generate — flag-gated, on-demand', () => {
     const f = newFakes();
     f.store.tasks.set('t1', fakeTask());
     f.roster.hired = [{ agentId: 'agent-mona', name: 'Mona', status: 'active' }];
-    const throwing = { async proposeRouting() { throw new Error('LLM down'); } };
+    const throwing = {
+      async proposeRouting() { throw new Error('LLM down'); },
+      async proposeTriage() { throw new Error('LLM down'); },
+    };
     const r = await run(deps(f, { proposer: throwing }), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1' }) }));
     expect(r.statusCode).toBe(200);
     expect(JSON.parse(r.body).proposal).toBeNull();
@@ -363,5 +376,79 @@ describe('POST /api/proposals/:id/dismiss', () => {
     f.store.nextDismiss = { ok: false, reason: 'conflict' };
     const r = await run(deps(f), fakeReq('POST', '/api/proposals/p1/dismiss', { headers: csrf() }));
     expect(r.statusCode).toBe(409);
+  });
+});
+
+describe('triage kind (W3-S1b)', () => {
+  it('generate kind=triage persists a TRIAGE proposal from the tier proposer', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask({ tierEstimate: null })); // triage does NOT need a stored estimate
+    const r = await run(
+      deps(f),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'triage' }) })
+    );
+    expect(r.statusCode).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.proposal.kind).toBe('triage');
+    expect(body.proposal.payload.tier).toBe('hard');
+    expect(f.store.created[0]!.targetVersion).toBe(3); // version-fenced to the task at generation
+  });
+
+  it('FLAG-OFF refuses triage generation server-side (403), no proposal created', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const r = await run(
+      deps(f, { enabled: false }),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'triage' }) })
+    );
+    expect(r.statusCode).toBe(403);
+    expect(f.store.created).toEqual([]);
+  });
+
+  it('a content-fetch failure → 200 proposal:null (fail-soft, no write)', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const failContent = { async fetch() { throw new Error('shortcut 500'); } };
+    const r = await run(
+      deps(f, { content: failContent }),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'triage' }) })
+    );
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).proposal).toBeNull();
+    expect(f.store.created).toEqual([]);
+  });
+
+  it('an unknown kind → 400', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const r = await run(
+      deps(f),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'banana' }) })
+    );
+    expect(r.statusCode).toBe(400);
+  });
+
+  it('accept of a triage proposal calls acceptTriageProposal with the tier — ONLY binding path', async () => {
+    const f = newFakes();
+    f.store.proposals.set('pt', {
+      id: 'pt', kind: 'triage', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+      createdAt: '2026-01-01T00:00:00Z', payload: { tier: 'ultra', why: 'incident', confidence: 0.8 },
+    });
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/pt/accept', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(f.store.triaged).toEqual([{ id: 'pt', tier: 'ultra' }]);
+    expect(f.store.accepted).toEqual([]); // never touched the routing path
+  });
+
+  it('accept of a triage proposal maps the version-fence conflict to 409', async () => {
+    const f = newFakes();
+    f.store.proposals.set('pt', {
+      id: 'pt', kind: 'triage', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+      createdAt: '2026-01-01T00:00:00Z', payload: { tier: 'ultra', why: 'incident', confidence: 0.8 },
+    });
+    f.store.nextTriage = { ok: false, reason: 'conflict' };
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/pt/accept', { headers: csrf() }));
+    expect(r.statusCode).toBe(409);
+    expect(JSON.parse(r.body).code).toBe('conflict');
   });
 });

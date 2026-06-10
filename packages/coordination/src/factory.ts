@@ -10,7 +10,7 @@ import { PgClaimRepository, PgDispatchQueue } from '@tasca/db';
 import { PgIdentityRepository } from '@tasca/identity';
 import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
-import { DeterministicRoutingProposer, type LlmClassifierPort } from '@tasca/routing';
+import { DefaultPmProposer, type LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
@@ -203,7 +203,10 @@ export function createCoordination(
       membership,
       roster,
       directory,
-      proposer: new DeterministicRoutingProposer(),
+      content: input.content,
+      // routing = deterministic match; triage = the tier engine, LLM-backed when a classifier is
+      // injected (same optional classifier the routing pipeline uses), else heuristic-only. Both fail-soft.
+      proposer: new DefaultPmProposer(input.classifier),
       enabled: input.pmAssistantEnabled === true,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),

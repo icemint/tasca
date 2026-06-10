@@ -6,9 +6,15 @@
 // routing loop.
 
 import type { CapabilityProfile, AgentState, TierEstimate } from '@tasca/domain';
-import { RoutingProposalSchema, type RoutingProposal } from '@tasca/contracts';
-import type { TaskInput } from './tier';
+import {
+  RoutingProposalSchema,
+  TriageProposalSchema,
+  type RoutingProposal,
+  type TriageProposal,
+} from '@tasca/contracts';
+import { estimateTier, type TaskInput, type EstimateTierOptions } from './tier';
 import { matchCapability, type MatchCandidate } from './match';
+import type { LlmClassifierPort } from './ports';
 
 /** A hired agent the proposer may suggest — the match inputs plus the display name (the
  *  proposal names the agent; accept resolves that name back to a HIRED id, fail-closed). */
@@ -26,21 +32,34 @@ export interface ProposeRoutingInput {
   candidates: RoutingCandidate[];
 }
 
-/** The proposer seam. A deterministic match-based default ships now; LLM-backed proposers
- *  (for the language-heavy kinds — triage/decomposition/standup) arrive in later sub-slices.
- *  Returns null when it has no suggestion (e.g. no eligible candidate). */
+export interface ProposeTriageInput {
+  task: TaskInput;
+}
+
+/** The proposer seam. The routing kind is deterministic (match-based); the triage kind is the
+ *  tier engine surfaced as a suggestion (LLM-backed when a classifier is injected). The
+ *  language-heavy kinds (decomposition/standup) arrive in later sub-slices. Each returns null
+ *  when it has no suggestion. */
 export interface PmProposerPort {
   proposeRouting(input: ProposeRoutingInput): Promise<RoutingProposal | null>;
+  proposeTriage(input: ProposeTriageInput): Promise<TriageProposal | null>;
 }
 
 /**
- * The default routing proposer: rank the hired candidates with the SAME engine the binding
- * path uses (matchCapability), and propose the top eligible agent with a plain-English
- * rationale. Deterministic, no I/O, always available — a routing suggestion that mirrors
- * what the engine would do, framed for a non-technical PM. Returns null when nothing is
- * eligible (an honest "no suggestion", never a guess).
+ * The default PM proposer.
+ *  - routing: rank the hired candidates with the SAME engine the binding path uses
+ *    (matchCapability) and propose the top eligible agent — deterministic, no I/O, always
+ *    available, a suggestion that mirrors what the engine would do.
+ *  - triage: the tier engine (estimateTier) surfaced as a suggestion. LLM-backed when a
+ *    classifier is injected (and budgeted/skipped on a high-confidence heuristic prior), else
+ *    heuristic-only. estimateTier is itself fail-soft — a classifier timeout/5xx/malformed
+ *    output degrades to the heuristic prior, never throws — so a proposer outage can't reach
+ *    the routing loop.
+ * Both return null for an honest "no suggestion", never a guess.
  */
-export class DeterministicRoutingProposer implements PmProposerPort {
+export class DefaultPmProposer implements PmProposerPort {
+  constructor(private readonly classifier?: LlmClassifierPort) {}
+
   async proposeRouting(input: ProposeRoutingInput): Promise<RoutingProposal | null> {
     const byId = new Map(input.candidates.map((c) => [c.agentId, c]));
     const candidates: MatchCandidate[] = input.candidates.map((c) => ({
@@ -58,6 +77,23 @@ export class DeterministicRoutingProposer implements PmProposerPort {
       `and is available, with the highest capability score (${top.score.toFixed(2)}) among the hired agents.`;
     return { agentName: agent.name, why, confidence: Math.max(0, Math.min(1, top.score)) };
   }
+
+  async proposeTriage(input: ProposeTriageInput): Promise<TriageProposal | null> {
+    const opts: EstimateTierOptions = this.classifier ? { classifier: this.classifier } : {};
+    const est = await estimateTier(input.task, opts);
+    return { tier: est.tier, why: triageWhy(est), confidence: est.confidence };
+  }
+}
+
+/** A plain-English rationale from the tier estimate's signals — the "why" a PM reads. */
+function triageWhy(est: TierEstimate): string {
+  const s = est.signals;
+  const bits: string[] = [`~${s.wordCount} words`];
+  if (s.hasReasoningVerb) bits.push('reasoning/design language');
+  if (s.scopeHint !== 'unknown') bits.push(`${s.scopeHint} scope`);
+  if (s.labelTier) bits.push(`an explicit ${s.labelTier} label`);
+  const basis = est.classifierUsed ? 'the classifier + heuristics' : 'heuristics';
+  return `Estimated ${est.tier} from ${basis} (${bits.join(', ')}). Confirm before it re-tiers the task.`;
 }
 
 /**
@@ -66,7 +102,7 @@ export class DeterministicRoutingProposer implements PmProposerPort {
  * to null. Routing is never on this path, so a proposer outage is invisible to the engine.
  */
 export async function proposeRoutingFailSoft(
-  port: PmProposerPort,
+  port: Pick<PmProposerPort, 'proposeRouting'>,
   input: ProposeRoutingInput,
   opts: { timeoutMs?: number } = {}
 ): Promise<RoutingProposal | null> {
@@ -80,6 +116,26 @@ export async function proposeRoutingFailSoft(
   if (raw === null) return null;
   const parsed = RoutingProposalSchema.safeParse(raw);
   return parsed.success ? parsed.data : null; // malformed → no proposal
+}
+
+/** Fail-soft wrapper around a triage proposer call — same contract as the routing one: validate
+ *  at the trust boundary, bound with a timeout, degrade ANY failure to null. The tier engine is
+ *  advisory here, so an outage is invisible to the routing loop. */
+export async function proposeTriageFailSoft(
+  port: Pick<PmProposerPort, 'proposeTriage'>,
+  input: ProposeTriageInput,
+  opts: { timeoutMs?: number } = {}
+): Promise<TriageProposal | null> {
+  const timeoutMs = opts.timeoutMs ?? 4000;
+  let raw: TriageProposal | null;
+  try {
+    raw = await withTimeout(port.proposeTriage(input), timeoutMs);
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  const parsed = TriageProposalSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

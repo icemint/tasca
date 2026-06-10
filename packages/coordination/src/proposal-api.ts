@@ -16,14 +16,16 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Task } from '@tasca/domain';
-import { RoutingProposalSchema } from '@tasca/contracts';
+import type { AdapterEvent } from '@tasca/contracts';
+import { RoutingProposalSchema, TriageProposalSchema } from '@tasca/contracts';
 import {
   proposeRoutingFailSoft,
+  proposeTriageFailSoft,
   type PmProposerPort,
   type RoutingCandidate,
 } from '@tasca/routing';
 import type { CoordinationStore, ProposalWriteOutcome } from './store';
-import type { AgentDirectory } from './orchestrate';
+import type { AgentDirectory, TaskContentSource } from './orchestrate';
 import type { OrgRosterRepo } from './roster';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
@@ -34,7 +36,13 @@ import { sendJson, readJsonBody, verifyCsrf } from './http-util';
 export interface ProposalApiDeps {
   store: Pick<
     CoordinationStore,
-    'listProposals' | 'getProposal' | 'createProposal' | 'dismissProposal' | 'acceptRoutingProposal' | 'getTask'
+    | 'listProposals'
+    | 'getProposal'
+    | 'createProposal'
+    | 'dismissProposal'
+    | 'acceptRoutingProposal'
+    | 'acceptTriageProposal'
+    | 'getTask'
   >;
   /** Resolves a session → its org (membership = tenant boundary, fail-closed) AND role (5b). */
   membership: RoleReader;
@@ -43,9 +51,12 @@ export interface ProposalApiDeps {
   roster: OrgRosterRepo;
   /** Candidate capability profiles for the proposer (the same source routing uses). */
   directory: Pick<AgentDirectory, 'listCandidates'>;
-  /** The routing proposer (deterministic match-based default). Absent → generation yields no
-   *  proposal (the assistant is inert but never errors). */
+  /** The PM proposer (routing deterministic, triage = the tier engine). Absent → generation yields
+   *  no proposal (the assistant is inert but never errors). */
   proposer?: PmProposerPort;
+  /** Task content source (title/body/labels) — needed to triage a task (the routing kind uses the
+   *  stored tier estimate and does not need content). Absent → triage generation yields no proposal. */
+  content?: TaskContentSource;
   /** The PM-assistant feature flag. When false, the view renders its off-state and GENERATION is
    *  refused here server-side. Listing/accepting/dismissing EXISTING proposals still works. */
   enabled: boolean;
@@ -168,16 +179,17 @@ export async function proposalApiHandler(
   }
 }
 
-/** Generate a routing proposal for a task (on-demand, slice W3-S1a). Uses the task's stored tier
- *  estimate + the org's hired candidates; the proposer is fail-soft, so any failure → no proposal
- *  (200 with proposal:null), never an error and never a routing write. */
+/** Generate a proposal for a task (on-demand). `kind` selects routing (uses the stored tier
+ *  estimate + hired candidates) or triage (fetches content + runs the tier engine). Both proposers
+ *  are fail-soft, so any failure → no proposal (200 with proposal:null), never an error and never a
+ *  task write. */
 async function handleGenerate(
   req: IncomingMessage,
   res: ServerResponse,
   deps: ProposalApiDeps,
   orgId: string
 ): Promise<void> {
-  let body: { taskId?: unknown };
+  let body: { taskId?: unknown; kind?: unknown };
   try {
     body = (await readJsonBody(req)) as typeof body;
   } catch {
@@ -189,14 +201,40 @@ async function handleGenerate(
     sendJson(res, 400, { error: 'taskId is required' });
     return;
   }
+  const kind = body.kind === undefined ? 'routing' : body.kind;
+  if (kind !== 'routing' && kind !== 'triage') {
+    sendJson(res, 400, { error: "kind must be 'routing' or 'triage'" });
+    return;
+  }
   const task = await deps.store.getTask(orgId, taskId);
   if (!task) {
     sendJson(res, 404, { error: 'task not found' });
     return;
   }
-  if (!task.tierEstimate || !deps.proposer) {
-    // No estimate yet (not routed) or no proposer wired → honestly no suggestion.
-    sendJson(res, 200, { proposal: null });
+  if (!deps.proposer) {
+    sendJson(res, 200, { proposal: null }); // no proposer wired → honestly no suggestion
+    return;
+  }
+
+  if (kind === 'triage') {
+    const payload = await generateTriage(deps, task);
+    if (!payload) {
+      sendJson(res, 200, { proposal: null });
+      return;
+    }
+    const proposal = await deps.store.createProposal(orgId, {
+      kind: 'triage',
+      targetTaskId: task.id,
+      targetVersion: task.version,
+      payload,
+    });
+    sendJson(res, 200, { proposal });
+    return;
+  }
+
+  // routing
+  if (!task.tierEstimate) {
+    sendJson(res, 200, { proposal: null }); // not yet estimated → honestly no routing suggestion
     return;
   }
   const candidates = await buildCandidates(deps, orgId, task);
@@ -218,6 +256,28 @@ async function handleGenerate(
   sendJson(res, 200, { proposal });
 }
 
+/** Triage generation: fetch the task's real content, run the (fail-soft) tier-engine proposer. A
+ *  content-fetch failure or an absent content source → no proposal (never throws, never writes). */
+async function generateTriage(deps: ProposalApiDeps, task: Task) {
+  if (!deps.content || !deps.proposer) return null;
+  const event: AdapterEvent = {
+    type: 'task.assigned',
+    platform: task.platform,
+    externalStoryId: task.externalStoryId,
+    agentExternalId: '',
+    ...(task.repoRef ? { repoHint: task.repoRef } : {}),
+  };
+  let content: { title: string; body: string; labels?: string[] };
+  try {
+    content = await deps.content.fetch(event);
+  } catch {
+    return null; // content fetch failed → fail-soft, no suggestion
+  }
+  return proposeTriageFailSoft(deps.proposer, {
+    task: { title: content.title, body: content.body, ...(content.labels ? { labels: content.labels } : {}) },
+  });
+}
+
 /** Accept a routing proposal: resolve its agent name to a HIRED id (fail closed if unhired), then
  *  run the binding write (acceptRoutingProposal: CAS proposal + set preference + re-route). */
 async function handleAccept(
@@ -231,24 +291,38 @@ async function handleAccept(
     sendJson(res, 404, { error: 'proposal not found' });
     return;
   }
-  if (proposal.kind !== 'routing') {
-    // Only routing accepts are wired in W3-S1a (triage/decomposition land in 1b/1c).
-    sendJson(res, 400, { error: 'this proposal kind cannot be accepted yet', code: 'unsupported_kind' });
+
+  if (proposal.kind === 'routing') {
+    const parsed = RoutingProposalSchema.safeParse(proposal.payload);
+    if (!parsed.success) {
+      sendJson(res, 409, { error: 'proposal payload is malformed', code: 'conflict' });
+      return;
+    }
+    // Resolve the proposed NAME to a HIRED agent id (org-scoped). Unhired/unknown → fail closed,
+    // NEVER a route to an unhired agent — the 5d boundary, enforced before any write.
+    const agentId = await deps.roster.findHiredAgentByName(orgId, parsed.data.agentName);
+    if (!agentId) {
+      sendProposalOutcome(res, { ok: false, reason: 'agent_not_hired' });
+      return;
+    }
+    sendProposalOutcome(res, await deps.store.acceptRoutingProposal(orgId, id, agentId));
     return;
   }
-  const parsed = RoutingProposalSchema.safeParse(proposal.payload);
-  if (!parsed.success) {
-    sendJson(res, 409, { error: 'proposal payload is malformed', code: 'conflict' });
+
+  if (proposal.kind === 'triage') {
+    const parsed = TriageProposalSchema.safeParse(proposal.payload);
+    if (!parsed.success) {
+      sendJson(res, 409, { error: 'proposal payload is malformed', code: 'conflict' });
+      return;
+    }
+    // The ONLY binding write a triage accept reaches is acceptTriageProposal → the overrideTierEstimate
+    // tier write (version-fenced, done-guarded). No status/claim/routing write.
+    sendProposalOutcome(res, await deps.store.acceptTriageProposal(orgId, id, parsed.data.tier));
     return;
   }
-  // Resolve the proposed NAME to a HIRED agent id (org-scoped). Unhired/unknown → fail closed,
-  // NEVER a route to an unhired agent — the 5d boundary, enforced before any write.
-  const agentId = await deps.roster.findHiredAgentByName(orgId, parsed.data.agentName);
-  if (!agentId) {
-    sendProposalOutcome(res, { ok: false, reason: 'agent_not_hired' });
-    return;
-  }
-  sendProposalOutcome(res, await deps.store.acceptRoutingProposal(orgId, id, agentId));
+
+  // decomposition/standup accepts land in 1c/1d.
+  sendJson(res, 400, { error: 'this proposal kind cannot be accepted yet', code: 'unsupported_kind' });
 }
 
 /** Join the directory's candidate profiles with the roster's display names into the proposer's
