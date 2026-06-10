@@ -26,6 +26,7 @@ export const ALLOWLIST: Record<string, readonly string[]> = {
   domain: [],
   auth: [],
   broker: [], // credential-broker transport: pure node:net, zero @tasca deps (a leaf)
+  'anthropic-proxy': [], // anthropic credential proxy + bridge: pure node:http/net, zero @tasca deps (a leaf)
   contracts: ['domain'],
   db: ['domain'],
   identity: ['domain'],
@@ -34,8 +35,8 @@ export const ALLOWLIST: Record<string, readonly string[]> = {
   adapters: ['domain', 'contracts'],
   // The execution-side composition root: claims dispatch_job (db), gets a scoped token
   // (broker), runs the agent (execution). The mirror of coordination on the runner side.
-  'agent-runner': ['domain', 'contracts', 'db', 'broker', 'execution'],
-  coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters', 'broker'],
+  'agent-runner': ['domain', 'contracts', 'db', 'broker', 'anthropic-proxy', 'execution'],
+  coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters', 'broker', 'anthropic-proxy'],
 };
 
 export interface ImportRef {

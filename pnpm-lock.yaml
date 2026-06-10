@@ -32,6 +32,9 @@ importers:
 
   packages/agent-runner:
     dependencies:
+      '@tasca/anthropic-proxy':
+        specifier: workspace:*
+        version: link:../anthropic-proxy
       '@tasca/broker':
         specifier: workspace:*
         version: link:../broker
@@ -51,6 +54,8 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.22.4
+
+  packages/anthropic-proxy: {}
 
   packages/auth:
     dependencies:
@@ -81,6 +86,9 @@ importers:
       '@tasca/adapters':
         specifier: workspace:*
         version: link:../adapters
+      '@tasca/anthropic-proxy':
+        specifier: workspace:*
+        version: link:../anthropic-proxy
       '@tasca/auth':
         specifier: workspace:*
         version: link:../auth
