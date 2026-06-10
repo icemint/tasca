@@ -87,8 +87,12 @@ const csrf = (extra: Record<string, string | string[]> = {}) => ({
   ...extra,
 });
 
-/** A membership reader that maps any user to one org (or null for the no-membership case). */
-const membershipFor = (org: string | null) => ({ async getActiveOrg() { return org; } });
+/** A role reader: maps any user to one active org (null = no membership) + a role in it. Role
+ *  defaults to owner so the existing intervention/agent tests pass the 5b role gate. */
+const membershipFor = (org: string | null, role: 'owner' | 'admin' | 'member' = 'owner') => ({
+  async getActiveOrg() { return org; },
+  async getRole() { return org === null ? null : role; },
+});
 
 function deps(store: FakeWriteStore, over: Partial<WriteApiDeps> = {}): WriteApiDeps {
   return {
@@ -337,5 +341,40 @@ describe('agent-state writes (optimistic concurrency via version)', () => {
     const id = new FakeAgentWriter();
     expect((await run({ store: new FakeWriteStore(), identity: id, membership: membershipFor('org_default'), verifySession: () => null, secureCookies: false }, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(401);
     expect((await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/pause', { body: JSON.stringify({ version: 0 }) }))).statusCode).toBe(403);
+  });
+});
+
+describe('role gate (slice 5b) — additive over the membership/tenant gate', () => {
+  // Task interventions need member+; agent/roster writes need admin+. The gate is on the endpoint.
+  it('a MEMBER may run a task intervention (escalate = member+)', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(deps(store, { membership: membershipFor('org_default', 'member') }), fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(store.calls).toEqual(['escalate:t1']);
+  });
+
+  it('a MEMBER may NOT run a roster/agent write (pause = admin+) → 403, store never touched', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(
+      { store: new FakeWriteStore(), identity: id, membership: membershipFor('org_default', 'member'), verifySession: () => ({ userId: 'u1' }), secureCookies: false },
+      fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) })
+    );
+    expect(r.statusCode).toBe(403); // role gate blocks before the agent write
+  });
+
+  it('an ADMIN may run a roster/agent write (pause = admin+)', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(
+      { store: new FakeWriteStore(), identity: id, membership: membershipFor('org_default', 'admin'), verifySession: () => ({ userId: 'u1' }), secureCookies: false },
+      fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) })
+    );
+    expect(r.statusCode).toBe(200); // role gate passes; the write proceeds
+  });
+
+  it('the role gate is ADDITIVE: no membership (resolveOrg null) still 403s before the role check', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(deps(store, { membership: membershipFor(null) }), fakeReq('POST', '/api/tasks/t1/escalate', { headers: csrf() }));
+    expect(r.statusCode).toBe(403); // membership layer (slice 4) fails closed first
+    expect(store.calls).toEqual([]);
   });
 });

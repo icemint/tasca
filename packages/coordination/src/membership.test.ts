@@ -185,3 +185,112 @@ run('org lifecycle + active-org switcher (Postgres, slice 5a)', () => {
     expect(await repo.getActiveOrg('founder')).toBe(newOrg); // creating switched the active org
   });
 });
+
+run('role matrix + member management (Postgres, slice 5b)', () => {
+  const SCHEMA = 'membership_slice5b_test';
+  let pool: Pool;
+  let repo: PgOrgMembershipRepo;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of AUTH_SCHEMA_DDL) await pool.query(ddl);
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
+    await pool.query(ORG_MEMBERSHIP_TABLE_DDL);
+    await pool.query(USER_ACTIVE_ORG_TABLE_DDL);
+    repo = new PgOrgMembershipRepo(pool);
+    // Users + a 'team' org with one owner + one member.
+    for (const u of ['owner1', 'owner2', 'memb', 'outsider']) {
+      await pool.query(`INSERT INTO app_user (id, email, display_name) VALUES ($1,$2,$3)`, [u, `${u}@x.test`, u]);
+    }
+    await pool.query(`INSERT INTO organization (id,name) VALUES ('team','Team') ON CONFLICT (id) DO NOTHING`);
+    await pool.query(`INSERT INTO org_membership (user_id, org_id, role) VALUES ('owner1','team','owner'),('memb','team','member')`);
+  });
+  afterAll(async () => {
+    await pool?.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`).catch(() => {});
+    await pool?.end();
+  });
+
+  it('getRole returns the role in the org; null for a non-member', async () => {
+    expect(await repo.getRole('owner1', 'team')).toBe('owner');
+    expect(await repo.getRole('memb', 'team')).toBe('member');
+    expect(await repo.getRole('outsider', 'team')).toBeNull();
+  });
+
+  it('listMembers returns the team with roles + emails', async () => {
+    // owner1 + memb were inserted in one statement (same created_at), so the ORDER BY tiebreaks on
+    // user_id → 'memb' before 'owner1'.
+    const members = await repo.listMembers('team');
+    expect(members).toEqual([
+      { userId: 'memb', email: 'memb@x.test', displayName: 'memb', role: 'member' },
+      { userId: 'owner1', email: 'owner1@x.test', displayName: 'owner1', role: 'owner' },
+    ]);
+  });
+
+  it('addMemberByEmail: ok for an existing user, not_found for unknown, already_member for a dup', async () => {
+    expect(await repo.addMemberByEmail('team', 'owner2@x.test', 'admin')).toBe('ok');
+    expect(await repo.getRole('owner2', 'team')).toBe('admin');
+    expect(await repo.addMemberByEmail('team', 'nobody@x.test', 'member')).toBe('not_found');
+    expect(await repo.addMemberByEmail('team', 'memb@x.test', 'admin')).toBe('already_member');
+  });
+
+  it('LAST-OWNER protection: demoting/removing the only owner is REFUSED', async () => {
+    // 'team' currently has exactly one owner (owner1); owner2 is admin, memb is member.
+    expect(await repo.setMemberRole('team', 'owner1', 'admin')).toBe('last_owner');
+    expect(await repo.getRole('owner1', 'team')).toBe('owner'); // unchanged
+    expect(await repo.removeMember('team', 'owner1')).toBe('last_owner');
+    expect(await repo.getRole('owner1', 'team')).toBe('owner'); // still there
+
+    // Promote owner2 to owner → now TWO owners → demoting/removing one is allowed.
+    expect(await repo.setMemberRole('team', 'owner2', 'owner')).toBe('ok');
+    expect(await repo.setMemberRole('team', 'owner1', 'admin')).toBe('ok'); // owner2 still owns it
+    expect(await repo.getRole('owner1', 'team')).toBe('admin');
+  });
+
+  it('removeMember clears the removed user’s active org if it pointed there', async () => {
+    await pool.query(`INSERT INTO organization (id,name) VALUES ('tmp','Tmp') ON CONFLICT (id) DO NOTHING`);
+    await pool.query(`INSERT INTO org_membership (user_id, org_id, role) VALUES ('memb','tmp','member')`);
+    await repo.setActiveOrg('memb', 'tmp');
+    expect(await repo.removeMember('tmp', 'memb')).toBe('ok'); // tmp has no owner, but memb isn't one, so ok
+    const act = await pool.query(`SELECT 1 FROM user_active_org WHERE user_id='memb' AND org_id='tmp'`);
+    expect(act.rowCount).toBe(0); // active pointer cleared → resolveOrg falls back
+  });
+
+  it('role is scoped to the ACTIVE org: owner of A, member of B → owner powers only when A is active', async () => {
+    await pool.query(`INSERT INTO organization (id,name) VALUES ('s_a','A'),('s_b','B') ON CONFLICT (id) DO NOTHING`);
+    await pool.query(`INSERT INTO org_membership (user_id, org_id, role) VALUES ('outsider','s_a','owner'),('outsider','s_b','member')`);
+    await repo.setActiveOrg('outsider', 's_a');
+    const orgA = await resolveOrg(repo, { userId: 'outsider' });
+    expect(orgA).toBe('s_a');
+    expect(await repo.getRole('outsider', orgA!)).toBe('owner'); // owner when A is active
+
+    await repo.setActiveOrg('outsider', 's_b');
+    const orgB = await resolveOrg(repo, { userId: 'outsider' });
+    expect(orgB).toBe('s_b');
+    expect(await repo.getRole('outsider', orgB!)).toBe('member'); // only member when B is active
+  });
+
+  it('CONCURRENT owner-demotion is serialized (no deadlock/500): exactly one succeeds, the org keeps an owner', async () => {
+    // Two owners; fire both demotions at once. The per-org advisory lock serializes them, so one
+    // commits ('ok') and the other sees the last-owner guard ('last_owner') — never a deadlock (the
+    // old row-lock approach could 40P01 → spurious 500), and never zero owners.
+    for (const u of ['cc1', 'cc2']) {
+      await pool.query(`INSERT INTO app_user (id, email, display_name) VALUES ($1,$2,$3)`, [u, `${u}@x.test`, u]);
+    }
+    await pool.query(`INSERT INTO organization (id,name) VALUES ('cc','CC') ON CONFLICT (id) DO NOTHING`);
+    await pool.query(`INSERT INTO org_membership (user_id, org_id, role) VALUES ('cc1','cc','owner'),('cc2','cc','owner')`);
+
+    const [r1, r2] = await Promise.all([
+      repo.setMemberRole('cc', 'cc1', 'member'),
+      repo.setMemberRole('cc', 'cc2', 'member'),
+    ]);
+    expect([r1, r2].filter((r) => r === 'ok')).toHaveLength(1); // exactly one demote committed
+    expect([r1, r2].filter((r) => r === 'last_owner')).toHaveLength(1); // the other was refused
+    const owners = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM org_membership WHERE org_id='cc' AND role='owner'`);
+    expect(Number(owners.rows[0]!.n)).toBe(1); // org still has exactly one owner — never stranded
+  });
+});

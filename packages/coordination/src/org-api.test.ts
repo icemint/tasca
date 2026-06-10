@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
-import type { OrgMembershipRepo, UserOrgSummary } from './membership';
+import type { OrgMembershipRepo, OrgRole, OrgMemberSummary, MemberWriteOutcome, UserOrgSummary } from './membership';
 
 // ── fakes (real state, no mocking framework) ─────────────────────────────────
 
@@ -10,6 +10,13 @@ class FakeOrgRepo implements OrgMembershipRepo {
   private members = new Set<string>();
   created: Array<{ userId: string; name: string }> = [];
   switched: Array<{ userId: string; orgId: string }> = [];
+  // role of the CALLER (userId 'u1') in the active org — drives the 5b owner gate.
+  callerRole: OrgRole = 'owner';
+  membersList: OrgMemberSummary[] = [];
+  added: Array<{ orgId: string; email: string; role: OrgRole }> = [];
+  roleChanges: Array<{ orgId: string; userId: string; role: OrgRole }> = [];
+  removed: Array<{ orgId: string; userId: string }> = [];
+  nextMemberOutcome: MemberWriteOutcome = 'ok';
 
   addMember(userId: string, orgId: string) {
     this.members.add(`${userId}:${orgId}`);
@@ -32,6 +39,24 @@ class FakeOrgRepo implements OrgMembershipRepo {
   }
   async setActiveOrg(userId: string, orgId: string) {
     this.switched.push({ userId, orgId });
+  }
+  async getRole() {
+    return this.callerRole;
+  }
+  async listMembers() {
+    return this.membersList;
+  }
+  async addMemberByEmail(orgId: string, email: string, role: OrgRole) {
+    this.added.push({ orgId, email, role });
+    return this.nextMemberOutcome;
+  }
+  async setMemberRole(orgId: string, userId: string, role: OrgRole) {
+    this.roleChanges.push({ orgId, userId, role });
+    return this.nextMemberOutcome;
+  }
+  async removeMember(orgId: string, userId: string) {
+    this.removed.push({ orgId, userId });
+    return this.nextMemberOutcome;
   }
 }
 
@@ -162,5 +187,67 @@ describe('POST /api/active-org — switch (authz by membership)', () => {
     const r = await run(deps(repo), fakeReq('POST', '/api/active-org', { headers: csrf(), body: JSON.stringify({}) }));
     expect(r.statusCode).toBe(400);
     expect(repo.switched).toEqual([]);
+  });
+});
+
+describe('member management — OWNER-gated (slice 5b)', () => {
+  it('GET /api/orgs/members lists the team (any member)', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    repo.membersList = [{ userId: 'u1', email: 'a@x', displayName: 'A', role: 'owner' }];
+    const r = await run(deps(repo), fakeReq('GET', '/api/orgs/members'));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).members).toHaveLength(1);
+  });
+
+  it('an OWNER can add a member by email + role', async () => {
+    const repo = new FakeOrgRepo(); // callerRole defaults to owner
+    const r = await run(deps(repo), fakeReq('POST', '/api/orgs/members', { headers: csrf(), body: JSON.stringify({ email: 'new@x', role: 'admin' }) }));
+    expect(r.statusCode).toBe(200);
+    expect(repo.added).toEqual([{ orgId: 'org_default', email: 'new@x', role: 'admin' }]);
+  });
+
+  it('PRIV-ESC BLOCK: a MEMBER cannot add a member (403) — the gate is on the endpoint, not the UI', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    const r = await run(deps(repo), fakeReq('POST', '/api/orgs/members', { headers: csrf(), body: JSON.stringify({ email: 'evil@x', role: 'owner' }) }));
+    expect(r.statusCode).toBe(403);
+    expect(repo.added).toEqual([]); // never reached the repo
+  });
+
+  it('PRIV-ESC BLOCK: a MEMBER cannot change a role (403) — no self-promotion path', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    const r = await run(deps(repo), fakeReq('POST', '/api/orgs/members/u1/role', { headers: csrf(), body: JSON.stringify({ role: 'owner' }) }));
+    expect(r.statusCode).toBe(403);
+    expect(repo.roleChanges).toEqual([]);
+  });
+
+  it('an ADMIN cannot manage members either (owner-only) — 403', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'admin';
+    const r = await run(deps(repo), fakeReq('DELETE', '/api/orgs/members/u2', { headers: csrf() }));
+    expect(r.statusCode).toBe(403);
+    expect(repo.removed).toEqual([]);
+  });
+
+  it('an OWNER changes a role; a last-owner refusal maps to 409', async () => {
+    const repo = new FakeOrgRepo();
+    const ok = await run(deps(repo), fakeReq('POST', '/api/orgs/members/u2/role', { headers: csrf(), body: JSON.stringify({ role: 'admin' }) }));
+    expect(ok.statusCode).toBe(200);
+    expect(repo.roleChanges).toEqual([{ orgId: 'org_default', userId: 'u2', role: 'admin' }]);
+
+    const repo2 = new FakeOrgRepo();
+    repo2.nextMemberOutcome = 'last_owner';
+    const refused = await run(deps(repo2), fakeReq('DELETE', '/api/orgs/members/u-owner', { headers: csrf() }));
+    expect(refused.statusCode).toBe(409);
+    expect(JSON.parse(refused.body).code).toBe('last_owner');
+  });
+
+  it('400 on an invalid role value (never reaches the repo)', async () => {
+    const repo = new FakeOrgRepo();
+    const r = await run(deps(repo), fakeReq('POST', '/api/orgs/members', { headers: csrf(), body: JSON.stringify({ email: 'x@x', role: 'superuser' }) }));
+    expect(r.statusCode).toBe(400);
+    expect(repo.added).toEqual([]);
   });
 });

@@ -20,7 +20,8 @@ import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity'
 import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
-import { resolveOrg, type OrgMembershipReader } from './resolve-org';
+import { resolveOrg } from './resolve-org';
+import { atLeast, type OrgRole, type RoleReader } from './membership';
 import { sendJson, readJsonBody, issueCsrfToken, verifyCsrf } from './http-util';
 
 /** The agent-write surface the write-API needs (a subset of PgIdentityRepository). */
@@ -44,11 +45,12 @@ export interface WriteApiDeps {
   store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask' | 'interruptTask'>;
   /** Agent-state writes (pause/resume/edit-profile). Absent → those routes 404. */
   identity?: AgentWriter;
-  /** Resolves a verified session's user to their org (slice 4 RBAC). A user with no membership
-   *  resolves to null → the write fails closed (403). With the org-scoped store writes, this also
-   *  blocks cross-tenant mutation: a member of org A acting on a B-task resolves to A, and the
-   *  org-scoped UPDATE then misses (404) — a user can only ever mutate their own org's tasks. */
-  membership: OrgMembershipReader;
+  /** Resolves a verified session's user to their org (slice 4 RBAC) AND their role in it (slice 5b).
+   *  Membership (resolveOrg → the active org) is the tenant boundary: a member of org A acting on a
+   *  B-task resolves to A and the org-scoped UPDATE misses (404). The ROLE then gates the action
+   *  WITHIN the org (getRole): task interventions need member+, roster writes need admin+. Both
+   *  layers are server-side and additive — neither bypasses the other. */
+  membership: RoleReader;
   /** Verify the request's session (same contract as the read API). */
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
   /** Fail-closed escape hatch — when no verifier is wired, refuse (503) unless this
@@ -70,6 +72,20 @@ type WriteRoute =
   | { kind: 'pause'; id: string }
   | { kind: 'resume'; id: string }
   | { kind: 'profile'; id: string };
+
+/**
+ * The minimum role each gated write requires (slice 5b). Task interventions are a member-level
+ * action; agent/roster writes (pause/resume/edit-profile) are roster management → admin+.
+ */
+const WRITE_ROUTE_MIN_ROLE: Record<Exclude<WriteRoute, { kind: 'csrf' }>['kind'], OrgRole> = {
+  escalate: 'member',
+  retier: 'member',
+  reassign: 'member',
+  interrupt: 'member',
+  pause: 'admin',
+  resume: 'admin',
+  profile: 'admin',
+};
 
 function matchWriteRoute(method: string, path: string): WriteRoute | null {
   if (method === 'GET' && path === '/api/csrf') return { kind: 'csrf' };
@@ -184,6 +200,18 @@ export async function writeApiHandler(
   if (!verifyCsrf(req)) {
     sendJson(res, 403, { error: 'missing or invalid CSRF token' });
     return true;
+  }
+
+  // ── role gate (slice 5b) — ADDITIVE over the membership/tenant gate above ────
+  // Membership (resolveOrg) already proved the user belongs to `orgId`; now check their ROLE in
+  // that org meets the action's minimum. Authenticated requests only — the dev/no-auth path
+  // (session null, allowUnauthenticated) keeps full access, consistent with resolveOrg's DEFAULT.
+  if (session) {
+    const role = await deps.membership.getRole(session.userId, orgId);
+    if (role === null || !atLeast(role, WRITE_ROUTE_MIN_ROLE[route.kind])) {
+      sendJson(res, 403, { error: 'insufficient role for this action' });
+      return true;
+    }
   }
 
   try {
