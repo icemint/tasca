@@ -763,11 +763,12 @@ Principle: every command must be runnable from a fresh clone without further set
 
 ### 19.4 Current release pointers
 
-- **Live version:** none — pre-build (greenfield after the pivot).
-- **In flight:** Stage 1 — Foundation + Shortcut + Claude (prove the wedge). Advance benchmark: a Story assigned to *Elvis* reliably yields a reviewed PR under the agent's native identity, end-to-end, in one project.
+- **Live version:** none — pre-release (no tagged version yet; substantial build complete — engine + GitHub adapter + Wave-2 multi-tenancy shipped).
+- **In flight:** Wave 3 — remaining PRD surfaces (PM-assistant, Shortcut parity, Linear adapter, usage metering/billing, audit/keys). Stages 1–2 shipped (GitHub is the reference adapter, end-to-end); Waves 1–2 complete (security gate + multi-tenancy through #258). Stage-1 advance benchmark (Story → reviewed PR under native identity) met on GitHub.
 - **PRD:** ./docs/Tasca-PRD-v1.0-FINAL.md *(canonical — what the product does)*
 - **Design brief:** ./docs/Tasca-Design-Brief-v1.0.md *(canonical — how it looks/feels)*
-- **Roadmap:** PRD §8 (phased delivery, Stages 1–5) — promote to ./docs/ROADMAP.md when build starts.
+- **Definition of done:** ./docs/PRD-Completion-Gap-Analysis.md *(the full-completion checklist + Wave 3/4 slice plan, signed off 2026-06-10)*
+- **Roadmap:** the gap analysis Part C is the de-facto wave roadmap; PRD §8 holds the original Stages 1–5.
 - **CHANGELOG:** ./CHANGELOG.md *(not yet created)*
 - **WIP file:** ./WIP.md
   - *Only exists when a session ended mid-task; deleted on next merge. See §17.1.*

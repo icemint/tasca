@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-06-10
 - **Deciders:** maintainer
-- **Slices:** 3a (#249), 3b-1 (#250), 3b-2 (#251), 3c (#253), slice 4 (#254 — RBAC, `resolveOrg` = real membership lookup) — shipped; slice 5 onboarding in progress (5a — `resolveOrg` resolves the validated *active* org from `user_active_org`; auto personal org at login; active-org switcher)
+- **Slices:** 3a (#249), 3b-1 (#250), 3b-2 (#251), 3c (#253), slice 4 (#254 — RBAC, `resolveOrg` = real membership lookup), slice 5 onboarding (5a #255 — validated active-org from `user_active_org` + auto personal org + active-org switcher; 5b #256 — per-action role matrix owner/admin/member; 5c #257 — GitHub workspace→org connect via App install; 5d #258 — org_agent roster + org-scoped routing filter + `agent:<name>` intake) — all shipped. Wave-2 multi-tenancy arc complete.
 
 ## Context
 
