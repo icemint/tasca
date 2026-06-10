@@ -132,6 +132,16 @@ class FakeStore implements CoordinationStore {
   async revokeInstallationByAccount() {
     return false;
   }
+  retireCalls: Array<{ taskId: string; reason: string }> = [];
+  async retireUnroutable(_orgId: string, taskId: string, reason: string): Promise<boolean> {
+    this.retireCalls.push({ taskId, reason });
+    const t = this.tasks.get(taskId);
+    if (!t || t.status !== 'routable') return false;
+    t.status = 'needs_attention';
+    t.lastError = reason;
+    t.version += 1;
+    return true;
+  }
   async recordRoutingDecision(_orgId: string, input: { taskId: string; winnerAgentId: string | null }) {
     this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
   }
@@ -308,9 +318,23 @@ function elvisProfile(overrides: Partial<CapabilityProfile> = {}): CapabilityPro
 }
 
 class FakeDirectory implements AgentDirectory {
-  constructor(private readonly candidates: MatchCandidate[]) {}
+  // `names` maps agentId → display name. The real directory resolves a label by NAME (the roster
+  // JOINs `agent` on lower(name)=lower($2)); the fake mirrors that — match by name, case-insensitive,
+  // ONLY within the candidate (hired) set. CapabilityProfile carries no name, so the map supplies it.
+  constructor(
+    private readonly candidates: MatchCandidate[],
+    private readonly names: Record<string, string> = {}
+  ) {}
   async listCandidates() {
     return this.candidates;
+  }
+  async findHiredAgentByName(_orgId: string, name: string) {
+    const lower = name.toLowerCase();
+    for (const c of this.candidates) {
+      const display = this.names[c.profile.agentId];
+      if (display && display.toLowerCase() === lower) return c.profile.agentId;
+    }
+    return null;
   }
   async principalIdFor(agentId: string) {
     return `prn_${agentId}`;
@@ -337,6 +361,8 @@ function makeDeps(opts: {
   status: FakeStatus;
   audit: FakeAudit;
   candidates?: MatchCandidate[];
+  content?: TaskContentSource;
+  names?: Record<string, string>;
 }): OrchestrationDeps {
   const candidates = opts.candidates ?? [{ profile: elvisProfile(), state: 'idle', activeCount: 0 }];
   return {
@@ -344,10 +370,15 @@ function makeDeps(opts: {
     claim: new FakeClaimPort(opts.store),
     execution: opts.execution,
     status: opts.status,
-    directory: new FakeDirectory(candidates),
+    directory: new FakeDirectory(candidates, opts.names),
     audit: opts.audit,
-    content,
+    content: opts.content ?? content,
   };
+}
+
+/** A content source that also surfaces labels (slice 5d intake — `agent:<name>` override). */
+function labeledContent(labels: string[]): TaskContentSource {
+  return { async fetch() { return { title: 'Fix the thing', body: 'a short task', labels }; } };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -447,15 +478,21 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     expect(outcome.kind).toBe('dispatched'); // shortcut keeps the documented default, not fail-closed
   });
 
-  it('empty roster → no_candidate, no dispatch, decision still persisted', async () => {
+  it('empty roster (no agents hired) → no_roster, retired to needs_attention, decision persisted', async () => {
     const outcome = await orchestrateTaskAssigned(
       EVENT,
       makeDeps({ store, execution, status, audit, candidates: [] })
     );
-    expect(outcome.kind).toBe('no_candidate');
-    if (outcome.kind !== 'no_candidate') return;
+    expect(outcome.kind).toBe('no_roster');
+    if (outcome.kind !== 'no_roster') return;
     expect(execution.spawnCalls).toBe(0);
-    // The routing decision is still persisted (inspector sees a no-winner attempt).
+    // Fail closed honestly: the task is retired to needs_attention with an explicit reason,
+    // never crashed and never routed to a default agent.
+    expect(store.retireCalls).toEqual([{ taskId: outcome.taskId, reason: 'no agents hired' }]);
+    const task = store.tasks.get(outcome.taskId)!;
+    expect(task.status).toBe('needs_attention');
+    expect(task.lastError).toBe('no agents hired');
+    // The routing decision is still persisted (inspector sees a no-winner, empty-candidate attempt).
     expect(store.routingDecisions).toHaveLength(1);
     expect(store.routingDecisions[0]!.winnerAgentId).toBeNull();
   });
@@ -473,6 +510,78 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     );
     expect(outcome.kind).toBe('no_candidate');
     expect(execution.spawnCalls).toBe(0);
+  });
+});
+
+describe('orchestrateTaskAssigned — assignment intake: agent:<name> label (§5d)', () => {
+  let store: FakeStore;
+  let execution: FakeExecution;
+  let status: FakeStatus;
+  let audit: FakeAudit;
+  beforeEach(() => {
+    store = new FakeStore();
+    execution = new FakeExecution();
+    status = new FakeStatus();
+    audit = new FakeAudit();
+  });
+
+  // Two hired candidates: elvis ranks higher (success 0.9), mona lower (success 0.6).
+  const twoHired: MatchCandidate[] = [
+    { profile: elvisProfile(), state: 'idle', activeCount: 0 },
+    { profile: elvisProfile({ agentId: 'agent-mona', successRate: 0.6 }), state: 'idle', activeCount: 0 },
+  ];
+  // agentId → display NAME (labels resolve by name, like the real roster's JOIN on agent.name).
+  const names = { 'agent-elvis': 'Elvis', 'agent-mona': 'Mona' };
+
+  it('label naming a HIRED agent overrides the routing pick → dispatched to that agent', async () => {
+    // Routing alone would pick elvis (higher score); the `agent:Mona` label (by NAME) overrides to mona.
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: twoHired, names, content: labeledContent(['agent:Mona']) })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.agentId).toBe('agent-mona');
+    expect(store.routingDecisions[0]!.winnerAgentId).toBe('agent-mona');
+    expect(store.retireCalls).toEqual([]); // a hired label is not a fail-close
+  });
+
+  it('label resolves the name case-insensitively within the hired set', async () => {
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: twoHired, names, content: labeledContent(['agent:mONa']) })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.agentId).toBe('agent-mona');
+  });
+
+  it('label naming an UNHIRED agent fails closed → agent_not_hired, retired to needs_attention, no route', async () => {
+    // 'Qwen' is NOT in the hired candidate set — the label must NOT bypass the boundary.
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: twoHired, names, content: labeledContent(['agent:Qwen']) })
+    );
+    expect(outcome.kind).toBe('agent_not_hired');
+    if (outcome.kind !== 'agent_not_hired') return;
+    expect(execution.spawnCalls).toBe(0); // never routed to an unhired agent
+    expect(store.retireCalls).toEqual([{ taskId: outcome.taskId, reason: "requested agent 'Qwen' is not hired" }]);
+    const task = store.tasks.get(outcome.taskId)!;
+    expect(task.status).toBe('needs_attention');
+    expect(task.lastError).toBe("requested agent 'Qwen' is not hired");
+    // The decision is persisted with no winner (an honest, inspectable unhired-label attempt).
+    expect(store.routingDecisions).toHaveLength(1);
+    expect(store.routingDecisions[0]!.winnerAgentId).toBeNull();
+  });
+
+  it('no label → routing-by-default picks the top eligible hired agent', async () => {
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: twoHired })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.agentId).toBe(ELVIS); // the routing engine's top pick, no override
   });
 });
 

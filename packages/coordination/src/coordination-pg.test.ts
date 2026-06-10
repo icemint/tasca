@@ -120,6 +120,11 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
         const profile = await identity.getCapabilityProfile(agentId);
         return profile ? [{ profile, state: 'idle', activeCount: 0 }] : [];
       },
+      async findHiredAgentByName(_orgId: string, name: string) {
+        // Resolve by NAME (case-insensitive), mirroring the real roster's JOIN on agent.name.
+        const a = await identity.getAgentWithProfile(agentId);
+        return a && a.agent.name.toLowerCase() === name.toLowerCase() ? agentId : null;
+      },
       async principalIdFor(id: string) {
         const su = await identity.getServiceUser(id);
         return su?.principalId ?? null;

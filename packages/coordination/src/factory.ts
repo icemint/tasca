@@ -14,6 +14,7 @@ import type { LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
+import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
@@ -70,25 +71,29 @@ export interface CreateCoordinationDeps {
 }
 
 /**
- * An AgentDirectory backed by @tasca/identity capability profiles. Stage-1
- * single-agent: it surfaces the agents the host registered. The activeCount /
- * live state are coordination concerns; here they default to idle/0 and the host
- * can refine later (the routing functions already take them as inputs).
+ * An AgentDirectory backed by @tasca/identity capability profiles, scoped to the org's ROSTER
+ * (slice 5d). listCandidates returns ONLY the agents the org has hired (org_agent) — a global agent
+ * the org hasn't hired is structurally absent, so routing can never pick it. The activeCount / live
+ * state default to idle/0 (the routing functions take them as inputs; the host can refine later).
  */
 class IdentityAgentDirectory implements AgentDirectory {
   constructor(
     private readonly identity: PgIdentityRepository,
-    private readonly agentIds: string[]
+    private readonly roster: OrgRosterRepo
   ) {}
 
-  async listCandidates(_task: Task) {
+  async listCandidates(orgId: string, _task: Task) {
     const out = [];
-    for (const agentId of this.agentIds) {
+    for (const agentId of await this.roster.hiredAgentIds(orgId)) {
       const profile = await this.identity.getCapabilityProfile(agentId);
       if (!profile) continue;
       out.push({ profile, state: 'idle' as const, activeCount: 0 });
     }
     return out;
+  }
+
+  async findHiredAgentByName(orgId: string, name: string): Promise<string | null> {
+    return this.roster.findHiredAgentByName(orgId, name);
   }
 
   async principalIdFor(agentId: string): Promise<string | null> {
@@ -142,8 +147,11 @@ export function createCoordination(
   // The membership repo (slice 4 + 5a). Backs resolveOrg (the active org → tenant boundary) AND the
   // org-management API (list/create/switch + the login-time ensurePersonalOrg).
   const membership = new PgOrgMembershipRepo(input.pool);
+  // The org roster (slice 5d): which agents each org has hired. Backs the org-scoped routing
+  // candidate filter AND the hire/unhire API.
+  const roster = new PgOrgRosterRepo(input.pool);
   const identity = new PgIdentityRepository(input.pool);
-  const directory = new IdentityAgentDirectory(identity, input.agentIds);
+  const directory = new IdentityAgentDirectory(identity, roster);
   const audit = new IdentityAuditSink(identity);
   // One queue instance shared by the dispatch path (enqueue/cancel) and the reaper
   // (sweep/finalize) so they operate on the same table wiring.
@@ -179,6 +187,7 @@ export function createCoordination(
     // org-scoped (it operates on the membership layer that decides the active org).
     orgApi: {
       membership,
+      roster,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
