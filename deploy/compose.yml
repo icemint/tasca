@@ -33,11 +33,12 @@ services:
       timeout: 3s
       retries: 10
 
-  # The trusted worker: coordination HTTP + the credential broker + the reaper + the
-  # in-process execution fallback. Holds the GitHub App master key. On `frontend` (it
-  # needs the internet for the GitHub App API + Shortcut + serving webhooks) and
-  # `backend` (the DB). It runs the broker with the RUNNER's gid (group 10001) so the
-  # 0o660 socket is group-connectable by the non-root runner.
+  # The trusted worker: coordination HTTP + the credential broker + the Anthropic
+  # credential proxy + the reaper. Holds BOTH master keys (the GitHub App key and the
+  # Anthropic key); neither crosses to the runner. On `frontend` (it needs the internet
+  # for the GitHub App API + Shortcut + webhooks + the Anthropic proxy's HTTPS leg) and
+  # `backend` (the DB). It runs the broker + proxy with the RUNNER's gid (group 10001) so
+  # the 0o660 sockets are group-connectable by the non-root runner.
   worker:
     build:
       context: ..
@@ -49,10 +50,14 @@ services:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-pg}@postgres:5432/tasca
       TASCA_BROKER_SOCKET: /run/tasca/broker.sock
       TASCA_DISPATCH_MODE: queue # enqueue for the runner + run the reaper
+      # The worker holds the Anthropic key and runs the credential proxy on a unix socket;
+      # the key is injected worker-side on the HTTPS leg to Anthropic and never crosses to
+      # the runner (which has only the keyless bridge — note: NO ANTHROPIC_API_KEY below).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TASCA_ANTHROPIC_PROXY_SOCKET: /run/tasca/anthropic.sock
     volumes:
       - worker-data:/data
-      - broker-sock:/run/tasca # the broker socket, shared with the runner
+      - broker-sock:/run/tasca # the broker + anthropic-proxy sockets, shared with the runner
     networks:
       - frontend
       - backend
@@ -86,15 +91,18 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-pg}@postgres:5432/tasca
       TASCA_BROKER_SOCKET: /run/tasca/broker.sock
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Force agent toolchain (git/gh/claude) through the allowlist proxy. The network
-      # boundary is the HARD control; this is the cooperative default for the allowed hosts.
+      # NO ANTHROPIC_API_KEY here — the hard gate. The runner reaches Anthropic ONLY through
+      # the keyless bridge to the worker's proxy socket; the worker injects the real key.
+      TASCA_ANTHROPIC_PROXY_SOCKET: /run/tasca/anthropic.sock
+      # Force agent toolchain (git/gh) through the allowlist proxy. The network boundary is
+      # the HARD control; this is the cooperative default for the allowed hosts. The agent's
+      # model calls go via 127.0.0.1 (the bridge, in NO_PROXY) → the worker, not this proxy.
       HTTPS_PROXY: http://egress-proxy:8888
       HTTP_PROXY: http://egress-proxy:8888
       NO_PROXY: postgres,localhost,127.0.0.1
     volumes:
       - runner-data:/data
-      - broker-sock:/run/tasca # connect to the broker socket (group 10001, 0o660)
+      - broker-sock:/run/tasca # the broker + anthropic-proxy sockets (group 10001, 0o660)
     networks:
       - backend # the dispatch queue (Postgres) — internal, no internet
       - runner-egress # the proxy — internal, no internet

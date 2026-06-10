@@ -126,10 +126,17 @@ const AGENT_ENV_ALLOWLIST = [
   'LC_CTYPE',
   'TZ',
   'TMPDIR',
-  'ANTHROPIC_API_KEY',
+  // ANTHROPIC_API_KEY is DELIBERATELY NOT allowlisted — the real key must never flow to
+  // the prompt-injected agent. It is supplied per-mode below (proxy → placeholder; direct
+  // dev/no-queue → the real key, an explicit legacy passthrough).
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CONFIG_DIR',
 ];
+
+// A non-functional placeholder so the Claude CLI starts when redirected to the Anthropic
+// proxy (which supplies the real auth worker-side). The proxy STRIPS any client x-api-key,
+// so this value is never used for auth and is harmless if read by the agent.
+const ANTHROPIC_PROXY_PLACEHOLDER_KEY = 'sk-ant-proxy-placeholder-not-a-real-key';
 
 // The vendor's PTY control flag — read INSIDE startLifecyclePty (not a secret).
 // Preserved through the scrub below so an operator's PTY toggle still takes effect.
@@ -299,6 +306,17 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
       agentEnv.CLAUDE_CONFIG_DIR = path.join(agentHome, '.claude');
       // input.env still wins (a test/operator escape hatch); no production caller sets HOME.
       Object.assign(agentEnv, input.env ?? {});
+      // Anthropic credential, two modes (NEVER the real key to a proxied agent):
+      //  - PROXY mode (ANTHROPIC_BASE_URL set → the runner points the agent at the keyless
+      //    bridge): inject only a placeholder; the real key is supplied worker-side by the
+      //    proxy. The real ANTHROPIC_API_KEY is never read into the agent env here.
+      //  - DIRECT mode (no base url → dev/no-queue in-process): pass the real key through,
+      //    an explicit legacy passthrough (the allowlist no longer carries it).
+      if (agentEnv.ANTHROPIC_BASE_URL && agentEnv.ANTHROPIC_API_KEY === undefined) {
+        agentEnv.ANTHROPIC_API_KEY = ANTHROPIC_PROXY_PLACEHOLDER_KEY;
+      } else if (!agentEnv.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_API_KEY) {
+        agentEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+      }
       let homeRemoved = false;
       const cleanupHome = (): void => {
         if (homeRemoved) return;

@@ -307,11 +307,12 @@ describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () 
     return { port, envOf: () => captured };
   }
 
-  it('omits inherited worker secrets but keeps PATH + the Anthropic auth the CLI reads', () => {
+  it('omits inherited worker secrets but keeps PATH; DIRECT mode (no proxy) passes the real Anthropic key', () => {
     setEnv('GITHUB_APP_PRIVATE_KEY', '-----BEGIN PRIVATE KEY-----');
     setEnv('DATABASE_URL', 'postgres://secret@db/app');
     setEnv('PATH', '/usr/bin:/bin');
-    setEnv('ANTHROPIC_API_KEY', 'sk-ant-xxx'); // the keep-list is pinned, not just the deny-list
+    setEnv('ANTHROPIC_API_KEY', 'sk-ant-xxx');
+    setEnv('ANTHROPIC_BASE_URL', undefined); // no proxy → direct mode (dev/no-queue)
 
     const { port, envOf } = captureEnv();
     port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
@@ -320,7 +321,29 @@ describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () 
     expect(env.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.PATH).toBe('/usr/bin:/bin'); // non-secret essentials still flow
-    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-xxx'); // dropping this would break agent auth
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-xxx'); // direct mode: the real key passes (legacy)
+  });
+
+  it('PROXY mode: with ANTHROPIC_BASE_URL set, the agent gets a PLACEHOLDER key — the real key NEVER flows', () => {
+    setEnv('ANTHROPIC_API_KEY', 'sk-ant-REAL-MUST-NOT-LEAK');
+    setEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:8787'); // the runner points at the keyless bridge
+
+    const { port, envOf } = captureEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
+
+    const env = envOf()!;
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:8787'); // redirected to the proxy
+    expect(env.ANTHROPIC_API_KEY).not.toBe('sk-ant-REAL-MUST-NOT-LEAK'); // the REAL key is gone
+    expect(env.ANTHROPIC_API_KEY).toContain('placeholder'); // only the non-functional placeholder
+    // The hard gate: the real key appears NOWHERE in the agent env.
+    expect(JSON.stringify(env)).not.toContain('sk-ant-REAL-MUST-NOT-LEAK');
+  });
+
+  it('PROXY mode placeholder does not override a caller-supplied key (input.env escape hatch wins)', () => {
+    setEnv('ANTHROPIC_BASE_URL', 'http://127.0.0.1:8787');
+    const { port, envOf } = captureEnv();
+    port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi', env: { ANTHROPIC_API_KEY: 'explicit-test-key' } });
+    expect(envOf()!.ANTHROPIC_API_KEY).toBe('explicit-test-key');
   });
 
   // The capstone's real guarantee: the vendor reads the GLOBAL process.env directly
