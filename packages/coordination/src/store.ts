@@ -284,6 +284,21 @@ export interface CoordinationStore {
    */
   getInstallationIdForOwner(owner: string): Promise<string | null>;
 
+  /**
+   * Confirm an install (slice 5c install webhook): update the GitHub connection's installation_id +
+   * mark it healthy, matched by account login. CROSS-ORG by account (the account is globally unique
+   * across tenants — a GitHub account installs the App once); it does NOT bind org_id (the connect
+   * CALLBACK owns the org binding via the nonce). A no-op when no connection exists yet (the callback
+   * will create it). Returns true if it updated a row.
+   */
+  updateInstallationByAccount(account: string, installationId: string): Promise<boolean>;
+
+  /**
+   * Revoke a GitHub connection on uninstall (slice 5c): mark it `revoked`, matched by account login.
+   * Cross-org by account. The org binding row stays (auditable) but health=revoked stops resolution.
+   */
+  revokeInstallationByAccount(account: string): Promise<boolean>;
+
   // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────
   // These DISCOVER which org a request/job belongs to, so they cannot themselves be
   // org-scoped. Each returns null when nothing matches; the EDGE (orchestrate / reaper /
@@ -756,10 +771,30 @@ export class PgCoordinationStore implements CoordinationStore {
     // workspace_id) across all tenants, so this resolves regardless of org.
     const res = await this.db.query<{ installation_id: string | null }>(
       `SELECT installation_id FROM platform_connection
-        WHERE platform = 'github' AND workspace_id = $1`,
+        WHERE platform = 'github' AND workspace_id = $1 AND health <> 'revoked'`,
       [owner]
     );
     return res.rows[0]?.installation_id ?? null;
+  }
+
+  async updateInstallationByAccount(account: string, installationId: string): Promise<boolean> {
+    // Confirmation only (slice 5c) — refresh installation_id + health by account; never touches
+    // org_id (the connect callback binds that). Cross-org by the globally-unique GitHub account.
+    const res = await this.db.query(
+      `UPDATE platform_connection SET installation_id = $2, health = 'healthy'
+        WHERE platform = 'github' AND workspace_id = $1`,
+      [account, installationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async revokeInstallationByAccount(account: string): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE platform_connection SET health = 'revoked'
+        WHERE platform = 'github' AND workspace_id = $1`,
+      [account]
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────
@@ -769,10 +804,11 @@ export class PgCoordinationStore implements CoordinationStore {
     workspaceId: string
   ): Promise<string | null> {
     // Discover the org that owns a workspace's connection (webhook → org). Unscoped by
-    // design: it is resolving WHICH org, so it cannot already be org-scoped. null = no
-    // connection (the webhook edge maps that to the default org).
+    // design: it is resolving WHICH org, so it cannot already be org-scoped. A REVOKED connection
+    // does NOT resolve (slice 5c) — an uninstalled/revoked account's webhooks must fail closed, not
+    // keep running in the formerly-bound tenant. null = no live connection.
     const res = await this.db.query<{ org_id: string }>(
-      `SELECT org_id FROM platform_connection WHERE platform = $1 AND workspace_id = $2`,
+      `SELECT org_id FROM platform_connection WHERE platform = $1 AND workspace_id = $2 AND health <> 'revoked'`,
       [platform, workspaceId]
     );
     return res.rows[0]?.org_id ?? null;

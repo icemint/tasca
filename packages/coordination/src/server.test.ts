@@ -26,8 +26,11 @@ class CountingStore implements CoordinationStore {
     return this.ledger.get(`${platform}:${externalEventId}`);
   }
 
+  // A connected workspace (slice 5c): returns the bound org. The webhook tests exercise the
+  // connected happy path; an unconnected github workspace (null) would fail closed (its own test).
+  connectionOrg: string | null = 'org_default';
   async getOrgForConnection(_platform: Task['platform'], _workspaceId: string) {
-    return null;
+    return this.connectionOrg;
   }
   async getOrgForTask(_taskId: string) {
     return 'org_default';
@@ -86,6 +89,8 @@ class CountingStore implements CoordinationStore {
   async failNoCapacity(): Promise<boolean> { return false; }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() { return null; }
+  async updateInstallationByAccount() { return false; }
+  async revokeInstallationByAccount() { return false; }
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
   async getRoutingDecisionForTask() { return null; }
@@ -355,6 +360,26 @@ describe('coordination HTTP entry (node:http handler)', () => {
     await flush();
     expect(store.createdTasks).toBe(1);
     expect(store.ledgerStatus('github', 'gh-delivery-1')).toBe('processed');
+  });
+
+  it('FAIL-CLOSED: a github webhook for an UNCONNECTED workspace is dropped (202, no ledger, no orchestration)', async () => {
+    const store = new CountingStore();
+    store.connectionOrg = null; // the github workspace has no platform_connection
+    const work: Array<() => Promise<void>> = [];
+    const ghEvent: AdapterEvent = {
+      type: 'task.assigned', platform: 'github', externalStoryId: 'stranger/repo#1', agentExternalId: '5550001',
+    };
+    const ghVerifier: WebhookVerifier = {
+      verify: () => ({ platform: 'github', externalEventId: 'gh-unbound-1', payload: {} }),
+      parse: () => [ghEvent],
+    };
+    const handle = createRequestHandler(makeServerDeps(store, verifierFor('sc-x'), (w) => work.push(w), undefined, ghVerifier));
+    const r = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/github', '{"x":1}'), r.res);
+    expect(r.statusCode).toBe(202); // acked so GitHub doesn't retry-storm
+    expect(work).toHaveLength(0); // nothing scheduled — not orchestrated
+    expect(store.createdTasks).toBe(0); // no task in the default org
+    expect(store.ledgerStatus('github', 'gh-unbound-1')).toBeUndefined(); // no ledger row
   });
 
   it('GET /api/auth/* → 404 when no auth handler is wired (flag OFF)', async () => {

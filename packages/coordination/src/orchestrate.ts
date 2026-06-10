@@ -212,7 +212,29 @@ export type OrchestrationOutcome =
   | { kind: 'no_capacity'; taskId: string; agentId: string }
   // An operator cancel/reassign took the job mid-wait (the job is `cancelled`); the
   // canceller owns the task's post-cancel state, so orchestration just bows out.
-  | { kind: 'preempted'; taskId: string; agentId: string };
+  | { kind: 'preempted'; taskId: string; agentId: string }
+  // A GitHub work event for an UNCONNECTED workspace (slice 5c): the App is installed but not bound
+  // to an org, so we FAIL CLOSED — no task, no agent run, never the default tenant. The customer
+  // completes Connect to bind the workspace's org. No taskId (nothing was created).
+  | { kind: 'unconnected'; taskId: null; platform: AdapterEvent['platform']; workspace: string | null };
+
+/**
+ * Resolve the org a webhook event acts in (slice 5c). A CONNECTED workspace resolves to its real
+ * org (including a grandfathered org_default for pre-5c installs). An UNCONNECTED workspace:
+ *  - GitHub REQUIRES a connection → returns null (the caller FAILS CLOSED — never the default org;
+ *    an installed-but-unbound account must not have its work run in someone else's tenant).
+ *  - Platforms without a connect flow yet (shortcut/linear) → the documented single-tenant
+ *    grandfather DEFAULT_ORG_ID, removed when those platforms get their own connect flow.
+ */
+export async function resolveWebhookOrg(
+  store: Pick<CoordinationStore, 'getOrgForConnection'>,
+  platform: AdapterEvent['platform'],
+  workspace: string | null
+): Promise<string | null> {
+  const org = await store.getOrgForConnection(platform, workspace ?? '');
+  if (org !== null) return org;
+  return platform === 'github' ? null : DEFAULT_ORG_ID;
+}
 
 /**
  * The workspace an event belongs to (for resolving its org via a platform_connection).
@@ -244,13 +266,18 @@ export async function orchestrateTaskAssigned(
   const perProjectLimit = deps.perProjectLimit ?? 1;
   const agentTimeoutMs = deps.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
 
-  // Resolve the org this event acts in (the webhook EDGE): the workspace's connection
-  // owns an org; an unconnected workspace falls to the default org (single-org until
-  // onboarding, slice 5). This is the ONLY default-org materialization on this path —
-  // the store has no fallback, so every store call below carries an explicit org.
-  const orgId =
-    (await deps.store.getOrgForConnection(event.platform, workspaceForEvent(event) ?? '')) ??
-    DEFAULT_ORG_ID;
+  // Resolve the org this event acts in (the webhook EDGE) from the workspace's connection. A
+  // GitHub event for an UNCONNECTED workspace fails CLOSED (slice 5c) — the App is installed but
+  // not bound to an org, so it must not run in the default tenant. Other platforms keep the
+  // grandfather default. Past this point every store call carries an explicit, real org.
+  const orgId = await resolveWebhookOrg(deps.store, event.platform, workspaceForEvent(event));
+  if (orgId === null) {
+    deps.logger?.info?.('coordination: github event for an unconnected workspace — fail closed', {
+      platform: event.platform,
+      externalStoryId: event.externalStoryId,
+    });
+    return { kind: 'unconnected', taskId: null, platform: event.platform, workspace: workspaceForEvent(event) };
+  }
 
   // §6.4 — ingest: get-or-create the task for this story (routable, v0 on first
   // delivery; the existing row on re-delivery / re-assignment). Re-driving the

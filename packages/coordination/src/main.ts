@@ -41,8 +41,8 @@ import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
-import { DEFAULT_ORG_ID } from './resolve-org';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
+import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
 import { COORDINATION_SCHEMA_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -97,6 +97,8 @@ async function applySchema(pool: Pool): Promise<void> {
     ...AUTH_SCHEMA_DDL, // human login: app_user/auth_identity/oauth_state/session (no hard FK to the above)
     ...COORDINATION_SCHEMA_DDL, // task coordination columns + routing_decision/pull_request/ledger
     ...ORG_MEMBERSHIP_DDL, // user↔org membership + one-time backfill (FKs app_user + organization → last)
+    GITHUB_INSTALL_STATE_TABLE_DDL, // slice 5c connect nonce (FKs app_user + organization)
+    GITHUB_CONNECTION_UNIQUE_DDL, // slice 5c: one github account → one connection (DB-enforced re-bind guard)
   ];
   for (const ddl of statements) {
     await pool.query(ddl);
@@ -222,6 +224,10 @@ async function main(): Promise<void> {
   let statusReporter: StatusReporter = gatedStatusReporter;
   let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
   let provisioner: RepoProvisioner | undefined;
+  // Slice 5c connect bits (App client + slug) — set when the GitHub App env is present; passed to
+  // the factory to wire the connect routes. The slug is the App's install-URL handle.
+  let githubConnectInput: { appClient: { getInstallationAccount(id: string): Promise<string> }; appSlug: string } | undefined;
+  const githubAppSlug = process.env.GITHUB_APP_SLUG ?? '';
   // The credential broker server (worker side) — serves per-task scoped tokens to the
   // agent-runner over a unix socket, keeping the App master key in this process.
   let brokerHandle: BrokerServerHandle | undefined;
@@ -239,6 +245,12 @@ async function main(): Promise<void> {
       appId: githubAppId,
       privateKey: githubAppPrivateKey,
     });
+    // Wire the connect flow only when the App slug is configured (the install URL needs it).
+    if (githubAppSlug) {
+      githubConnectInput = { appClient, appSlug: githubAppSlug };
+    } else {
+      logger.info?.('github connect DISABLED — set GITHUB_APP_SLUG to enable the in-product install flow');
+    }
     const writebackAdapter = new GitHubAdapter({ webhookSecret: githubSecret, appClient });
     const githubReporter = new GitHubStatusReporter({
       store,
@@ -250,21 +262,24 @@ async function main(): Promise<void> {
       logger,
     });
     statusReporter = routingStatusReporter({ github: githubReporter, fallback: gatedStatusReporter });
-    // The install webhook records the account→installation mapping write-back resolves.
+    // The install webhook is CONFIRMATION only (slice 5c): the org binding is owned by the connect
+    // CALLBACK (which has the session + nonce). The webhook cannot securely attribute an org, so it
+    // never sets org_id — on `created` it refreshes the installation_id/health of the connection the
+    // callback created (a no-op if the callback hasn't completed yet); on `deleted` it revokes.
     githubInstallationHandler = async (rawBody: string) => {
       const mapping = parseInstallationEvent(rawBody);
       if (!mapping) return;
-      // Install EDGE: the App-install event is org-agnostic (GitHub telling us an account
-      // installed the App). Record the connection on the default org; onboarding (slice 5)
-      // re-homes an installation to its customer org. getOrgForConnection then resolves
-      // this workspace's webhooks to the same org.
-      await store.upsertGitHubInstallation(DEFAULT_ORG_ID, {
-        workspaceId: mapping.accountLogin,
-        installationId: mapping.installationId,
-      });
-      logger.info?.('github installation recorded', {
+      if (mapping.action === 'deleted') {
+        const revoked = await store.revokeInstallationByAccount(mapping.accountLogin);
+        logger.info?.('github installation revoked', { account: mapping.accountLogin, revoked });
+        return;
+      }
+      const updated = await store.updateInstallationByAccount(mapping.accountLogin, mapping.installationId);
+      logger.info?.('github installation confirmed', {
         account: mapping.accountLogin,
         installationId: mapping.installationId,
+        // false when the connect callback hasn't yet created the connection — expected, not an error.
+        connectionExists: updated,
       });
     };
     logger.info?.('github write-back enabled (App env present)');
@@ -376,9 +391,15 @@ async function main(): Promise<void> {
     });
     // Hourly sweep of expired sessions + oauth-state rows. unref() so it never
     // holds the process open during shutdown.
+    const installStateRepo = new PgGitHubInstallStateRepo(pool);
     authSweep = setInterval(() => {
       void authRepo.deleteExpired().catch((err) =>
         logger.error('auth expiry sweep failed', { err: err instanceof Error ? err.message : String(err) })
+      );
+      // Also sweep expired github connect nonces (slice 5c) — same hourly tick (consume already
+      // refuses an expired nonce; this just stops the rows accumulating).
+      void installStateRepo.deleteExpired().catch((err) =>
+        logger.error('github install-state sweep failed', { err: err instanceof Error ? err.message : String(err) })
       );
     }, 3_600_000);
     authSweep.unref();
@@ -420,6 +441,7 @@ async function main(): Promise<void> {
     ...(runnerWaitMs !== undefined ? { runnerWaitMs } : {}),
     ...(authHandler ? { authHandler } : {}),
     ...(verifySession ? { verifySession } : {}),
+    ...(githubConnectInput ? { githubConnect: githubConnectInput } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
     ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),

@@ -13,6 +13,7 @@ import type { Task } from '@tasca/domain';
 import type { LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
+import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
@@ -60,6 +61,12 @@ export interface CreateCoordinationDeps {
    * closed in prod (coordination never hard-depends on @tasca/auth).
    */
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
+  /**
+   * GitHub connect (slice 5c): the App bits the connect callback needs — the App client (to resolve
+   * an installation's account) + the App slug (for the install URL). Injected by the host only when
+   * the GitHub App env is present. Absent → the connect routes are not wired (404).
+   */
+  githubConnect?: { appClient: InstallAccountResolver; appSlug: string };
 }
 
 /**
@@ -175,6 +182,21 @@ export function createCoordination(
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
+    // The GitHub connect API (slice 5c) — wired only when the App bits are supplied. Binds a
+    // customer's GitHub install to their org via the secure begin→callback flow.
+    ...(input.githubConnect
+      ? {
+          connectApi: {
+            installState: new PgGitHubInstallStateRepo(input.pool),
+            membership,
+            store,
+            appClient: input.githubConnect.appClient,
+            appSlug: input.githubConnect.appSlug,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
+        }
+      : {}),
     ...(input.githubVerifier !== undefined ? { githubVerifier: input.githubVerifier } : {}),
     ...(input.githubInstallationHandler !== undefined
       ? { githubInstallationHandler: input.githubInstallationHandler }
