@@ -125,3 +125,28 @@ export interface SessionUser {
 export type SessionResponse =
   | { authenticated: true; user: SessionUser }
   | { authenticated: false };
+
+// ── PM-assistant proposals (slice W3-S1) ──────────────────────────────────────
+/** A routing proposal's payload (the only kind in S1a). */
+export interface RoutingProposalPayload {
+  agentName: string;
+  why: string;
+  confidence: number;
+}
+
+export interface ProposalSummary {
+  id: string;
+  kind: 'triage' | 'decomposition' | 'routing' | 'standup';
+  targetTaskId: string | null;
+  targetVersion: number | null;
+  payload: RoutingProposalPayload | Record<string, unknown>;
+  status: 'pending' | 'accepted' | 'dismissed';
+  version: number;
+  createdAt: string;
+}
+
+export interface ProposalsResponse {
+  proposals: ProposalSummary[];
+  /** The PM-assistant feature flag — drives the off/on view state. */
+  enabled: boolean;
+}

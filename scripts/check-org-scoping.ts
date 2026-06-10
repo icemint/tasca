@@ -25,6 +25,7 @@ export const TENANT_TABLES = [
   'pull_request',
   'platform_connection',
   'webhook_event',
+  'proposal',
 ] as const;
 
 /**

@@ -10,7 +10,7 @@ import { PgClaimRepository, PgDispatchQueue } from '@tasca/db';
 import { PgIdentityRepository } from '@tasca/identity';
 import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
-import type { LlmClassifierPort } from '@tasca/routing';
+import { DeterministicRoutingProposer, type LlmClassifierPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
@@ -68,6 +68,10 @@ export interface CreateCoordinationDeps {
    * the GitHub App env is present. Absent → the connect routes are not wired (404).
    */
   githubConnect?: { appClient: InstallAccountResolver; appSlug: string };
+  /** PM-assistant (slice W3-S1): when true, the assistant view renders its on-state and proposal
+   *  GENERATION is allowed; default false (off-state first, per the design). Listing/accepting/
+   *  dismissing existing proposals is unaffected by the flag. */
+  pmAssistantEnabled?: boolean;
 }
 
 /**
@@ -188,6 +192,19 @@ export function createCoordination(
     orgApi: {
       membership,
       roster,
+      ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+      ...(input.logger !== undefined ? { logger: input.logger } : {}),
+    },
+    // The PM-assistant API (slice W3-S1) — advisory proposals. Accept routes through the store's
+    // CAS-guarded binding method; the deterministic match-based proposer ships now (LLM-backed
+    // proposers for the language kinds arrive in later sub-slices). Generation is flag-gated.
+    proposalApi: {
+      store,
+      membership,
+      roster,
+      directory,
+      proposer: new DeterministicRoutingProposer(),
+      enabled: input.pmAssistantEnabled === true,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },

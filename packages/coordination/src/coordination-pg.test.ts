@@ -95,8 +95,9 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+    await pool.query('TRUNCATE proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
     await pool.query('TRUNCATE audit_event, identity_binding, delegation, capability_profile, service_user, agent, rbac_role CASCADE');
+    await pool.query(`INSERT INTO organization (id, name) VALUES ('org_other','Other') ON CONFLICT (id) DO NOTHING`);
     const created = await identity.createAgent({ name: 'Elvis', model: 'claude-sonnet', vendor: 'claude' });
     agentId = created.agent.id;
     principalId = created.serviceUser.principalId;
@@ -392,6 +393,89 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(after?.status).toBe('in_review'); // reached in_review, not stranded in claimed
     const prs = await pool.query('SELECT count(*)::int AS c FROM pull_request WHERE task_id=$1', [task.id]);
     expect(prs.rows[0].c).toBe(1); // dispatch skipped — no second PR opened
+  });
+
+  // ── PM-assistant proposals (slice W3-S1) ────────────────────────────────────
+  describe('PM-assistant proposals — advisory, org-scoped, CAS-guarded accept', () => {
+    const routingPayload = { agentName: 'Mona', why: 'best fit', confidence: 0.8 };
+
+    async function seedTask(): Promise<{ id: string; version: number }> {
+      const t = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-prop', platform: 'shortcut' });
+      return { id: t.id, version: t.version };
+    }
+
+    it('createProposal / listProposals / getProposal are org-scoped', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      expect(p.status).toBe('pending');
+      expect((await store.listProposals(ORG, { status: 'pending' })).map((x) => x.id)).toEqual([p.id]);
+      expect((await store.getProposal(ORG, p.id))!.kind).toBe('routing');
+      // org_other sees nothing.
+      expect(await store.listProposals('org_other', {})).toEqual([]);
+      expect(await store.getProposal('org_other', p.id)).toBeNull();
+    });
+
+    it('acceptRoutingProposal sets the task preference + re-routes, and marks the proposal accepted', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      const outcome = await store.acceptRoutingProposal(ORG, p.id, agentId);
+      expect(outcome.ok).toBe(true);
+      const task = await store.getTask(ORG, taskId);
+      expect(task!.preferredAgentId).toBe(agentId); // the binding preference is set
+      expect(task!.status).toBe('routable'); // re-routed
+      expect(task!.version).toBe(version + 1); // exactly one bump
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('accepted');
+    });
+
+    it('VERSION FENCE: accepting after the task moved → conflict, proposal stays pending, no preference set', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      await store.overrideTierEstimate(ORG, taskId, 'hard'); // task moves (version → version+1), still routable
+      const outcome = await store.acceptRoutingProposal(ORG, p.id, agentId);
+      expect(outcome).toEqual({ ok: false, reason: 'conflict' });
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending'); // rolled back — not half-applied
+      expect((await store.getTask(ORG, taskId))!.preferredAgentId).toBeNull(); // binding never ran
+    });
+
+    it('DOUBLE-ACCEPT race (forced parallelism): exactly one ok, the binding runs at most once', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      const [a, b] = await Promise.all([
+        store.acceptRoutingProposal(ORG, p.id, agentId),
+        store.acceptRoutingProposal(ORG, p.id, agentId),
+      ]);
+      const oks = [a, b].filter((r) => r.ok).length;
+      expect(oks).toBe(1); // exactly-one (CAS on the proposal row serializes the racers)
+      const task = await store.getTask(ORG, taskId);
+      expect(task!.version).toBe(version + 1); // the binding write ran AT MOST ONCE
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('accepted');
+    });
+
+    it('CROSS-ORG: org_other cannot accept/dismiss org_default\'s proposal → not_found (never conflict, no existence leak)', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      expect(await store.acceptRoutingProposal('org_other', p.id, agentId)).toEqual({ ok: false, reason: 'not_found' });
+      expect(await store.dismissProposal('org_other', p.id)).toEqual({ ok: false, reason: 'not_found' });
+      // The proposal is untouched in its real org.
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
+      expect((await store.getTask(ORG, taskId))!.preferredAgentId).toBeNull();
+    });
+
+    it('dismiss is a CAS: pending→dismissed once; a second dismiss → conflict', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      expect(await store.dismissProposal(ORG, p.id)).toEqual({ ok: true });
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('dismissed');
+      expect(await store.dismissProposal(ORG, p.id)).toEqual({ ok: false, reason: 'conflict' });
+    });
+
+    it('a dismissed proposal cannot then be accepted → conflict (no binding)', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      await store.dismissProposal(ORG, p.id);
+      expect(await store.acceptRoutingProposal(ORG, p.id, agentId)).toEqual({ ok: false, reason: 'conflict' });
+      expect((await store.getTask(ORG, taskId))!.preferredAgentId).toBeNull();
+    });
   });
 });
 

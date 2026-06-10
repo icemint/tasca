@@ -18,6 +18,8 @@ import type {
   Agent,
   AgentDetail,
   ConnectionsResponse,
+  ProposalsResponse,
+  ProposalSummary,
   SessionResponse,
   TaskDetail,
   TaskSummary,
@@ -233,3 +235,16 @@ export const reassignTask = (id: string) =>
   post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/reassign`, {});
 export const interruptTask = (id: string) =>
   post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/interrupt`, {});
+
+// ── PM-assistant proposals (slice W3-S1) — advisory; accept routes through routing ─────
+
+export const getProposals = () => get<ProposalsResponse>('/api/proposals');
+/** Generate a routing suggestion for a task (on-demand). 200 with `{proposal}` (possibly null). */
+export const generateProposal = (taskId: string) =>
+  post<{ proposal: ProposalSummary | null }>(`/api/proposals/generate`, { taskId });
+/** Accept a proposal — routes through the binding method (re-route to the proposed agent). */
+export const acceptProposal = (id: string) =>
+  post<{ ok: true } | { error: string; code?: string }>(`/api/proposals/${encodeURIComponent(id)}/accept`, {});
+/** Dismiss a proposal — marks the suggestion handled; no binding effect. */
+export const dismissProposal = (id: string) =>
+  post<{ ok: true } | { error: string; code?: string }>(`/api/proposals/${encodeURIComponent(id)}/dismiss`, {});

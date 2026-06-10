@@ -363,19 +363,33 @@ export async function orchestrateTaskAssigned(
 
     const ranked = matchCapability(estimate, candidates);
 
-    // §5d — ASSIGNMENT INTAKE: an `agent:<name>` label picks a specific agent; otherwise the routing
-    // engine (the crown jewel) picks the top eligible candidate. The label is a preference WITHIN the
-    // hired set — a label naming an agent the org has NOT hired fails closed (needs_attention), never
-    // a route to an unhired agent.
+    // §5d + W3-S1 — ASSIGNMENT INTAKE: a routing PREFERENCE picks a specific agent; otherwise the
+    // routing engine (the crown jewel) picks the top eligible candidate. Two preference sources, in
+    // precedence order: (1) the Tasca-side `preferred_agent_id` — an accepted PM-assistant routing
+    // proposal, already a resolved agent id; (2) the platform `agent:<name>` label (5d), resolved by
+    // name. Either way the preference is WITHIN the hired set — a preferred/labeled agent the org has
+    // NOT hired fails closed (needs_attention), never a route to an unhired agent. The deterministic
+    // engine + atomic claim still dispose; the preference only biases which hired agent wins.
     const labelName = agentLabel(content.labels);
     let winnerId: string | null = null;
-    let unhiredLabel = false;
-    if (labelName) {
+    let unhiredPreference = false;
+    let requestedAgent: string | null = null;
+    if (task.preferredAgentId) {
+      // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time.
+      requestedAgent = task.preferredAgentId;
+      if (candidates.some((c) => c.profile.agentId === task.preferredAgentId)) {
+        winnerId = task.preferredAgentId;
+      } else {
+        unhiredPreference = true; // unhired since accept → fail closed (never route elsewhere silently)
+      }
+    } else if (labelName) {
+      // (2) platform `agent:<name>` label — resolve by name within the hired set.
+      requestedAgent = labelName;
       const namedId = await deps.directory.findHiredAgentByName(orgId, labelName);
       if (namedId && candidates.some((c) => c.profile.agentId === namedId)) {
         winnerId = namedId; // labeled a HIRED agent → override the routing pick
       } else {
-        unhiredLabel = true; // labeled an agent the org hasn't hired → fail closed below
+        unhiredPreference = true; // labeled an agent the org hasn't hired → fail closed below
       }
     } else {
       winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
@@ -388,9 +402,9 @@ export async function orchestrateTaskAssigned(
       winnerAgentId: winnerId,
     });
 
-    if (unhiredLabel) {
-      await deps.store.retireUnroutable(orgId, task.id, `requested agent '${labelName}' is not hired`);
-      deps.logger?.info?.('coordination: labeled agent not hired — task → needs_attention', { taskId: task.id, requested: labelName });
+    if (unhiredPreference) {
+      await deps.store.retireUnroutable(orgId, task.id, `requested agent '${requestedAgent}' is not hired`);
+      deps.logger?.info?.('coordination: requested agent not hired — task → needs_attention', { taskId: task.id, requested: requestedAgent });
       return { kind: 'agent_not_hired', taskId: task.id };
     }
     if (winnerId === null) {

@@ -32,6 +32,7 @@ function task(id: string, over: Partial<Task> = {}): Task {
     repoRef: 'acme/api',
     tierEstimate: null,
     lastError: null,
+    preferredAgentId: null,
     ...over,
   };
 }

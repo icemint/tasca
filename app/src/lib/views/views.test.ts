@@ -6,6 +6,7 @@ import { loadAgent } from './agent';
 import { loadConnections } from './connections';
 import { loadOnboarding } from './onboarding';
 import { loadSettings } from './settings';
+import { loadPmAssistant } from './pm-assistant';
 import {
   stubFetch,
   AGENT_ELVIS,
@@ -204,5 +205,80 @@ describe('settings', () => {
     expect(htmlOf(r)).toContain('Audit log');
     expect(htmlOf(r)).toContain('Planned'); // honest deferred tag, not a stray "Coming soon"
     expect(htmlOf(r)).not.toContain('Coming soon');
+  });
+});
+
+describe('pm-assistant (W3-S1)', () => {
+  it('renders the advisory OFF-state when the server flag is off — generation NOT offered', async () => {
+    stubFetch({ '/api/proposals': { body: { proposals: [], enabled: false } } });
+    const r = await loadPmAssistant();
+    expect(r.kind).toBe('ok');
+    const html = htmlOf(r);
+    expect(html).toContain('A PM assistant that only suggests');
+    expect(html).toContain('Advisory · off by default');
+    expect(html).toContain('How it stays advisory');
+    expect(html).toContain('data-ro="gated"'); // "Turn on" is operator-gated, not a user toggle
+    expect(html).not.toContain('data-action="generate"'); // no generation surface when off
+    expect(html).not.toContain('Coming soon');
+  });
+
+  it('renders pending ROUTING suggestions with Accept/Dismiss and the not-applied badge', async () => {
+    stubFetch({
+      '/api/proposals': {
+        body: {
+          enabled: true,
+          proposals: [
+            {
+              id: 'p1', kind: 'routing', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+              createdAt: '2026-01-01T00:00:00Z',
+              payload: { agentName: 'Mona', why: 'best fit for a medium auth task', confidence: 0.78 },
+            },
+          ],
+        },
+      },
+      '/api/tasks': { body: [] },
+    });
+    const r = await loadPmAssistant();
+    const html = htmlOf(r);
+    expect(html).toContain('Route to <b>Mona</b>');
+    expect(html).toContain('best fit for a medium auth task');
+    expect(html).toContain('confidence 78%');
+    expect(html).toContain('Suggestion · not applied'); // advisory framing, structural
+    expect(html).toContain('data-action="accept"');
+    expect(html).toContain('data-action="dismiss"');
+  });
+
+  it('defensively clamps an out-of-range confidence (a malformed payload renders, never breaks)', async () => {
+    stubFetch({
+      '/api/proposals': {
+        body: {
+          enabled: true,
+          proposals: [
+            { id: 'p2', kind: 'routing', targetTaskId: null, targetVersion: null, status: 'pending', version: 0,
+              createdAt: '2026-01-01T00:00:00Z', payload: { agentName: 'Mona', why: 'x', confidence: 2.5 } },
+          ],
+        },
+      },
+      '/api/tasks': { body: [] },
+    });
+    const html = htmlOf(await loadPmAssistant());
+    expect(html).toContain('confidence 100%'); // clamped, not "250%"
+  });
+
+  it('on-state with no suggestions offers on-demand "Suggest routing" over routable tasks', async () => {
+    stubFetch({
+      '/api/proposals': { body: { enabled: true, proposals: [] } },
+      '/api/tasks': {
+        body: [
+          { id: 't9', externalStoryId: 'acme/api#9', platform: 'github', status: 'routable', tierEstimate: 'hard', repoRef: 'acme/api', claimedBy: null, failureCount: 0 },
+        ],
+      },
+    });
+    const r = await loadPmAssistant();
+    const html = htmlOf(r);
+    expect(html).toContain('No suggestions yet');
+    expect(html).toContain('Generate a routing suggestion');
+    expect(html).toContain('data-action="generate"');
+    expect(html).toContain('data-task-id="t9"');
   });
 });

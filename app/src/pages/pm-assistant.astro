@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+---
+<AppShell title="PM assistant" active="pm-assistant">
+  <div id="view"></div>
+</AppShell>
+<script>
+  import { mount } from '../lib/mount';
+  import { loadPmAssistant, wirePmAssistant } from '../lib/views/pm-assistant';
+  const el = document.getElementById('view');
+  if (el) void mount(el, loadPmAssistant, wirePmAssistant);
+</script>

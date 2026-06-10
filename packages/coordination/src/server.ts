@@ -22,6 +22,7 @@ import { orchestrateTaskAssigned, workspaceForEvent, resolveWebhookOrg, type Orc
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
+import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
@@ -42,6 +43,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * POSTs CSRF-gated. Absent → those paths fall through to 404 (additive).
    */
   orgApi?: OrgApiDeps;
+  /**
+   * The PM-assistant API (slice W3-S1: GET /api/proposals, POST /api/proposals/generate +
+   * .../:id/{accept,dismiss}). Session + CSRF + member-gated; advisory (accept routes through an
+   * existing binding method). Absent → those paths fall through to 404 (additive).
+   */
+  proposalApi?: ProposalApiDeps;
   /**
    * The GitHub connect API (slice 5c: GET /api/connect/github + .../callback). Session-gated;
    * binds a customer's GitHub install to their org. Absent → those paths fall through to 404.
@@ -301,6 +308,9 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Org-management API (only when wired). Handles GET/POST /api/orgs + POST /api/active-org —
     // before the read/write API, which don't claim those paths.
     if (deps.orgApi && (await orgApiHandler(req, res, deps.orgApi))) return;
+
+    // PM-assistant API (only when wired). Handles GET /api/proposals + the mutating POSTs.
+    if (deps.proposalApi && (await proposalApiHandler(req, res, deps.proposalApi))) return;
 
     // Read API (only when wired). Handles GET /api/* read endpoints.
     if (deps.readApi && (await readApiHandler(req, res, deps.readApi))) return;
