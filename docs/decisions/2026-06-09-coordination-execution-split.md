@@ -109,3 +109,27 @@ ingress. `cd-worker.yml` builds + publishes the shared base; `cd-runner.yml` bui
   maintained as legitimate agent destinations change; `deploy/verify-egress.sh` guards it.
 - The egress enforcement is **network-level** (internal-only networks) by deliberate choice;
   an env-only `HTTPS_PROXY` would be bypassable by the agent and was rejected.
+
+## Status update (2026-06-10) — Wave-2 Track-1 residual closures
+
+The three `−` residuals above have since been **closed** (Track-1 security residuals are now
+fully closed; the sole remaining Track-1 item is the dominant deploy-layer one — a separate-UID +
+PID/mount/net namespace sandbox **per agent on the runner**, deferred):
+
+- **`ANTHROPIC_API_KEY` as a GitHub-exfil channel → CLOSED (#248).** `@tasca/anthropic-proxy`: the
+  worker holds the key and runs a streaming credential-injecting proxy over a unix socket (the key
+  is injected only on the upstream HTTPS leg); the runner runs a keyless TCP↔unix bridge and points
+  the agent at `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`. The agent is **keyless** —
+  `ANTHROPIC_API_KEY` is deliberately **not** in the agent env allowlist
+  (`execution/src/factory.ts`). So there is no longer a key in the agent's env to write to a gist.
+- **Cross-task persistence on a shared runner (shared `HOME=/data`) → CLOSED (#246).** Each agent
+  run gets an **ephemeral per-task `HOME`** (`mkdtemp`, fresh + empty per spawn, reclaimed after),
+  distinct from the runner volume — so task A can no longer plant a `~/.bashrc` / credential helper
+  that task B sources. (The matching non-login `-c` shell was scoped down to empty-HOME-only; the
+  empty HOME already closes the profile-sourcing residual.)
+- **In-process fallback in the worker → RETIRED (#247).** Production no longer runs the agent
+  in-process when no runner claims: orchestrate polls for a runner up to `TASCA_RUNNER_WAIT_MS`
+  (default 30s), then retires the task to `needs_attention` with `last_error="no execution
+  capacity"` (NOT via the breaker). The hardened boundary always holds — the agent only ever runs
+  in the non-root, egress-restricted runner. (The in-process path remains for the no-queue/dev
+  mode only; `no_inflight` interrupt/reassign is now unreachable in production.)

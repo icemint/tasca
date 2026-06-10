@@ -2,6 +2,15 @@
 
 **Status:** authoritative for Stage 1. Execution shape is pinned (de-Electron Emdash fork, all-Node + Postgres). **Electric is dropped — confirmed absent** (no `electric-sql` / `@electric` dependency or reference anywhere in the repo, workflows, or docs).
 
+> **Topology update (2026-06-10) — the coordination|execution split has SHIPPED.** This spec
+> describes the single combined `worker` container ("Stage-2 split" deferred, §5/§8). That split
+> has since landed (#234–#248): production now runs **worker + non-root agent-runner + egress-proxy
+> + Postgres** on `internal:` networks, with the agent dispatched via a `dispatch_job` queue (no
+> in-process fallback — #247) and the Anthropic key proxied worker-side so the **agent is keyless**
+> (#248 — the `ANTHROPIC_API_KEY` rows below are the WORKER's key, no longer the agent's). The
+> authoritative topology is now `deploy/compose.yml` + `docs/decisions/2026-06-09-coordination-execution-split.md`;
+> the single-container sections below are retained as historical Stage-1 context.
+
 > **One deviation from the requested 5-container list, flagged up front.** The request lists *coordination* and *execution* as separate containers. In the code as built, `@tasca/execution` is an **in-process library** that `@tasca/coordination` calls directly through `ExecutionPort` (`reserveWorktree` / `spawnAgent` / `openPr`). There is **no network/queue seam** between them — splitting them into two containers is net-new code (a dispatch queue or RPC), not infra config. So Stage 1 ships **one `worker` container = coordination + execution combined** (§2.3). The split is a documented Stage-2 step (§8). Everything below is the deployable-now topology; if you'd rather build the split first, say so and it becomes a code task before this spec applies.
 
 ---

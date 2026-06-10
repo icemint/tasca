@@ -39,3 +39,28 @@ These close only with a **separate-user + PID/mount/network-namespace sandbox pe
 ## Provenance
 
 Architected, then reviewed by a security-focused adversarial panel (token-leak, env-allowlist, worktree correctness, test rigor). The panel surfaced the vendor's direct `process.env` reads (both must-fixes) — the original allowlist filtered only the `env` arg and was a no-op on the production fallback path; decision 3's global scrub is the fix.
+
+## Status update (2026-06-10) — residuals superseded by the coordination|execution split
+
+This ADR's residuals were written for the **single-container** deploy (worker runs the agent
+in-process as root). That topology has been **superseded** by the coordination|execution split
+(`docs/decisions/2026-06-09-coordination-execution-split.md`, #234–#248). On the split deploy the
+agent runs in a separate **non-root runner** holding **no worker secret**, the GitHub App master
+key never leaves the worker (the credential **broker** mints per-task, single-repo scoped tokens
+over a unix socket), and the runner has **default-deny egress** (model API + GitHub allowlist only).
+The in-process env scrub here (decision 3) remains correct and is retained for the no-queue/dev
+path. Residual status against the split:
+
+- **Residual 1 (login-shell profiles) → closed for the dominant case (#246):** each agent run gets
+  an ephemeral, empty per-task `HOME`, so the worker's profiles are no longer in the agent's HOME to
+  source. (A true non-login `-c` shell is a deferred optional deploy-layer wrapper.)
+- **Residual 2 (same-user / shared-namespace; root agent reads the worker's `/proc/.../environ` for
+  `GITHUB_APP_PRIVATE_KEY` / `DATABASE_URL`) → closed for production:** the agent is no longer
+  in-process in the worker (split #234–#243; in-process fallback **retired** #247), and the master
+  key is broker-gated worker-side. `ANTHROPIC_API_KEY` left the agent env entirely (#248).
+
+**The dominant residual that remains** is the deploy-layer one named in both this ADR and the
+Security Review: a **separate-UID + PID/mount/network namespace sandbox per agent on the runner**
+(multiple agent runs in one runner container still share namespaces). Until it lands, the safe bar
+stays as documented. Multi-tenant data-plane isolation (org_id) is a separate axis — see
+`docs/decisions/2026-06-10-org-scoping-app-level.md`.
