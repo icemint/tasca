@@ -4,7 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "lint": "tsx scripts/check-boundaries.ts",
+    "lint": "tsx scripts/check-boundaries.ts && tsx scripts/check-org-scoping.ts",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "start:worker": "tsx packages/coordination/src/main.ts"
