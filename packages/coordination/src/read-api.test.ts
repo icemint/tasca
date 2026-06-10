@@ -150,10 +150,13 @@ function fakeRes(): CapturedRes {
   return captured;
 }
 
+/** A membership reader that maps any user to one org (or null for the no-membership case). */
+const membershipFor = (org: string | null) => ({ async getOrgForUser() { return org; } });
+
 function deps(store: FakeStore, identity: FakeIdentity, over: Partial<ReadApiDeps> = {}): ReadApiDeps {
   // Endpoint tests run with the unauthenticated opt-in so they exercise the
   // handlers directly; auth-gating tests override verifySession / allowUnauthenticated.
-  return { store, identity, allowUnauthenticated: true, ...over };
+  return { store, identity, membership: membershipFor('org_default'), allowUnauthenticated: true, ...over };
 }
 
 const json = (r: CapturedRes) => JSON.parse(r.body);
@@ -308,7 +311,33 @@ describe('read-api handler', () => {
     id.agents = [agent('a1', 'Nova')];
     const r = fakeRes();
     // No verifySession and no allowUnauthenticated opt-in → refuse, regardless of NODE_ENV.
-    await readApiHandler(fakeReq('GET', '/api/agents'), r.res, { store, identity: id });
+    await readApiHandler(fakeReq('GET', '/api/agents'), r.res, { store, identity: id, membership: membershipFor('org_default') });
     expect(r.statusCode).toBe(503);
+  });
+
+  it('RBAC: a verified user WITH a membership is served their org', async () => {
+    const store = new FakeStore();
+    store.tasks = [task('t1', { status: 'routable' })];
+    const id = new FakeIdentity();
+    const r = fakeRes();
+    await readApiHandler(
+      fakeReq('GET', '/api/tasks'),
+      r.res,
+      deps(store, id, { verifySession: () => ({ userId: 'u-member' }), membership: membershipFor('org_default'), allowUnauthenticated: false })
+    );
+    expect(r.statusCode).toBe(200);
+  });
+
+  it('RBAC fail-closed: a verified user with NO membership is rejected (403), never default-org data', async () => {
+    const store = new FakeStore();
+    store.tasks = [task('t1', { status: 'routable' })];
+    const id = new FakeIdentity();
+    const r = fakeRes();
+    await readApiHandler(
+      fakeReq('GET', '/api/tasks'),
+      r.res,
+      deps(store, id, { verifySession: () => ({ userId: 'u-orphan' }), membership: membershipFor(null), allowUnauthenticated: false })
+    );
+    expect(r.statusCode).toBe(403); // no membership → fail closed, not 200 with org_default rows
   });
 });

@@ -31,7 +31,7 @@ import type {
   TaskSummary,
 } from './store';
 import type { Logger } from './ports';
-import { resolveOrg } from './resolve-org';
+import { resolveOrg, type OrgMembershipReader } from './resolve-org';
 
 // ── Read-side seams (narrow; the factory injects the concrete @tasca/identity repo) ─
 import type { AgentRecord, AgentWithProfile } from '@tasca/identity';
@@ -59,6 +59,9 @@ export interface ReadApiDeps {
     | 'listConnections'
   >;
   identity: IdentityReader;
+  /** Resolves a verified session's user to their org (slice 4 RBAC). A user with no membership
+   *  resolves to null → the request fails closed (403). Injected at the composition root. */
+  membership: OrgMembershipReader;
   /**
    * Verify the request's session. When provided, a missing/invalid session → 401.
    * When omitted, the read API has no way to authenticate — see allowUnauthenticated.
@@ -237,9 +240,14 @@ export async function readApiHandler(
   }
   // else: explicit allowUnauthenticated (local dev/tests) → serve without a session.
 
-  // Resolve the org this request reads in (the EDGE stub; RBAC swaps it in slice 4). Every
-  // store call below is scoped to it, so the read API can only ever serve this tenant's rows.
-  const orgId = resolveOrg(session);
+  // Resolve the org this request reads in from the user's membership (slice 4 RBAC). A verified
+  // user with NO org membership fails CLOSED (403) — never served default-org data. Every store
+  // call below is scoped to the resolved org, so the read API can only ever serve this tenant's rows.
+  const orgId = await resolveOrg(deps.membership, session);
+  if (orgId === null) {
+    sendJson(res, 403, { error: 'no organization membership' });
+    return true;
+  }
 
   try {
     await dispatch(matched, url, res, deps, orgId);
