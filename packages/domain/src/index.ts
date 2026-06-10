@@ -76,6 +76,11 @@ export interface Task {
   /** Human-readable reason for the current state (e.g. why a task is in needs_attention).
    *  Null unless explicitly set; today the no-execution-capacity path writes it. */
   lastError: string | null;
+  /** A Tasca-side routing PREFERENCE (an accepted PM-assistant routing proposal): the agent
+   *  id a human picked. Advisory — the routing path honors it only WITHIN the org's hired
+   *  candidate set (fail-closed if unhired), never as a binding assignment. Null = no
+   *  preference (route by the engine). */
+  preferredAgentId: string | null;
 }
 
 // ── Tier estimation ─────────────────────────────────────────────────────────

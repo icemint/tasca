@@ -35,6 +35,36 @@ export type TaskWriteOutcome =
   | { ok: true; status: TaskStatus }
   | { ok: false; reason: 'not_found' | 'conflict' | 'too_late' | 'no_inflight' };
 
+// ── PM-assistant proposals (slice W3-S1) ──────────────────────────────────────
+export type ProposalKind = 'triage' | 'decomposition' | 'routing' | 'standup';
+export type ProposalStatus = 'pending' | 'accepted' | 'dismissed';
+
+/** A persisted advisory suggestion. `payload` is kind-specific and validated at the API
+ *  boundary (the proposer's output is validated before it is stored). */
+export interface Proposal {
+  id: string;
+  kind: ProposalKind;
+  targetTaskId: string | null;
+  targetVersion: number | null;
+  payload: unknown;
+  status: ProposalStatus;
+  version: number;
+  createdAt: string;
+}
+
+export interface CreateProposalInput {
+  kind: ProposalKind;
+  targetTaskId: string | null;
+  targetVersion: number | null;
+  payload: unknown;
+}
+
+/** Outcome of an accept/dismiss. `agent_not_hired` is the routing-accept fail-closed branch
+ *  (the proposed agent isn't in the org's hired set — never routed to an unhired agent). */
+export type ProposalWriteOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'not_found' | 'conflict' | 'agent_not_hired' };
+
 /**
  * Inverse of TASK_TRANSITIONS: for each status, the statuses it may legally be
  * reached FROM. Derived once so the write-path guard (setStatus) enforces the
@@ -266,6 +296,40 @@ export interface CoordinationStore {
    *  interrupt); `not_found` if absent. */
   interruptTask(orgId: string, taskId: string): Promise<TaskWriteOutcome>;
 
+  // ── PM-assistant proposals (slice W3-S1) — advisory; accept routes through a binding method ──
+
+  /** List the org's proposals (newest first), optionally filtered by status/kind. Org-scoped. */
+  listProposals(
+    orgId: string,
+    opts?: { status?: ProposalStatus; kind?: ProposalKind; limit?: number }
+  ): Promise<Proposal[]>;
+
+  /** Fetch one proposal in the org, or null. */
+  getProposal(orgId: string, id: string): Promise<Proposal | null>;
+
+  /** Persist a generated proposal (status `pending`). Org-scoped. */
+  createProposal(orgId: string, input: CreateProposalInput): Promise<Proposal>;
+
+  /** Dismiss a pending proposal (CAS pending→dismissed). `not_found` if absent/another org;
+   *  `conflict` if already accepted/dismissed (a true duplicate dismiss). No binding effect. */
+  dismissProposal(orgId: string, id: string): Promise<ProposalWriteOutcome>;
+
+  /**
+   * Accept a ROUTING proposal: atomically (one tx) CAS the proposal pending→accepted AND set the
+   * task's routing PREFERENCE to `preferredAgentId` + re-route it (status→`routable`, claim cleared)
+   * — the SAME binding write a reassign performs, never a direct claim/assign. The preferred id is
+   * resolved to a HIRED agent by the caller BEFORE this runs (so an unhired name never reaches here).
+   * Fenced to a non-executing reassignable status AND the `target_version` the proposal was generated
+   * against (a task that moved since → `conflict`, the proposal is stale). On any task-side failure the
+   * whole tx rolls back, so the proposal stays `pending` (no half-applied accept). At-most-once: only
+   * the CAS winner proceeds to the binding write.
+   */
+  acceptRoutingProposal(
+    orgId: string,
+    id: string,
+    preferredAgentId: string
+  ): Promise<ProposalWriteOutcome>;
+
   // ── GitHub App installation (write-back installation resolution) ──────────────
 
   /**
@@ -361,6 +425,7 @@ interface TaskRow {
   repo_ref: string | null;
   tier_estimate: TierEstimate | null;
   last_error: string | null;
+  preferred_agent_id: string | null;
 }
 
 function mapTask(row: TaskRow): Task {
@@ -375,7 +440,40 @@ function mapTask(row: TaskRow): Task {
     repoRef: row.repo_ref,
     tierEstimate: row.tier_estimate,
     lastError: row.last_error ?? null,
+    preferredAgentId: row.preferred_agent_id ?? null,
   };
+}
+
+interface ProposalRow {
+  id: string;
+  kind: string;
+  target_task_id: string | null;
+  target_version: number | null;
+  payload: unknown;
+  status: string;
+  version: number;
+  created_at: Date | string;
+}
+
+function mapProposal(row: ProposalRow): Proposal {
+  return {
+    id: row.id,
+    kind: row.kind as ProposalKind,
+    targetTaskId: row.target_task_id,
+    targetVersion: row.target_version,
+    payload: row.payload,
+    status: row.status as ProposalStatus,
+    version: row.version,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+  };
+}
+
+/** Thrown inside `acceptRoutingProposal`'s tx to roll back (undo the proposal CAS) while
+ *  carrying the outcome to return — so a stale/missing target leaves the proposal `pending`. */
+class RollbackProposal extends Error {
+  constructor(public readonly outcome: ProposalWriteOutcome) {
+    super('proposal rollback');
+  }
 }
 
 /**
@@ -443,7 +541,7 @@ export class PgCoordinationStore implements CoordinationStore {
        VALUES ($1,$2,$3,$4,'routable',0,0,$5)
        ON CONFLICT (org_id, platform, external_story_id)
          DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
-       RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate`,
+       RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id`,
       [randomUUID(), orgId, input.externalStoryId, input.platform, input.repoRef ?? null]
     );
     return mapTask(res.rows[0]!);
@@ -451,7 +549,7 @@ export class PgCoordinationStore implements CoordinationStore {
 
   async getTask(orgId: string, taskId: string): Promise<Task | null> {
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error
+      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id
          FROM task WHERE org_id = $1 AND id = $2`,
       [orgId, taskId]
     );
@@ -493,10 +591,14 @@ export class PgCoordinationStore implements CoordinationStore {
     return { ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' };
   }
 
-  /** Run `fn` in a transaction so a job cancel + the task transition commit together (or
-   *  not at all) — a crash between them would orphan the task in `executing` with a reaped
-   *  job (the task-level analog of a publishing zombie). Mirrors PgIdentityRepository:
-   *  a Pool owns a fresh tx; an already-checked-out client reuses the caller's. */
+  /** Run `fn` in a transaction so a coupled write (job cancel + task transition, or proposal CAS +
+   *  task re-route) commits together or not at all — a crash between them would orphan state. Mirrors
+   *  PgIdentityRepository: a Pool owns a FRESH tx (BEGIN/COMMIT/ROLLBACK here); a single already-
+   *  checked-out client reuses the CALLER's tx, so the caller's COMMIT/ROLLBACK is the atomic boundary.
+   *  NOTE: when `this.db` is a bare client (NOT a Pool), this method adds no BEGIN/ROLLBACK of its own —
+   *  atomicity then depends on the caller having opened a tx. Every method that needs all-or-nothing
+   *  (cancelCoupledWrite, acceptRoutingProposal) is constructed against the Pool at the composition root,
+   *  so the fresh-tx path is the one that runs in production and integration tests. */
   private async withTaskTx<T>(fn: (db: Queryable) => Promise<T>): Promise<T> {
     if (!isPool(this.db)) return fn(this.db);
     const client = await this.db.connect();
@@ -605,8 +707,11 @@ export class PgCoordinationStore implements CoordinationStore {
     return this.cancelCoupledWrite(orgId, taskId, 'routable', (db) =>
       this.taskWriteOn(
         db,
+        // Clean slate: also clear any Tasca-side routing preference (an accepted PM-assistant
+        // proposal). A human reassign overrides a prior suggestion, so a stale preference must
+        // not silently re-bias the re-route.
         `UPDATE task
-            SET status = 'routable', claimed_by = NULL, failure_count = 0,
+            SET status = 'routable', claimed_by = NULL, failure_count = 0, preferred_agent_id = NULL,
                 version = version + 1, updated_at = now()
           WHERE org_id = $1 AND id = $2 AND status IN ('routable','claimed','needs_attention','failed')
          RETURNING status`,
@@ -623,6 +728,135 @@ export class PgCoordinationStore implements CoordinationStore {
     return this.cancelCoupledWrite(orgId, taskId, 'needs_attention', () =>
       Promise.resolve({ ok: false, reason: 'conflict' })
     );
+  }
+
+  // ── PM-assistant proposals (slice W3-S1) ────────────────────────────────────
+
+  async listProposals(
+    orgId: string,
+    opts: { status?: ProposalStatus; kind?: ProposalKind; limit?: number } = {}
+  ): Promise<Proposal[]> {
+    const where = ['org_id = $1'];
+    const params: unknown[] = [orgId];
+    if (opts.status) {
+      params.push(opts.status);
+      where.push(`status = $${params.length}`);
+    }
+    if (opts.kind) {
+      params.push(opts.kind);
+      where.push(`kind = $${params.length}`);
+    }
+    params.push(Math.min(Math.max(opts.limit ?? 50, 1), 200));
+    const res = await this.db.query<ProposalRow>(
+      `SELECT id, kind, target_task_id, target_version, payload, status, version, created_at
+         FROM proposal WHERE ${where.join(' AND ')}
+        ORDER BY created_at DESC LIMIT $${params.length}`,
+      params
+    );
+    return res.rows.map(mapProposal);
+  }
+
+  async getProposal(orgId: string, id: string): Promise<Proposal | null> {
+    const res = await this.db.query<ProposalRow>(
+      `SELECT id, kind, target_task_id, target_version, payload, status, version, created_at
+         FROM proposal WHERE org_id = $1 AND id = $2`,
+      [orgId, id]
+    );
+    const row = res.rows[0];
+    return row ? mapProposal(row) : null;
+  }
+
+  async createProposal(orgId: string, input: CreateProposalInput): Promise<Proposal> {
+    const res = await this.db.query<ProposalRow>(
+      `INSERT INTO proposal (id, org_id, kind, target_task_id, target_version, payload, status)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,'pending')
+       RETURNING id, kind, target_task_id, target_version, payload, status, version, created_at`,
+      [
+        randomUUID(),
+        orgId,
+        input.kind,
+        input.targetTaskId,
+        input.targetVersion,
+        JSON.stringify(input.payload ?? {}),
+      ]
+    );
+    return mapProposal(res.rows[0]!);
+  }
+
+  async dismissProposal(orgId: string, id: string): Promise<ProposalWriteOutcome> {
+    // CAS pending→dismissed; loser (already accepted/dismissed, or another org) gets the
+    // exists-check verdict. No binding effect — a dismiss only marks the suggestion handled.
+    const res = await this.db.query(
+      `UPDATE proposal SET status = 'dismissed', version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status = 'pending'`,
+      [orgId, id]
+    );
+    if (res.rowCount === 1) return { ok: true };
+    return this.proposalMissOutcome(orgId, id);
+  }
+
+  async acceptRoutingProposal(
+    orgId: string,
+    id: string,
+    preferredAgentId: string
+  ): Promise<ProposalWriteOutcome> {
+    return this.withTaskTx<ProposalWriteOutcome>(async (db) => {
+      // 1) CAS the proposal pending→accepted, scoped to org + kind='routing'. Only the winner
+      //    proceeds to the binding write — this is what makes the binding run AT MOST ONCE under
+      //    a double-accept race.
+      const claimed = await db.query<{ target_task_id: string | null; target_version: number | null }>(
+        `UPDATE proposal SET status = 'accepted', version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2 AND status = 'pending' AND kind = 'routing'
+        RETURNING target_task_id, target_version`,
+        [orgId, id]
+      );
+      if (claimed.rowCount !== 1) return this.proposalMissOutcome(orgId, id, db);
+      const targetTaskId = claimed.rows[0]!.target_task_id;
+      const targetVersion = claimed.rows[0]!.target_version;
+      if (!targetTaskId) {
+        // A routing proposal with no target task is malformed — roll back so it stays pending.
+        throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      }
+      // target_version is an integer column; guard it before interpolation so a corrupt value can
+      // never reach the SQL as `version = NaN` (which would match nothing — fail closed — but
+      // silently). An explicit conflict makes the invariant legible.
+      if (targetVersion !== null && !Number.isInteger(targetVersion)) {
+        throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      }
+      // 2) The binding write: set the routing preference + re-route, fenced to a non-executing
+      //    reassignable status AND the version the proposal was generated against (a task that
+      //    moved since → no row → conflict, the proposal is stale). Identical re-route to a
+      //    reassign, plus preferred_agent_id. Throwing rolls back the proposal CAS → stays pending.
+      const versionFence = targetVersion === null ? '' : ` AND version = ${targetVersion}`;
+      const moved = await db.query(
+        `UPDATE task
+            SET status = 'routable', claimed_by = NULL, failure_count = 0,
+                preferred_agent_id = $3, version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2
+            AND status IN ('routable','claimed','needs_attention','failed')${versionFence}
+         RETURNING status`,
+        [orgId, targetTaskId, preferredAgentId]
+      );
+      if (moved.rowCount !== 1) {
+        const exists = await db.query(`SELECT 1 FROM task WHERE org_id = $1 AND id = $2`, [orgId, targetTaskId]);
+        throw new RollbackProposal({ ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' });
+      }
+      return { ok: true };
+    }).catch((err) => {
+      if (err instanceof RollbackProposal) return err.outcome;
+      throw err;
+    });
+  }
+
+  /** The miss-verdict for a proposal CAS that moved no row: `not_found` (absent/other org) vs
+   *  `conflict` (exists but not `pending` — already accepted/dismissed). */
+  private async proposalMissOutcome(
+    orgId: string,
+    id: string,
+    db: Queryable = this.db
+  ): Promise<ProposalWriteOutcome> {
+    const exists = await db.query(`SELECT 1 FROM proposal WHERE org_id = $1 AND id = $2`, [orgId, id]);
+    return { ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' };
   }
 
   async setStatus(orgId: string, taskId: string, status: TaskStatus): Promise<void> {

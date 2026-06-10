@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus, TierEstimate } from '@tasca/domain';
-import type { CoordinationStore, TaskWriteOutcome } from './store';
+import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome } from './store';
 import type { WebhookVerifier, RawWebhook, VerifiedWebhook, StatusReporter, Logger } from './ports';
 import type {
   AgentDirectory,
@@ -67,6 +67,7 @@ class CountingStore implements CoordinationStore {
       repoRef: input.repoRef ?? null,
       tierEstimate: null,
       lastError: null,
+      preferredAgentId: null,
     };
     this.tasksByStory.set(key, task);
     return task;
@@ -98,6 +99,13 @@ class CountingStore implements CoordinationStore {
   async listRoutingDecisions() { return []; }
   async listPullRequestsForTask(_orgId: string, _taskId: string) { return []; }
   async listConnections() { return []; }
+  async listProposals() { return []; }
+  async getProposal() { return null; }
+  async createProposal(_orgId: string, input: CreateProposalInput): Promise<Proposal> {
+    return { id: 'p', kind: input.kind, targetTaskId: input.targetTaskId, targetVersion: input.targetVersion, payload: input.payload, status: 'pending', version: 0, createdAt: '2026-01-01T00:00:00Z' };
+  }
+  async dismissProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async acceptRoutingProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
 }
 
 const noopExecution: ExecutionPort = {

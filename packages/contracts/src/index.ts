@@ -14,6 +14,23 @@ export const ClassifierOutputSchema = z.object({
 });
 export type ClassifierOutput = z.infer<typeof ClassifierOutputSchema>;
 
+// ── PM-assistant (advisory, Wave-3 W3-S1) ─────────────────────────────────────
+// The proposer's output is validated here at the trust boundary, exactly like the
+// classifier: a malformed/over-long suggestion is rejected → no proposal (never a
+// throw, never a binding write). The PM-assistant only ever PROPOSES; acceptance
+// routes through the existing org-scoped CAS-guarded binding methods.
+
+/** A routing proposal's payload: which agent to route to, why, and how confident. The
+ *  agentName is resolved to a HIRED agent only at ACCEPT time (fail-closed if unhired) —
+ *  storing it here is advisory, never binding. Bounded lengths keep an LLM (later kinds)
+ *  from persisting unbounded text. */
+export const RoutingProposalSchema = z.object({
+  agentName: z.string().min(1).max(120),
+  why: z.string().min(1).max(2000),
+  confidence: z.number().min(0).max(1),
+});
+export type RoutingProposal = z.infer<typeof RoutingProposalSchema>;
+
 /** Normalized inbound platform event (adapters emit this; coordination consumes it). */
 export const AdapterEventSchema = z.object({
   type: z.literal('task.assigned'),

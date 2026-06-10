@@ -447,6 +447,9 @@ async function main(): Promise<void> {
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
     ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
+    // PM-assistant (slice W3-S1): advisory proposals. OFF by default (off-state first, per the
+    // design); set TASCA_PM_ASSISTANT=on to enable proposal generation.
+    ...(process.env.TASCA_PM_ASSISTANT === 'on' ? { pmAssistantEnabled: true } : {}),
   });
 
   const server = coordination.createServer();

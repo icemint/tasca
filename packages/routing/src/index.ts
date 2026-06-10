@@ -5,3 +5,4 @@ export * from './match';
 export * from './claim';
 export * from './concurrency';
 export * from './breaker';
+export * from './pm-proposer';

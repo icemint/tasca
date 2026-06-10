@@ -30,6 +30,13 @@ ALTER TABLE task ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAUL
 -- Nullable; set on the no-runner-capacity path, surfaced in the inspector so the state
 -- is actionable rather than a silent stall.
 ALTER TABLE task ADD COLUMN IF NOT EXISTS last_error text;
+-- A Tasca-side ROUTING PREFERENCE (slice W3-S1): the agent a human picked (today via an
+-- accepted PM-assistant routing proposal). Nullable + no FK by design -- it is advisory: the
+-- routing path resolves it WITHIN the org hired candidate set (fail-closed exactly like the
+-- 5d agent-name label), so a stale/unhired id is simply not a candidate, never a dangling
+-- reference. It is a PREFERENCE, never a binding assignment -- the engine + atomic claim still
+-- decide. Cleared on a plain reassign (clean slate).
+ALTER TABLE task ADD COLUMN IF NOT EXISTS preferred_agent_id text;
 DO $$ BEGIN
   ALTER TABLE task ADD CONSTRAINT task_status_chk CHECK (
     status IN ('ingested','routable','claimed','executing','in_review','done','failed','needs_attention')
@@ -301,6 +308,33 @@ END $$;`;
  *
  * Apply order to a clean Postgres:  TASK_TABLE_DDL + DISPATCH_JOB_DDL (from @tasca/db) → these.
  */
+/**
+ * PM-assistant proposals (slice W3-S1) — the advisory layer's only storage. Org-scoped from
+ * birth (post-3b; born NOT NULL + FK, no transitional default / expand-contract). A proposal
+ * is a SUGGESTION: accepting it routes through an existing org-scoped CAS-guarded binding
+ * method (reassign+preference / overrideTier / getOrCreateTask) — there is no proposal-side
+ * write to task status / claim / routing_decision. `target_version` fences a stale accept
+ * (the task moved since the proposal was generated). ON DELETE CASCADE on both FKs: dropping
+ * an org or a task drops its proposals (no orphans). NOTE: this is the only file with raw
+ * `proposal` SQL outside the scoped layer — `proposal` is in the org-scoping CI guard's
+ * TENANT_TABLES, and every store method that touches it is required-orgId.
+ */
+export const PROPOSAL_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS proposal (
+  id             text PRIMARY KEY,
+  org_id         text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  kind           text NOT NULL CHECK (kind IN ('triage','decomposition','routing','standup')),
+  target_task_id text REFERENCES task(id) ON DELETE CASCADE,
+  target_version integer,
+  payload        jsonb NOT NULL,
+  status         text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','dismissed')),
+  version        integer NOT NULL DEFAULT 0,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS proposal_org_status_kind_idx ON proposal (org_id, status, kind);
+CREATE INDEX IF NOT EXISTS proposal_org_task_idx ON proposal (org_id, target_task_id);`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -310,4 +344,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   ORG_SCOPING_DDL,
   ORG_CONTRACT_DDL,
   ORG_DISPATCH_CONTRACT_DDL,
+  PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
 ];

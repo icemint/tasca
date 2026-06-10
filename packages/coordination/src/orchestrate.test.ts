@@ -23,7 +23,7 @@ import {
 } from '@tasca/execution';
 import type { DispatchJob, DispatchJobInput, DispatchQueue } from '@tasca/db';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
-import type { CoordinationStore, TaskWriteOutcome } from './store';
+import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
 import type { AgentDirectory, AuditSink, RepoProvisioner, TaskContentSource } from './orchestrate';
 import type { MatchCandidate } from '@tasca/routing';
@@ -74,6 +74,7 @@ class FakeStore implements CoordinationStore {
       repoRef: input.repoRef ?? null,
       tierEstimate: null,
       lastError: null,
+      preferredAgentId: null,
     };
     this.tasks.set(task.id, task);
     return task;
@@ -176,6 +177,15 @@ class FakeStore implements CoordinationStore {
       .map((p) => ({ url: p.url, state: 'open' as const, createdAt: '2026-01-01T00:00:00Z' }));
   }
   async listConnections() { return []; }
+  // PM-assistant proposals (slice W3-S1) — not exercised by orchestration tests; the
+  // preferred-agent routing tests pre-seed task.preferredAgentId directly.
+  async listProposals() { return []; }
+  async getProposal() { return null; }
+  async createProposal(_orgId: string, input: CreateProposalInput): Promise<Proposal> {
+    return { id: 'p', kind: input.kind, targetTaskId: input.targetTaskId, targetVersion: input.targetVersion, payload: input.payload, status: 'pending', version: 0, createdAt: '2026-01-01T00:00:00Z' };
+  }
+  async dismissProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async acceptRoutingProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
 }
 
 /** A claim port that wins iff the task is still routable at the expected version. */
@@ -582,6 +592,81 @@ describe('orchestrateTaskAssigned — assignment intake: agent:<name> label (§5
     expect(outcome.kind).toBe('dispatched');
     if (outcome.kind !== 'dispatched') return;
     expect(outcome.agentId).toBe(ELVIS); // the routing engine's top pick, no override
+  });
+});
+
+describe('orchestrateTaskAssigned — preferred-agent routing (accepted PM proposal, W3-S1)', () => {
+  let store: FakeStore;
+  let execution: FakeExecution;
+  let status: FakeStatus;
+  let audit: FakeAudit;
+  beforeEach(() => {
+    store = new FakeStore();
+    execution = new FakeExecution();
+    status = new FakeStatus();
+    audit = new FakeAudit();
+  });
+
+  // Pre-seed the task (the row an accepted routing proposal would have set preferred_agent_id on),
+  // so getOrCreateTask returns it with the preference. EVENT is platform 'shortcut' / story 'sc-story-1'.
+  function seedPreferred(preferredAgentId: string | null): string {
+    const id = randomUUID();
+    store.tasks.set(id, {
+      id,
+      externalStoryId: 'sc-story-1',
+      platform: 'shortcut',
+      status: 'routable',
+      version: 0,
+      claimedBy: null,
+      failureCount: 0,
+      repoRef: '/repos/demo',
+      tierEstimate: null,
+      lastError: null,
+      preferredAgentId,
+    });
+    return id;
+  }
+
+  const twoHired: MatchCandidate[] = [
+    { profile: elvisProfile(), state: 'idle', activeCount: 0 }, // ELVIS ranks top (success 0.9)
+    { profile: elvisProfile({ agentId: 'agent-mona', successRate: 0.6 }), state: 'idle', activeCount: 0 },
+  ];
+
+  it('a preference for a HIRED agent overrides the routing pick → dispatched to that agent', async () => {
+    const taskId = seedPreferred('agent-mona'); // routing alone would pick ELVIS
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates: twoHired }));
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.taskId).toBe(taskId);
+    expect(outcome.agentId).toBe('agent-mona');
+    expect(store.routingDecisions[0]!.winnerAgentId).toBe('agent-mona');
+    expect(store.retireCalls).toEqual([]); // a hired preference is not a fail-close
+  });
+
+  it('FAIL-CLOSED: a preference for an UNHIRED agent → agent_not_hired, retired, never routed elsewhere', async () => {
+    const taskId = seedPreferred('agent-qwen'); // not in the hired candidate set
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates: twoHired }));
+    expect(outcome.kind).toBe('agent_not_hired');
+    if (outcome.kind !== 'agent_not_hired') return;
+    expect(execution.spawnCalls).toBe(0); // never silently routed to ELVIS instead
+    expect(store.retireCalls).toEqual([{ taskId, reason: "requested agent 'agent-qwen' is not hired" }]);
+    expect(store.tasks.get(taskId)!.status).toBe('needs_attention');
+  });
+
+  it('the preference takes PRECEDENCE over an agent:<name> label', async () => {
+    const taskId = seedPreferred('agent-mona');
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store, execution, status, audit, candidates: twoHired,
+        names: { 'agent-elvis': 'Elvis', 'agent-mona': 'Mona' },
+        content: { async fetch() { return { title: 't', body: 'b', labels: ['agent:Elvis'] }; } },
+      })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.agentId).toBe('agent-mona'); // preference wins over the label
+    void taskId;
   });
 });
 
