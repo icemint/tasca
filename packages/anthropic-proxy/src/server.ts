@@ -113,7 +113,10 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
       timeout: timeoutMs,
     };
 
+    let upstreamRes: import('node:http').IncomingMessage | undefined;
+
     const upReq = requestUpstream(upstreamOpts, (upRes) => {
+      upstreamRes = upRes;
       const outHeaders: Record<string, string | string[]> = {};
       for (const [name, value] of Object.entries(upRes.headers)) {
         if (value === undefined) continue;
@@ -136,6 +139,17 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
       }
     });
     upReq.on('timeout', () => upReq.destroy(new Error('upstream timeout')));
+
+    // Client went away (disconnect/abort) BEFORE the response finished → tear down the
+    // upstream so it stops streaming (and billing) into a dead socket and the key-bearing
+    // upstream TLS connection is released. Mirrors bridge.ts's bidirectional teardown; a
+    // normal completion (writableFinished) is skipped. A prompt-injected agent that opens
+    // and abandons many streams therefore can't leak/exhaust the worker's upstream sockets.
+    res.on('close', () => {
+      if (res.writableFinished) return;
+      upstreamRes?.destroy();
+      upReq.destroy();
+    });
 
     req.pipe(upReq); // STREAM the request body up — no buffering (bounds memory)
     req.on('error', () => upReq.destroy());

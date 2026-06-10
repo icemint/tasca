@@ -247,6 +247,36 @@ describe('streaming + concurrency', () => {
     expect(endAt - firstChunkAt).toBeGreaterThanOrEqual(25);
   });
 
+  it('a client disconnect mid-stream TEARS DOWN the upstream (no leak / no runaway billing / no DoS amplification)', async () => {
+    let upstreamStarted = false;
+    let upstreamClosed = false;
+    const up = await fakeUpstream((_req, _body, res) => {
+      upstreamStarted = true;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: a\ndata: 1\n\n');
+      res.on('close', () => (upstreamClosed = true));
+      // Hold the stream open indefinitely (never end) — a long completion an attacker
+      // would open and abandon. If the proxy leaked, this upstream would keep running.
+    });
+    const sock = await startProxy(up.origin);
+
+    // Make a request, read the first chunk, then ABORT the client connection.
+    await new Promise<void>((resolve) => {
+      const r = httpRequest({ socketPath: sock, path: '/v1/messages', method: 'POST' }, (res) => {
+        res.on('data', () => {
+          r.destroy(); // got the first chunk → bail mid-stream
+          resolve();
+        });
+      });
+      r.on('error', () => resolve());
+      r.end('{}');
+    });
+
+    await new Promise((r) => setTimeout(r, 80)); // let the close propagate upstream
+    expect(upstreamStarted).toBe(true);
+    expect(upstreamClosed).toBe(true); // the upstream was destroyed, not left streaming
+  });
+
   it('CONCURRENT requests never cross-contaminate — each gets exactly its own response', async () => {
     // The upstream echoes a per-request marker; the proxy must keep each request/response
     // pair on its own connection.
