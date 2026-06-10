@@ -10,6 +10,7 @@ import {
   PULL_REQUEST_TABLE_DDL,
   ORG_SCOPING_DDL,
   ORG_CONTRACT_DDL,
+  ORG_DISPATCH_CONTRACT_DDL,
 } from './schema';
 
 // DB-backed proof of the org_id migration (slice 3a). Skipped without DATABASE_URL.
@@ -200,6 +201,52 @@ run('org_id CONTRACT (slice 3b-2) — unique swap + ON CONFLICT lockstep + dropp
     // never a silent default onto some tenant.
     await expect(
       pool.query(`INSERT INTO task (id, external_story_id, platform, status) VALUES ('t-noorg','acme/widgets#zzz','github','routable')`)
+    ).rejects.toThrow(); // org_id NOT NULL, no default
+  });
+});
+
+run('org_id DISPATCH CONTRACT (slice 3c) — dispatch_job default dropped in lockstep with enqueue', () => {
+  const SCHEMA = 'org_scoping_3c_test';
+  let pool: Pool;
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    for (const ddl of PRE_ORG_DDL) await pool.query(ddl);
+    // Expand (3a) → store contract (3b-2) → dispatch contract (3c). Twice, for idempotency.
+    await pool.query(ORG_SCOPING_DDL);
+    await pool.query(ORG_CONTRACT_DDL);
+    await pool.query(ORG_DISPATCH_CONTRACT_DDL);
+    await pool.query(ORG_SCOPING_DDL);
+    await pool.query(ORG_CONTRACT_DDL);
+    await pool.query(ORG_DISPATCH_CONTRACT_DDL);
+  });
+
+  afterAll(async () => {
+    await pool?.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`).catch(() => {});
+    await pool?.end();
+  });
+
+  it('dispatch_job: an enqueue WITH org_id works (the queue writer now sets it)', async () => {
+    // Mirrors PgDispatchQueue.enqueue after 3c — org_id is supplied explicitly.
+    await pool.query(
+      `INSERT INTO dispatch_job (id, org_id, task_id, payload) VALUES ($1,'org_default','t-3c','{}'::jsonb)`,
+      [randomUUID()]
+    );
+    const r = await pool.query<{ org_id: string }>(`SELECT org_id FROM dispatch_job WHERE task_id='t-3c'`);
+    expect(r.rows[0]!.org_id).toBe('org_default');
+  });
+
+  it('dispatch_job: the transitional DEFAULT is dropped — an INSERT with NO org_id now FAILS', async () => {
+    // 3c drops dispatch_job's default in lockstep with enqueue setting org_id (per-writer
+    // expand/contract). Before 3c this default kept the queue's inserts working; now a
+    // forgotten org_id is a NOT-NULL violation, never a silent default. This is exactly the
+    // bug the 3b-2 integration tests caught when the default was dropped one slice too early.
+    await expect(
+      pool.query(`INSERT INTO dispatch_job (id, task_id, payload) VALUES ($1,'t-noorg','{}'::jsonb)`, [randomUUID()])
     ).rejects.toThrow(); // org_id NOT NULL, no default
   });
 });

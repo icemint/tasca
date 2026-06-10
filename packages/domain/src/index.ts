@@ -249,8 +249,16 @@ export type ClaimResult = ClaimOutcome;
 
 /** Persistence port for the atomic single-claim. Implemented by `@tasca/db`. */
 export interface ClaimPort {
-  /** CAS: claim `taskId` for `agentId` iff still `routable` at `expectedVersion`. */
-  tryClaim(taskId: string, agentId: string, expectedVersion: number): Promise<ClaimOutcome>;
+  /** CAS: claim `taskId` for `agentId` iff still `routable` at `expectedVersion`, scoped to
+   *  `orgId`. The claim is a request-context write (driven by orchestration with a resolved
+   *  org), so it is org-scoped like every other tenant write — defense in depth atop the
+   *  (id, version) pin. */
+  tryClaim(
+    orgId: string,
+    taskId: string,
+    agentId: string,
+    expectedVersion: number
+  ): Promise<ClaimOutcome>;
 }
 
 /** The lightweight LLM tier classifier — one budgeted call returning tier + confidence. */

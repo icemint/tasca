@@ -10,6 +10,9 @@ const run = url ? describe : describe.skip;
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
+// The CAS is org-scoped (slice 3c); seed tasks on this org and claim within it.
+const ORG = 'org_default';
+
 /**
  * Block until `n` sessions are *waiting* on the exclusive advisory lock `gateKey`.
  * Single-bigint advisory locks under 2^32 register in pg_locks as
@@ -49,7 +52,7 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
     try {
       await racePool.query('DELETE FROM task WHERE id=$1', [taskId]);
       await racePool.query(
-        `INSERT INTO task (id, external_story_id, status, version) VALUES ($1,'s','routable',0)`,
+        `INSERT INTO task (id, org_id, external_story_id, status, version) VALUES ($1,'org_default','s','routable',0)`,
         [taskId]
       );
 
@@ -64,7 +67,7 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
           const client = await racePool.connect();
           try {
             await client.query('SELECT pg_advisory_lock_shared($1)', [GATE]); // parks here
-            return await new PgClaimRepository(client).tryClaim(taskId, `agent-${i}`, 0);
+            return await new PgClaimRepository(client).tryClaim(ORG, taskId, `agent-${i}`, 0);
           } finally {
             await client.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
             client.release();
@@ -96,11 +99,11 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
     const taskId = 'task-cas-stale';
     await pool.query('DELETE FROM task WHERE id=$1', [taskId]);
     await pool.query(
-      `INSERT INTO task (id, external_story_id, status, version) VALUES ($1,'s2','routable',0)`,
+      `INSERT INTO task (id, org_id, external_story_id, status, version) VALUES ($1,'org_default','s2','routable',0)`,
       [taskId]
     );
-    const first = await repo.tryClaim(taskId, 'a', 0);
-    const stale = await repo.tryClaim(taskId, 'b', 0);
+    const first = await repo.tryClaim(ORG, taskId, 'a', 0);
+    const stale = await repo.tryClaim(ORG, taskId, 'b', 0);
     expect(first.won).toBe(true);
     // A winning claim describes the post-claim row.
     expect(first).toMatchObject({ won: true, newVersion: 1, found: true, currentStatus: 'claimed', currentVersion: 1 });
@@ -112,18 +115,18 @@ run('PgClaimRepository CAS (Postgres) — exactly one claim wins', () => {
   it('distinguishes a lost-race loss (row claimed) from a missing task', async () => {
     const repo = new PgClaimRepository(pool);
     // Missing task → found:false (terminal: never retryable).
-    const missing = await repo.tryClaim('task-cas-does-not-exist', 'a', 0);
+    const missing = await repo.tryClaim(ORG, 'task-cas-does-not-exist', 'a', 0);
     expect(missing).toMatchObject({ won: false, found: false, currentStatus: null, currentVersion: null });
 
     // A loser in the race learns the row is claimed at v1 (lost-race, terminal here).
     const taskId = 'task-cas-loser-state';
     await pool.query('DELETE FROM task WHERE id=$1', [taskId]);
     await pool.query(
-      `INSERT INTO task (id, external_story_id, status, version) VALUES ($1,'s3','routable',0)`,
+      `INSERT INTO task (id, org_id, external_story_id, status, version) VALUES ($1,'org_default','s3','routable',0)`,
       [taskId]
     );
-    await repo.tryClaim(taskId, 'winner', 0);
-    const loser = await repo.tryClaim(taskId, 'loser', 0);
+    await repo.tryClaim(ORG, taskId, 'winner', 0);
+    const loser = await repo.tryClaim(ORG, taskId, 'loser', 0);
     expect(loser).toMatchObject({ won: false, found: true, currentStatus: 'claimed', currentVersion: 1 });
   });
 

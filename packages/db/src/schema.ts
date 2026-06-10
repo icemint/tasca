@@ -22,7 +22,12 @@ CREATE TABLE IF NOT EXISTS task (
   claimed_by       text,
   failure_count    integer NOT NULL DEFAULT 0,
   repo_ref         text
-);`;
+);
+-- org_id: the db-layer claim CAS (PgClaimRepository.tryClaim) is org-scoped (slice 3c), so the
+-- column must exist wherever the base task table does. Declared nullable here; the coordination
+-- migration (ORG_SCOPING_DDL → ORG_CONTRACT_DDL) layers the tenancy semantics — backfill, NOT
+-- NULL, FK to organization, org-prefixed uniques, and the transitional-default lifecycle.
+ALTER TABLE task ADD COLUMN IF NOT EXISTS org_id text;`;
 
 // The dispatch queue: the coordination↔execution seam. Coordination ENQUEUES a job
 // per dispatch; an agent-runner CLAIMS one atomically via FOR UPDATE SKIP LOCKED, so
@@ -49,6 +54,13 @@ CREATE TABLE IF NOT EXISTS dispatch_job (
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS claim_epoch bigint NOT NULL DEFAULT 0;
+-- org_id rides the job as DATA (slice 3c): the queue writer (enqueue) sets it from the task's
+-- org. Declared here (nullable) so the column exists wherever dispatch_job does — the @tasca/db
+-- layer now writes it. The tenancy semantics (backfill, NOT NULL, FK to organization, and the
+-- transitional-default lifecycle) are layered on by the coordination migration
+-- (ORG_SCOPING_DDL → ORG_DISPATCH_CONTRACT_DDL). The cross-org workers (claimNext/claimFinished/
+-- sweepExpired) deliberately do NOT filter on it — a runner serves every tenant.
+ALTER TABLE dispatch_job ADD COLUMN IF NOT EXISTS org_id text;
 -- The runner writes its result (e.g. the PR url) back to the QUEUE only; the reaper
 -- reads it to finalize. reaping_at leases a finished row to one reaper WITHOUT changing
 -- its terminal status, so a reaper crash just lets the lease lapse and the row is

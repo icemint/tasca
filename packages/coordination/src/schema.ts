@@ -270,11 +270,34 @@ ALTER TABLE platform_connection ALTER COLUMN org_id DROP DEFAULT;
 ALTER TABLE webhook_event ALTER COLUMN org_id DROP DEFAULT;`;
 
 /**
+ * The CONTRACT step for dispatch_job (slice 3c), the per-writer counterpart of ORG_CONTRACT_DDL.
+ * dispatch_job is written by the QUEUE (`PgDispatchQueue.enqueue`), not the store, so its
+ * transitional `DEFAULT 'org_default'` was deliberately KEPT through 3b-2 (dropping it then would
+ * have broken every enqueue, which didn't yet set org_id). Now that enqueue sets org_id explicitly
+ * (3c), the data-layer fallback must not outlive the type-layer enforcement — drop it, in lockstep.
+ *
+ * The cross-org worker paths (runner `claimNext`, reaper `claimFinished`, `sweepExpired`) are
+ * UNCHANGED and deliberately do NOT filter on org_id — a runner serves every tenant; org_id rides
+ * the job as DATA. That is the one explicit cross-org path (watch item 3).
+ *
+ * Guarded by to_regclass — dispatch_job lives in @tasca/db and isn't present in every test context.
+ * Idempotent: DROP DEFAULT is a no-op when the default is already absent.
+ */
+export const ORG_DISPATCH_CONTRACT_DDL = `
+DO $$ BEGIN
+  IF to_regclass('dispatch_job') IS NOT NULL THEN
+    ALTER TABLE dispatch_job ALTER COLUMN org_id DROP DEFAULT;
+  END IF;
+END $$;`;
+
+/**
  * All coordination DDL in dependency order. `task` must exist first (it is the
  * @tasca/db base table — apply TASK_TABLE_DDL before this), then the columns are
  * layered on, then the dependent tables (routing_decision / pull_request FK the
- * task). platform_connection and webhook_event are independent. ORG_SCOPING_DDL (expand)
- * then ORG_CONTRACT_DDL (contract) are LAST — they ALTER all of the above once they exist.
+ * task). platform_connection and webhook_event are independent. The org migration is LAST —
+ * it ALTERs all of the above once they exist: ORG_SCOPING_DDL (3a expand) → ORG_CONTRACT_DDL
+ * (3b-2 store contract) → ORG_DISPATCH_CONTRACT_DDL (3c queue contract: drops dispatch_job's
+ * transitional default now that enqueue sets org_id).
  *
  * Apply order to a clean Postgres:  TASK_TABLE_DDL + DISPATCH_JOB_DDL (from @tasca/db) → these.
  */
@@ -286,4 +309,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   PULL_REQUEST_TABLE_DDL,
   ORG_SCOPING_DDL,
   ORG_CONTRACT_DDL,
+  ORG_DISPATCH_CONTRACT_DDL,
 ];

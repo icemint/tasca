@@ -3,6 +3,11 @@ import type { Queryable } from './claim-repo';
 
 /** A job to dispatch: the task it belongs to + the opaque payload a runner needs. */
 export interface DispatchJobInput {
+  /** The org the task belongs to — carried onto the job as DATA (slice 3c). Set by the
+   *  enqueuer from the already-resolved task org. The cross-org workers (runner claim /
+   *  reaper) do NOT filter on it; it is here for per-org observability/filtering later and
+   *  so the column can be NOT NULL with no default (the writer always provides it). */
+  orgId: string;
   taskId: string;
   /** Everything the runner needs to execute (repoRef, prompt context, headBranch, …).
    *  Opaque to the queue — serialized as jsonb. */
@@ -184,10 +189,13 @@ export class PgDispatchQueue implements DispatchQueue {
 
   async enqueue(input: DispatchJobInput): Promise<{ id: string }> {
     const id = randomUUID();
+    // org_id is set from the task's org (slice 3c) — once the writer always provides it, the
+    // transitional column default is dropped (ORG_DISPATCH_CONTRACT_DDL), so a forgotten org
+    // becomes a NOT-NULL failure here rather than a silent default onto some tenant.
     await this.db.query(
-      `INSERT INTO dispatch_job (id, task_id, payload, available_at)
-       VALUES ($1, $2, $3::jsonb, now() + make_interval(secs => $4))`,
-      [id, input.taskId, JSON.stringify(input.payload), input.availableInSeconds ?? 0]
+      `INSERT INTO dispatch_job (id, org_id, task_id, payload, available_at)
+       VALUES ($1, $2, $3, $4::jsonb, now() + make_interval(secs => $5))`,
+      [id, input.orgId, input.taskId, JSON.stringify(input.payload), input.availableInSeconds ?? 0]
     );
     return { id };
   }

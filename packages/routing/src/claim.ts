@@ -7,6 +7,7 @@ import type { ClaimPort } from './ports';
  */
 export async function atomicClaim(
   port: ClaimPort,
+  orgId: string,
   taskId: string,
   agentId: string,
   expectedVersion: number
@@ -14,5 +15,5 @@ export async function atomicClaim(
   // ClaimResult is an alias of ClaimOutcome (the engine adds no fields), so the
   // port's outcome — including the enriched loss diagnostics (found /
   // currentStatus / currentVersion) — is returned directly.
-  return port.tryClaim(taskId, agentId, expectedVersion);
+  return port.tryClaim(orgId, taskId, agentId, expectedVersion);
 }

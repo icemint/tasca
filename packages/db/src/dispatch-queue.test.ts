@@ -41,7 +41,7 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     const GATE = 615243;
     const racePool = new Pool({ connectionString: url, max: N + 4 });
     try {
-      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't1', payload: { a: 1 } });
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ orgId: 'org_default', taskId: 't1', payload: { a: 1 } });
 
       // Hold the gate; every claimer blocks on a shared acquire until release.
       const gate = await racePool.connect();
@@ -89,7 +89,7 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     const GATE = 771122;
     const racePool = new Pool({ connectionString: url, max: 6 });
     try {
-      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-race', payload: {} });
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ orgId: 'org_default', taskId: 't-race', payload: {} });
 
       const gate = await racePool.connect();
       await gate.query('SELECT pg_advisory_lock($1)', [GATE]);
@@ -141,7 +141,7 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     const GATE = 880011;
     const racePool = new Pool({ connectionString: url, max: 6 });
     try {
-      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-cancelrace', payload: {} });
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ orgId: 'org_default', taskId: 't-cancelrace', payload: {} });
       const claimed = await new PgDispatchQueue(racePool).claimNext('runner-1', 30);
       const fence = claimed!.fence;
 
@@ -199,7 +199,7 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     const GATE = 880022;
     const racePool = new Pool({ connectionString: url, max: 6 });
     try {
-      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ taskId: 't-taskrace', payload: {} });
+      const { id: jobId } = await new PgDispatchQueue(racePool).enqueue({ orgId: 'org_default', taskId: 't-taskrace', payload: {} });
       const claimed = await new PgDispatchQueue(racePool).claimNext('runner-1', 30);
       const fence = claimed!.fence;
 
@@ -255,7 +255,7 @@ run('PgDispatchQueue (Postgres) — exactly-once dispatch under concurrent runne
     try {
       const enq = new PgDispatchQueue(racePool);
       const ids = new Set<string>();
-      for (let i = 0; i < JOBS; i++) ids.add((await enq.enqueue({ taskId: `t${i}`, payload: { i } })).id);
+      for (let i = 0; i < JOBS; i++) ids.add((await enq.enqueue({ orgId: 'org_default', taskId: `t${i}`, payload: { i } })).id);
 
       // Each claimer loops claimNext on its own connection until the queue is dry.
       const claimers = Array.from({ length: CLAIMERS }, (_, c) =>
@@ -304,7 +304,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('a claimed job is not re-claimable until its lease lapses; reclaimExpired requeues it', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const first = await q.claimNext('r1', 30);
     expect(first).not.toBeNull();
     // Held under lease → a second runner gets nothing.
@@ -321,7 +321,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('complete makes a job terminal (never re-claimed)', async () => {
-    const { id } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.complete(job!.id, job!.fence)).toBe(true);
     expect(await q.claimNext('r1', 30)).toBeNull();
@@ -330,7 +330,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('release returns a job to the queue, honoring a delay before it is claimable again', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.release(job!.id, job!.fence, { delaySeconds: 60 })).toBe(true);
     // Delayed → not yet claimable.
@@ -341,7 +341,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('fail makes a job terminal and records the error', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.fail(job!.id, job!.fence, 'boom')).toBe(true);
     expect(await q.claimNext('r1', 30)).toBeNull();
@@ -358,12 +358,12 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
 
   it('requestCancel: removes a queued job, signals a claimed one, is too_late once publishing/terminal', async () => {
     // queued → removed
-    const { id: a } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id: a } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     expect(await q.requestCancel(a)).toBe('removed');
     expect(await q.claimNext('r', 30)).toBeNull(); // cancelled, not claimable
 
     // claimed → signalled (a runner holds it; it'll abort + revoke)
-    const { id: b } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id: b } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const jb = await q.claimNext('r1', 30);
     expect(jb!.id).toBe(b);
     expect(await q.requestCancel(b)).toBe('signalled');
@@ -371,7 +371,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
     expect(row.rows[0]!.status).toBe('cancelled');
 
     // publishing (point of no return passed) → too_late
-    const { id: c } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id: c } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const jc = await q.claimNext('r1', 30);
     expect(await q.beginPublish(jc!.id, jc!.fence)).toBe(true);
     expect(await q.requestCancel(c)).toBe('too_late');
@@ -382,18 +382,18 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
     expect(await q.requestCancelForTask('t-none')).toBe('no_job');
 
     // queued → removed
-    await q.enqueue({ taskId: 't-q', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-q', payload: {} });
     expect(await q.requestCancelForTask('t-q')).toBe('removed');
     expect(await q.claimNext('r', 30)).toBeNull();
 
     // claimed → signalled
-    const { id: b } = await q.enqueue({ taskId: 't-c', payload: {} });
+    const { id: b } = await q.enqueue({ orgId: 'org_default', taskId: 't-c', payload: {} });
     expect((await q.claimNext('r1', 30))!.id).toBe(b);
     expect(await q.requestCancelForTask('t-c')).toBe('signalled');
     expect((await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b])).rows[0]!.status).toBe('cancelled');
 
     // publishing → too_late (told apart from no_job: a job exists, it just passed the point of no return)
-    const { id: c } = await q.enqueue({ taskId: 't-p', payload: {} });
+    const { id: c } = await q.enqueue({ orgId: 'org_default', taskId: 't-p', payload: {} });
     const jc = await q.claimNext('r1', 30);
     expect(jc!.id).toBe(c);
     expect(await q.beginPublish(jc!.id, jc!.fence)).toBe(true);
@@ -406,7 +406,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
 
   it('jobStatus reflects the lifecycle non-destructively (queued → claimed), null when gone', async () => {
     expect(await q.jobStatus('00000000-0000-0000-0000-000000000000')).toBeNull();
-    const { id } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     expect(await q.jobStatus(id)).toBe('queued');
     expect(await q.jobStatus(id)).toBe('queued'); // non-destructive — a repeat read is identical
     const job = await q.claimNext('r1', 30);
@@ -415,7 +415,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('beginPublish → complete: the normal finish path (claimed → publishing → done)', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
     expect(await q.complete(job!.id, job!.fence, { prUrl: 'u' })).toBe(true);
@@ -424,7 +424,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('renewLease keeps a PUBLISHING job alive (a slow openPr must not let the lease lapse)', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
     // The runner's heartbeat fires during openPr — it must still renew while publishing,
@@ -435,7 +435,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('release requeues a PUBLISHING job (openPr threw after beginPublish) — prompt re-drive, fenced', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
     // A stale fence cannot clobber a publishing row.
@@ -446,7 +446,7 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
   });
 
   it('fail records a terminal failure from a PUBLISHING row (fenced) — drives the breaker without stranding', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = await q.claimNext('r1', 30);
     expect(await q.beginPublish(job!.id, job!.fence)).toBe(true);
     expect(await q.fail(job!.id, job!.fence + 1, 'x')).toBe(false); // stale fence rejected
@@ -457,12 +457,12 @@ run('PgDispatchQueue (Postgres) — lifecycle: lease reclaim, complete, release,
 
   it('cancel removes a still-queued job (true), but refuses one a runner already claimed (false)', async () => {
     // Unclaimed → cancel succeeds and the job is gone (the in-process fallback wins).
-    const { id: a } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id: a } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     expect(await q.cancel(a)).toBe(true);
     expect(await q.claimNext('r', 30)).toBeNull(); // removed
 
     // Claimed by a runner → cancel refuses (false): coordination must defer to it.
-    const { id: b } = await q.enqueue({ taskId: 't', payload: {} });
+    const { id: b } = await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const claimed = await q.claimNext('runner-1', 30);
     expect(claimed!.id).toBe(b);
     expect(await q.cancel(b)).toBe(false); // a runner owns it — not cancelable
@@ -488,7 +488,7 @@ run('PgDispatchQueue (Postgres) — fencing: a stale runner cannot clobber the n
   });
 
   it('the canonical anomaly: R1 overruns lease → reclaimed → R2 re-claims → R1.complete is FENCED OUT', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const r1 = (await q.claimNext('r1', 30))!; // R1 holds fence=1
 
     // R1 stalls past its lease; the sweeper reclaims the job.
@@ -516,7 +516,7 @@ run('PgDispatchQueue (Postgres) — fencing: a stale runner cannot clobber the n
   });
 
   it('renewLease keeps a live long-running claim from being reclaimed; a stale fence cannot renew', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = (await q.claimNext('r1', 1))!; // short lease
 
     // The live runner heartbeats before the lease lapses → lease extended, not reclaimed.
@@ -548,7 +548,7 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
   });
 
   it('complete stores the runner result; claimFinished leases it for the reaper; markReaped deletes it', async () => {
-    await q.enqueue({ taskId: 't-done', payload: { repoRef: 'acme/widgets' } });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-done', payload: { repoRef: 'acme/widgets' } });
     const job = (await q.claimNext('r1', 30))!;
     expect(await q.complete(job.id, job.fence, { prUrl: 'https://github.com/acme/widgets/pull/9' })).toBe(true);
 
@@ -570,7 +570,7 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
   });
 
   it('claimFinished re-selects a job whose reaping lease lapsed (a reaper crash never strands it)', async () => {
-    await q.enqueue({ taskId: 't', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't', payload: {} });
     const job = (await q.claimNext('r1', 30))!;
     await q.complete(job.id, job.fence, { prUrl: 'x' });
     expect(await q.claimFinished(10, 30)).toHaveLength(1); // leased
@@ -582,7 +582,7 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
   });
 
   it('claimFinished returns failed jobs too (the reaper drives their breaker), with the error', async () => {
-    await q.enqueue({ taskId: 't-fail', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-fail', payload: {} });
     const job = (await q.claimNext('r1', 30))!;
     await q.fail(job.id, job.fence, 'no committed changes');
     const finished = await q.claimFinished(10, 30);
@@ -591,12 +591,12 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
 
   it('sweepExpired requeues an expired claim under the cap, but FAILS OVER one at the cap', async () => {
     // Under the cap (attempts=1, cap=3): a dead runner's claim is requeued for retry.
-    await q.enqueue({ taskId: 't-retry', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-retry', payload: {} });
     const a = (await q.claimNext('r1', 30))!;
     await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second' WHERE id=$1`, [a.id]);
 
     // At the cap (force attempts up to the cap): a dead runner's claim fails over.
-    await q.enqueue({ taskId: 't-giveup', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-giveup', payload: {} });
     const b = (await q.claimNext('r2', 30))!;
     await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second', attempts = 3 WHERE id=$1`, [b.id]);
 
@@ -617,13 +617,13 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
     // The runner won beginPublish (claimed→publishing) then DIED before complete — without
     // covering `publishing`, sweep would leave it stranded forever (never finalized, never
     // re-claimable). Under the cap it must requeue (openPr is idempotent → safe re-drive).
-    await q.enqueue({ taskId: 't-pub-retry', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-pub-retry', payload: {} });
     const a = (await q.claimNext('r1', 30))!;
     expect(await q.beginPublish(a.id, a.fence)).toBe(true);
     await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second' WHERE id=$1`, [a.id]);
 
     // A publishing job at the attempts cap fails over rather than looping forever.
-    await q.enqueue({ taskId: 't-pub-giveup', payload: {} });
+    await q.enqueue({ orgId: 'org_default', taskId: 't-pub-giveup', payload: {} });
     const b = (await q.claimNext('r2', 30))!;
     expect(await q.beginPublish(b.id, b.fence)).toBe(true);
     await pool.query(`UPDATE dispatch_job SET lease_expires_at = now() - interval '1 second', attempts = 3 WHERE id=$1`, [b.id]);
@@ -633,5 +633,28 @@ run('PgDispatchQueue (Postgres) — reaper seam: complete-with-result, claimFini
     expect((await q.claimNext('r3', 30))!.id).toBe(a.id); // re-drivable, not a zombie
     const failed = await pool.query<{ status: string }>('SELECT status FROM dispatch_job WHERE id=$1', [b.id]);
     expect(failed.rows[0]!.status).toBe('failed');
+  });
+
+  it('CROSS-ORG (watch item 3): enqueue carries org_id, and ONE runner claims jobs from DIFFERENT orgs', async () => {
+    // org_id rides the job as DATA — enqueue sets it; the cross-org workers do NOT filter on it
+    // (a single runner fleet serves every tenant). This is the one deliberate cross-org path.
+    const q = new PgDispatchQueue(pool);
+    await q.enqueue({ orgId: 'org_a', taskId: 't-a', payload: { which: 'a' } });
+    await q.enqueue({ orgId: 'org_b', taskId: 't-b', payload: { which: 'b' } });
+
+    // enqueue carried each job's org as data (not filtered, just stored).
+    const rows = await pool.query<{ task_id: string; org_id: string }>(
+      `SELECT task_id, org_id FROM dispatch_job ORDER BY org_id`
+    );
+    expect(rows.rows).toEqual([
+      { task_id: 't-a', org_id: 'org_a' },
+      { task_id: 't-b', org_id: 'org_b' },
+    ]);
+
+    // One runner claims BOTH jobs across orgs — claimNext applies no org filter.
+    const first = (await q.claimNext('runner-shared', 30))!;
+    const second = (await q.claimNext('runner-shared', 30))!;
+    expect(new Set([first.taskId, second.taskId])).toEqual(new Set(['t-a', 't-b']));
+    expect(await q.claimNext('runner-shared', 30)).toBeNull(); // both drained
   });
 });

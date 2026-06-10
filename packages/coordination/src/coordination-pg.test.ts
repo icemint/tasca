@@ -202,7 +202,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
           const client = await racePool.connect();
           try {
             await client.query('SELECT pg_advisory_lock_shared($1)', [GATE]);
-            return await new PgClaimRepository(client).tryClaim(task.id, `agent-${i}`, 0);
+            return await new PgClaimRepository(client).tryClaim(ORG, task.id, `agent-${i}`, 0);
           } finally {
             await client.query('SELECT pg_advisory_unlock_shared($1)', [GATE]).catch(() => {});
             client.release();
@@ -523,7 +523,7 @@ run('coordination (Postgres) — human write-API interventions', () => {
   // assigned in beforeAll, after this describe body runs.
   const dispatchFor = async (taskId: string, to: 'queued' | 'claimed' | 'publishing'): Promise<void> => {
     const queue = new PgDispatchQueue(pool);
-    await queue.enqueue({ taskId, payload: {} });
+    await queue.enqueue({ orgId: ORG, taskId, payload: {} });
     if (to === 'queued') return;
     const job = await queue.claimNext('runner-1', 30);
     if (to === 'publishing') await queue.beginPublish(job!.id, job!.fence);
