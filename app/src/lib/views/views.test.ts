@@ -265,20 +265,44 @@ describe('pm-assistant (W3-S1)', () => {
     expect(html).toContain('confidence 100%'); // clamped, not "250%"
   });
 
-  it('on-state with no suggestions offers on-demand "Suggest routing" over routable tasks', async () => {
+  it('on-state with no suggestions offers on-demand triage + routing over open tasks', async () => {
     stubFetch({
       '/api/proposals': { body: { enabled: true, proposals: [] } },
       '/api/tasks': {
         body: [
           { id: 't9', externalStoryId: 'acme/api#9', platform: 'github', status: 'routable', tierEstimate: 'hard', repoRef: 'acme/api', claimedBy: null, failureCount: 0 },
+          { id: 't10', externalStoryId: 'acme/api#10', platform: 'github', status: 'routable', tierEstimate: null, repoRef: 'acme/api', claimedBy: null, failureCount: 0 },
         ],
       },
     });
-    const r = await loadPmAssistant();
-    const html = htmlOf(r);
+    const html = htmlOf(await loadPmAssistant());
     expect(html).toContain('No suggestions yet');
-    expect(html).toContain('Generate a routing suggestion');
-    expect(html).toContain('data-action="generate"');
-    expect(html).toContain('data-task-id="t9"');
+    expect(html).toContain('Generate a suggestion');
+    expect(html).toContain('data-kind="triage"'); // triage offered on every open task
+    expect(html).toContain('data-kind="routing"'); // routing offered on the estimated task (t9)
+    // t10 has no estimate → triage yes, route no; t9 has both
+    expect((html.match(/data-kind="triage"/g) || []).length).toBe(2);
+    expect((html.match(/data-kind="routing"/g) || []).length).toBe(1);
+  });
+
+  it('renders a pending TRIAGE suggestion with the proposed tier and Accept/Dismiss', async () => {
+    stubFetch({
+      '/api/proposals': {
+        body: {
+          enabled: true,
+          proposals: [
+            { id: 'pt', kind: 'triage', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+              createdAt: '2026-01-01T00:00:00Z', payload: { tier: 'ultra', why: 'mentions 500s under load', confidence: 0.78 } },
+          ],
+        },
+      },
+      '/api/tasks': { body: [] },
+    });
+    const html = htmlOf(await loadPmAssistant());
+    expect(html).toContain('Triage');
+    expect(html).toContain('mentions 500s under load');
+    expect(html).toContain('confidence 78%');
+    expect(html).toContain('Suggestion · not applied');
+    expect(html).toContain('data-action="accept"');
   });
 });

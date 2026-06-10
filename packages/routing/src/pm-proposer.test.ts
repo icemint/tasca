@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import type { CapabilityProfile, TierEstimate } from '@tasca/domain';
-import type { RoutingProposal } from '@tasca/contracts';
+import type { CapabilityProfile, TierEstimate, TierFeatures } from '@tasca/domain';
+import type { RoutingProposal, TriageProposal } from '@tasca/contracts';
+import type { LlmClassifierPort } from './ports';
 import {
-  DeterministicRoutingProposer,
+  DefaultPmProposer,
   proposeRoutingFailSoft,
+  proposeTriageFailSoft,
   type PmProposerPort,
   type RoutingCandidate,
 } from './pm-proposer';
@@ -36,9 +38,9 @@ const estimate: TierEstimate = {
 
 const task = { title: 'Fix the thing', body: 'a short task' };
 
-describe('DeterministicRoutingProposer', () => {
+describe('DefaultPmProposer', () => {
   it('proposes the top eligible hired agent, by the SAME engine the binding path uses', async () => {
-    const p = new DeterministicRoutingProposer();
+    const p = new DefaultPmProposer();
     // mona ranks higher (success 0.95) than elvis (0.6); both cover medium + idle.
     const out = await p.proposeRouting({
       task,
@@ -52,7 +54,7 @@ describe('DeterministicRoutingProposer', () => {
   });
 
   it('returns null (honest no-suggestion) when no candidate is eligible', async () => {
-    const p = new DeterministicRoutingProposer();
+    const p = new DefaultPmProposer();
     // maxTier basic < medium estimate → ineligible.
     const out = await p.proposeRouting({
       task,
@@ -63,7 +65,7 @@ describe('DeterministicRoutingProposer', () => {
   });
 
   it('returns null for an empty roster', async () => {
-    const out = await new DeterministicRoutingProposer().proposeRouting({ task, estimate, candidates: [] });
+    const out = await new DefaultPmProposer().proposeRouting({ task, estimate, candidates: [] });
     expect(out).toBeNull();
   });
 });
@@ -72,12 +74,12 @@ describe('proposeRoutingFailSoft — a proposer outage must never touch the loop
   const input = { task, estimate, candidates: [candidate('mona', 'Mona')] };
 
   it('happy path: validates and returns the proposal', async () => {
-    const out = await proposeRoutingFailSoft(new DeterministicRoutingProposer(), input);
+    const out = await proposeRoutingFailSoft(new DefaultPmProposer(), input);
     expect(out?.agentName).toBe('Mona');
   });
 
   it('a THROWING proposer → null (no proposal), never propagates', async () => {
-    const port: PmProposerPort = {
+    const port: Pick<PmProposerPort, 'proposeRouting'> = {
       proposeRouting: async () => {
         throw new Error('LLM 503');
       },
@@ -86,7 +88,7 @@ describe('proposeRoutingFailSoft — a proposer outage must never touch the loop
   });
 
   it('a SLOW proposer (exceeds the timeout) → null', async () => {
-    const port: PmProposerPort = {
+    const port: Pick<PmProposerPort, 'proposeRouting'> = {
       proposeRouting: () => new Promise((resolve) => setTimeout(() => resolve(null), 50)),
     };
     const out = await proposeRoutingFailSoft(port, input, { timeoutMs: 10 });
@@ -94,7 +96,7 @@ describe('proposeRoutingFailSoft — a proposer outage must never touch the loop
   });
 
   it('a MALFORMED proposal (fails schema validation) → null', async () => {
-    const port: PmProposerPort = {
+    const port: Pick<PmProposerPort, 'proposeRouting'> = {
       // confidence out of range + empty name → rejected at the trust boundary.
       proposeRouting: async () => ({ agentName: '', why: 'x', confidence: 5 }) as unknown as RoutingProposal,
     };
@@ -102,7 +104,56 @@ describe('proposeRoutingFailSoft — a proposer outage must never touch the loop
   });
 
   it('a proposer returning null (no suggestion) → null', async () => {
-    const port: PmProposerPort = { proposeRouting: async () => null };
+    const port: Pick<PmProposerPort, 'proposeRouting'> = { proposeRouting: async () => null };
     await expect(proposeRoutingFailSoft(port, input)).resolves.toBeNull();
+  });
+});
+
+describe('DefaultPmProposer.proposeTriage — the tier engine surfaced as a suggestion', () => {
+  const triageTask = { title: 'Refactor the auth module', body: 'Investigate and redesign the token flow across several files.' };
+
+  it('heuristic-only (no classifier) proposes a tier with a plain-English why', async () => {
+    const out = await new DefaultPmProposer().proposeTriage({ task: triageTask });
+    expect(out).not.toBeNull();
+    expect(out!.tier).toBeTruthy();
+    expect(out!.why).toContain('heuristics');
+    expect(out!.confidence).toBeGreaterThan(0);
+  });
+
+  it('uses the injected classifier when the heuristic prior is low-confidence (LLM-backed)', async () => {
+    const classifier: LlmClassifierPort = {
+      classify: async (_in: { title: string; body: string; features: TierFeatures }) => ({ tier: 'ultra', confidence: 0.95 }),
+    };
+    const out = await new DefaultPmProposer(classifier).proposeTriage({ task: triageTask });
+    expect(out!.tier).toBe('ultra');
+    expect(out!.why).toContain('classifier');
+  });
+
+  it('a classifier that THROWS degrades to the heuristic prior (estimateTier is fail-soft)', async () => {
+    const classifier: LlmClassifierPort = { classify: async () => { throw new Error('LLM down'); } };
+    const out = await new DefaultPmProposer(classifier).proposeTriage({ task: triageTask });
+    expect(out).not.toBeNull(); // never throws — degraded to heuristics
+    expect(out!.why).toContain('heuristics');
+  });
+});
+
+describe('proposeTriageFailSoft — a triage outage never reaches the loop', () => {
+  const input = { task: { title: 't', body: 'b' } };
+
+  it('happy path returns the validated triage', async () => {
+    const out = await proposeTriageFailSoft(new DefaultPmProposer(), input);
+    expect(out?.tier).toBeTruthy();
+  });
+
+  it('a THROWING triage proposer → null', async () => {
+    const port: Pick<PmProposerPort, 'proposeTriage'> = { proposeTriage: async () => { throw new Error('boom'); } };
+    await expect(proposeTriageFailSoft(port, input)).resolves.toBeNull();
+  });
+
+  it('a MALFORMED triage (bad tier / out-of-range confidence) → null', async () => {
+    const port: Pick<PmProposerPort, 'proposeTriage'> = {
+      proposeTriage: async () => ({ tier: 'gigantic', why: 'x', confidence: 9 }) as unknown as TriageProposal,
+    };
+    await expect(proposeTriageFailSoft(port, input)).resolves.toBeNull();
   });
 });

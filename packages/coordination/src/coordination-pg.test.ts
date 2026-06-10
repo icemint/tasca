@@ -476,6 +476,65 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(await store.acceptRoutingProposal(ORG, p.id, agentId)).toEqual({ ok: false, reason: 'conflict' });
       expect((await store.getTask(ORG, taskId))!.preferredAgentId).toBeNull();
     });
+
+    // ── triage kind (W3-S1b) — accept routes ONLY through the overrideTierEstimate write ──
+    const triagePayload = { tier: 'ultra', why: 'looks like an incident', confidence: 0.8 };
+
+    it('acceptTriageProposal applies the tier (the overrideTierEstimate write) + marks accepted', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'triage', targetTaskId: taskId, targetVersion: version, payload: triagePayload });
+      expect(await store.acceptTriageProposal(ORG, p.id, 'ultra')).toEqual({ ok: true });
+      const task = await store.getTask(ORG, taskId);
+      expect(task!.tierEstimate!.tier).toBe('ultra'); // ONLY the tier was written
+      expect(task!.status).toBe('routable'); // status untouched (no re-route — triage isn't routing)
+      expect(task!.version).toBe(version + 1);
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('accepted');
+    });
+
+    it('VERSION FENCE: triage accept after the task moved → conflict, proposal stays pending, no tier write', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'triage', targetTaskId: taskId, targetVersion: version, payload: triagePayload });
+      await pool.query(`UPDATE task SET version = version + 1 WHERE id = $1`, [taskId]); // task moves since generation
+      expect(await store.acceptTriageProposal(ORG, p.id, 'ultra')).toEqual({ ok: false, reason: 'conflict' });
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending'); // rolled back
+      expect((await store.getTask(ORG, taskId))!.tierEstimate).toBeNull(); // tier never written
+    });
+
+    it('DONE GUARD: triage accept on a finished task → conflict (overrideTierEstimate refuses done)', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'triage', targetTaskId: taskId, targetVersion: version, payload: triagePayload });
+      await pool.query(`UPDATE task SET status = 'done' WHERE id = $1`, [taskId]); // finish it (version unchanged)
+      expect(await store.acceptTriageProposal(ORG, p.id, 'ultra')).toEqual({ ok: false, reason: 'conflict' });
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
+    });
+
+    it('DOUBLE-ACCEPT race (triage): exactly one ok, the tier write runs at most once', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'triage', targetTaskId: taskId, targetVersion: version, payload: triagePayload });
+      const [a, b] = await Promise.all([
+        store.acceptTriageProposal(ORG, p.id, 'ultra'),
+        store.acceptTriageProposal(ORG, p.id, 'ultra'),
+      ]);
+      expect([a, b].filter((r) => r.ok).length).toBe(1);
+      expect((await store.getTask(ORG, taskId))!.version).toBe(version + 1); // tier write ran once
+    });
+
+    it('CROSS-ORG: org_other cannot accept org_default\'s triage proposal → not_found', async () => {
+      const { id: taskId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'triage', targetTaskId: taskId, targetVersion: version, payload: triagePayload });
+      expect(await store.acceptTriageProposal('org_other', p.id, 'ultra')).toEqual({ ok: false, reason: 'not_found' });
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
+      expect((await store.getTask(ORG, taskId))!.tierEstimate).toBeNull();
+    });
+
+    it('kind discipline: acceptTriageProposal will not accept a ROUTING proposal (and vice versa)', async () => {
+      const { id: taskId, version } = await seedTask();
+      const routing = await store.createProposal(ORG, { kind: 'routing', targetTaskId: taskId, targetVersion: version, payload: routingPayload });
+      // a triage accept on a routing proposal misses the kind='triage' CAS → conflict, no tier write
+      expect(await store.acceptTriageProposal(ORG, routing.id, 'ultra')).toEqual({ ok: false, reason: 'conflict' });
+      expect((await store.getProposal(ORG, routing.id))!.status).toBe('pending');
+      expect((await store.getTask(ORG, taskId))!.tierEstimate).toBeNull();
+    });
   });
 });
 

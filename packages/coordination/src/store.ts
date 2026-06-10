@@ -330,6 +330,15 @@ export interface CoordinationStore {
     preferredAgentId: string
   ): Promise<ProposalWriteOutcome>;
 
+  /**
+   * Accept a TRIAGE proposal: atomically (one tx) CAS the proposal pending→accepted AND apply the
+   * tier via the overrideTierEstimate write (version-fenced to the proposal's target_version,
+   * done-guarded) — never a status/claim/routing write. A task that moved since (or is `done`) →
+   * `conflict`, and the whole tx rolls back so the proposal stays `pending` (no half-applied accept).
+   * At-most-once under a double-accept race (the proposal CAS serializes).
+   */
+  acceptTriageProposal(orgId: string, id: string, tier: Tier): Promise<ProposalWriteOutcome>;
+
   // ── GitHub App installation (write-back installation resolution) ──────────────
 
   /**
@@ -683,16 +692,29 @@ export class PgCoordinationStore implements CoordinationStore {
   }
 
   async overrideTierEstimate(orgId: string, taskId: string, tier: Tier): Promise<TaskWriteOutcome> {
-    // Set only tier_estimate.tier, preserving any existing estimate fields (or
-    // seeding a minimal manual estimate when none was recorded). The read path
-    // projects only `.tier`, so a manual estimate needs no classifier signals.
-    return this.taskWrite(
+    return this.tierEstimateWrite(this.db, orgId, taskId, tier, null);
+  }
+
+  /** The tier-override write, shared by overrideTierEstimate (no fence) and acceptTriageProposal
+   *  (version-fenced, run inside the accept tx). Sets ONLY tier_estimate.tier (+ version bump),
+   *  preserving other estimate fields; done-guarded so a finished task can't be re-tiered. When
+   *  `expectedVersion` is non-null, also fences on it (a task that moved since → no row → conflict). */
+  private async tierEstimateWrite(
+    db: Queryable,
+    orgId: string,
+    taskId: string,
+    tier: Tier,
+    expectedVersion: number | null
+  ): Promise<TaskWriteOutcome> {
+    const fence = expectedVersion === null ? '' : ` AND version = ${expectedVersion}`;
+    return this.taskWriteOn(
+      db,
       `UPDATE task
           SET tier_estimate = jsonb_set(
                 COALESCE(tier_estimate, '{"confidence":1,"signals":{},"classifierUsed":false}'::jsonb),
                 '{tier}', to_jsonb($3::text)),
               version = version + 1, updated_at = now()
-        WHERE org_id = $1 AND id = $2 AND status <> 'done'
+        WHERE org_id = $1 AND id = $2 AND status <> 'done'${fence}
        RETURNING status`,
       [orgId, taskId, tier],
       orgId,
@@ -840,6 +862,37 @@ export class PgCoordinationStore implements CoordinationStore {
       if (moved.rowCount !== 1) {
         const exists = await db.query(`SELECT 1 FROM task WHERE org_id = $1 AND id = $2`, [orgId, targetTaskId]);
         throw new RollbackProposal({ ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' });
+      }
+      return { ok: true };
+    }).catch((err) => {
+      if (err instanceof RollbackProposal) return err.outcome;
+      throw err;
+    });
+  }
+
+  async acceptTriageProposal(orgId: string, id: string, tier: Tier): Promise<ProposalWriteOutcome> {
+    return this.withTaskTx<ProposalWriteOutcome>(async (db) => {
+      // 1) CAS the proposal pending→accepted (org + kind='triage'). At-most-once: only the winner
+      //    proceeds to the binding write.
+      const claimed = await db.query<{ target_task_id: string | null; target_version: number | null }>(
+        `UPDATE proposal SET status = 'accepted', version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2 AND status = 'pending' AND kind = 'triage'
+        RETURNING target_task_id, target_version`,
+        [orgId, id]
+      );
+      if (claimed.rowCount !== 1) return this.proposalMissOutcome(orgId, id, db);
+      const targetTaskId = claimed.rows[0]!.target_task_id;
+      const targetVersion = claimed.rows[0]!.target_version;
+      if (!targetTaskId) throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      if (targetVersion !== null && !Number.isInteger(targetVersion)) {
+        throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      }
+      // 2) The binding write: apply the tier via the SAME write overrideTierEstimate performs
+      //    (tierEstimateWrite) — version-fenced + done-guarded, NOTHING but tier_estimate.tier.
+      //    A task that moved/finished since → not ok → roll back so the proposal stays pending.
+      const outcome = await this.tierEstimateWrite(db, orgId, targetTaskId, tier, targetVersion);
+      if (!outcome.ok) {
+        throw new RollbackProposal({ ok: false, reason: outcome.reason === 'not_found' ? 'not_found' : 'conflict' });
       }
       return { ok: true };
     }).catch((err) => {

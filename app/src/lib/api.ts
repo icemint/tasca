@@ -239,9 +239,10 @@ export const interruptTask = (id: string) =>
 // ── PM-assistant proposals (slice W3-S1) — advisory; accept routes through routing ─────
 
 export const getProposals = () => get<ProposalsResponse>('/api/proposals');
-/** Generate a routing suggestion for a task (on-demand). 200 with `{proposal}` (possibly null). */
-export const generateProposal = (taskId: string) =>
-  post<{ proposal: ProposalSummary | null }>(`/api/proposals/generate`, { taskId });
+/** Generate a suggestion for a task (on-demand). `kind` = routing (uses the stored estimate) or
+ *  triage (the tier engine). 200 with `{proposal}` (possibly null when there's no suggestion). */
+export const generateProposal = (taskId: string, kind: 'routing' | 'triage' = 'routing') =>
+  post<{ proposal: ProposalSummary | null }>(`/api/proposals/generate`, { taskId, kind });
 /** Accept a proposal — routes through the binding method (re-route to the proposed agent). */
 export const acceptProposal = (id: string) =>
   post<{ ok: true } | { error: string; code?: string }>(`/api/proposals/${encodeURIComponent(id)}/accept`, {});
