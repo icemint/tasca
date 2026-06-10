@@ -34,6 +34,7 @@ import {
 import { createExecution } from '@tasca/execution';
 import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
+import { serveAnthropicProxy, type AnthropicProxyHandle } from '@tasca/anthropic-proxy';
 import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent } from '@tasca/contracts';
@@ -221,6 +222,9 @@ async function main(): Promise<void> {
   // The credential broker server (worker side) — serves per-task scoped tokens to the
   // agent-runner over a unix socket, keeping the App master key in this process.
   let brokerHandle: BrokerServerHandle | undefined;
+  // The Anthropic credential proxy (worker side) — forwards the agent's model calls to
+  // api.anthropic.com, injecting the master key here so it never crosses to the runner.
+  let anthropicProxyHandle: AnthropicProxyHandle | undefined;
   // Default content source derives a TaskInput from the event id; with the App
   // env present we fetch the REAL issue title/body for github events (so the
   // agent prompt is the actual story), delegating non-github to the default.
@@ -308,6 +312,28 @@ async function main(): Promise<void> {
     }
   } else {
     logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
+  }
+
+  // Anthropic credential proxy (worker side) — independent of GitHub. Started only when
+  // BOTH the key and the socket path are present; the master key is captured in the proxy
+  // closure and injected on the upstream leg, so the runner/agent never receives it.
+  const anthropicSocket = process.env.TASCA_ANTHROPIC_PROXY_SOCKET;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicSocket && anthropicKey) {
+    try {
+      // 0o660 (group-shared runner connects, no world) — same boundary as the broker.
+      const socketMode = process.env.TASCA_ANTHROPIC_PROXY_SOCKET_MODE
+        ? parseInt(process.env.TASCA_ANTHROPIC_PROXY_SOCKET_MODE, 8)
+        : 0o660;
+      anthropicProxyHandle = await serveAnthropicProxy({ socketPath: anthropicSocket, apiKey: anthropicKey, logger, socketMode });
+      logger.info?.('anthropic credential proxy serving', { socketPath: anthropicSocket });
+    } catch (err) {
+      // Loud but non-fatal: the runner's agent calls will fail to auth until fixed, but
+      // the rest of the worker keeps running.
+      logger.error('anthropic credential proxy failed to start — agent model calls will fail', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // Human OAuth login (GitHub + Google). Feature flag OFF by default: only when
@@ -423,7 +449,7 @@ async function main(): Promise<void> {
         // finalize must not race a closing pool (use-after-close). Only then tear down
         // the pool + the rest.
         await (coordination.reaper?.stop() ?? Promise.resolve());
-        await Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve()]);
+        await Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve(), anthropicProxyHandle?.close() ?? Promise.resolve()]);
         process.exit(0);
       })();
     });

@@ -7,11 +7,14 @@
 import { Pool } from 'pg';
 import { PgDispatchQueue } from '@tasca/db';
 import { brokerClient } from '@tasca/broker';
+import { serveAnthropicBridge, type AnthropicBridgeHandle } from '@tasca/anthropic-proxy';
 import { createExecution } from '@tasca/execution';
 import path from 'node:path';
 import os from 'node:os';
 import { createRunner } from './runner';
 import { makeRunnerExecute } from './execute';
+
+const DEFAULT_ANTHROPIC_BRIDGE_PORT = 8787;
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -31,6 +34,27 @@ async function main(): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
   const queue = new PgDispatchQueue(pool);
   const broker = brokerClient({ socketPath: brokerSocket });
+
+  // Anthropic credential proxy (runner side): a KEYLESS TCP↔unix bridge to the worker's
+  // proxy socket. Point the agent's Claude CLI at it via ANTHROPIC_BASE_URL; the worker
+  // injects the real key on its HTTPS leg, so the runner/agent never holds it. Only when
+  // the proxy socket is wired (production) — absent → the agent uses ANTHROPIC_API_KEY
+  // directly (dev/no-proxy), the factory's direct mode.
+  let anthropicBridge: AnthropicBridgeHandle | undefined;
+  const anthropicProxySocket = process.env.TASCA_ANTHROPIC_PROXY_SOCKET;
+  if (anthropicProxySocket) {
+    const listenPort = process.env.TASCA_ANTHROPIC_BRIDGE_PORT
+      ? Number(process.env.TASCA_ANTHROPIC_BRIDGE_PORT)
+      : DEFAULT_ANTHROPIC_BRIDGE_PORT;
+    try {
+      anthropicBridge = await serveAnthropicBridge({ listenPort, socketPath: anthropicProxySocket, logger: console });
+      // The agent inherits this via the factory allowlist; the real key is NOT in env.
+      process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${anthropicBridge.port}`;
+      console.log('agent-runner: anthropic bridge listening', { port: anthropicBridge.port });
+    } catch (err) {
+      console.error('agent-runner: anthropic bridge failed to start — agent model calls will fail', { err: String(err) });
+    }
+  }
 
   // The execution toolchain (PTY agent spawn, git, gh) — the SAME ExecutionPort the
   // worker uses, so spawnAgent's env scrub (#230) carries over to the runner.
@@ -52,7 +76,7 @@ async function main(): Promise<void> {
     void (async () => {
       console.log('agent-runner: shutting down');
       await runner.stop();
-      await Promise.allSettled([pool.end(), execution.close()]);
+      await Promise.allSettled([pool.end(), execution.close(), anthropicBridge?.close() ?? Promise.resolve()]);
       process.exit(0);
     })();
   };
