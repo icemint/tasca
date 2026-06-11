@@ -110,6 +110,9 @@ importers:
       '@tasca/identity':
         specifier: workspace:*
         version: link:../identity
+      '@tasca/llm':
+        specifier: workspace:*
+        version: link:../llm
       '@tasca/routing':
         specifier: workspace:*
         version: link:../routing
@@ -157,6 +160,15 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.0
+
+  packages/llm:
+    dependencies:
+      '@tasca/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@tasca/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/routing:
     dependencies:

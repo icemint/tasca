@@ -23,6 +23,7 @@
     "@tasca/execution": "workspace:*",
     "@tasca/identity": "workspace:*",
     "@tasca/routing": "workspace:*",
+    "@tasca/llm": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {
