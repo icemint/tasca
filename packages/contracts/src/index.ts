@@ -57,6 +57,14 @@ export const DecompositionProposalSchema = z.object({
 });
 export type DecompositionProposal = z.infer<typeof DecompositionProposalSchema>;
 
+/** An injectable LLM decomposer — splits a parent task into child tasks. The seam both the routing
+ *  proposer (consumer) and an LLM client (implementer) share; lives here in contracts so neither has
+ *  to depend on the other. No deterministic fallback (a split needs a model), so without one the
+ *  decomposition kind yields no suggestion. */
+export interface DecomposerPort {
+  decompose(input: { title: string; body: string }): Promise<DecompositionProposal | null>;
+}
+
 /** Normalized inbound platform event (adapters emit this; coordination consumes it). */
 export const AdapterEventSchema = z.object({
   type: z.literal('task.assigned'),

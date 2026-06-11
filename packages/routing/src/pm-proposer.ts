@@ -13,7 +13,11 @@ import {
   type RoutingProposal,
   type TriageProposal,
   type DecompositionProposal,
+  type DecomposerPort,
 } from '@tasca/contracts';
+// The decomposer seam lives in @tasca/contracts (shared by the consumer here and an LLM implementer);
+// re-exported so `@tasca/routing` consumers keep importing it from one place.
+export type { DecomposerPort } from '@tasca/contracts';
 import { estimateTier, type TaskInput, type EstimateTierOptions } from './tier';
 import { matchCapability, type MatchCandidate } from './match';
 import type { LlmClassifierPort } from './ports';
@@ -40,12 +44,6 @@ export interface ProposeTriageInput {
 
 export interface ProposeDecompositionInput {
   task: TaskInput;
-}
-
-/** An injectable LLM decomposer — splits a parent task into child tasks. There is NO deterministic
- *  fallback (a split needs a model), so without one the decomposition kind yields no suggestion. */
-export interface DecomposerPort {
-  decompose(input: TaskInput): Promise<DecompositionProposal | null>;
 }
 
 /** The proposer seam. routing = deterministic (match-based); triage = the tier engine (LLM-backed
@@ -106,7 +104,7 @@ export class DefaultPmProposer implements PmProposerPort {
   async proposeDecomposition(input: ProposeDecompositionInput): Promise<DecompositionProposal | null> {
     // No deterministic fallback — a split needs a model. Without a decomposer wired, no suggestion.
     if (!this.cfg.decomposer) return null;
-    return this.cfg.decomposer.decompose(input.task);
+    return this.cfg.decomposer.decompose({ title: input.task.title, body: input.task.body });
   }
 }
 

@@ -35,6 +35,7 @@ import { createExecution } from '@tasca/execution';
 import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
 import { serveAnthropicProxy, type AnthropicProxyHandle } from '@tasca/anthropic-proxy';
+import { AnthropicChat, AnthropicClassifier, AnthropicDecomposer } from '@tasca/llm';
 import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent } from '@tasca/contracts';
@@ -360,6 +361,24 @@ async function main(): Promise<void> {
     }
   }
 
+  // The coordination-side LLM client (slice: LLM wiring). ONE Anthropic client fills three injected,
+  // fail-soft ports: the routing tier CLASSIFIER (estimateTier + the triage proposer) and the
+  // DECOMPOSER (the decomposition proposer). OFF BY DEFAULT — set TASCA_LLM=on (with ANTHROPIC_API_KEY)
+  // to enable. Gating matters because enabling makes the classifier run per-task on the routing hot
+  // path: real LLM spend (bounded — estimateTier SKIPS the call on a high-confidence heuristic prior,
+  // so only ambiguous tasks classify). Enable broadly only once per-task usage metering (W3-S4) tracks
+  // that spend. Absent → classifier/decomposer unwired → routing + triage use the heuristic, decomposition
+  // yields no suggestion (today's behavior). The proposer LLM calls stay ON-DEMAND (no new call sites).
+  let llmClassifier: AnthropicClassifier | undefined;
+  let llmDecomposer: AnthropicDecomposer | undefined;
+  if (process.env.TASCA_LLM === 'on' && anthropicKey) {
+    const model = process.env.TASCA_LLM_MODEL ?? 'claude-haiku-4-5-20251001';
+    const chat = new AnthropicChat({ apiKey: anthropicKey, model });
+    llmClassifier = new AnthropicClassifier(chat);
+    llmDecomposer = new AnthropicDecomposer(chat);
+    logger.info?.('coordination LLM client enabled', { model });
+  }
+
   // Human OAuth login (GitHub + Google). Feature flag OFF by default: only when
   // ALL 5 OAuth env vars are present do we construct the repo + handler and start
   // the expiry sweep. Absent → the /api/auth/* routes 404 (handler stays undefined).
@@ -450,6 +469,10 @@ async function main(): Promise<void> {
     // PM-assistant (slice W3-S1): advisory proposals. OFF by default (off-state first, per the
     // design); set TASCA_PM_ASSISTANT=on to enable proposal generation.
     ...(process.env.TASCA_PM_ASSISTANT === 'on' ? { pmAssistantEnabled: true } : {}),
+    // LLM ports (slice: LLM wiring) — the SAME classifier wires the routing engine + the triage
+    // proposer; the decomposer wires the decomposition proposer. Absent → heuristic fallback.
+    ...(llmClassifier ? { classifier: llmClassifier } : {}),
+    ...(llmDecomposer ? { decomposer: llmDecomposer } : {}),
   });
 
   const server = coordination.createServer();

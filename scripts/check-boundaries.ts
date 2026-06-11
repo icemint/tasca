@@ -30,13 +30,16 @@ export const ALLOWLIST: Record<string, readonly string[]> = {
   contracts: ['domain'],
   db: ['domain'],
   identity: ['domain'],
+  // LLM port impls (Anthropic classifier + decomposer) — implements the domain/contracts ports, like
+  // adapters. A leaf: raw fetch to the Anthropic API, no engine/coordination deps.
+  llm: ['domain', 'contracts'],
   routing: ['domain', 'contracts'],
   execution: ['domain', 'contracts'],
   adapters: ['domain', 'contracts'],
   // The execution-side composition root: claims dispatch_job (db), gets a scoped token
   // (broker), runs the agent (execution). The mirror of coordination on the runner side.
   'agent-runner': ['domain', 'contracts', 'db', 'broker', 'anthropic-proxy', 'execution'],
-  coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters', 'broker', 'anthropic-proxy'],
+  coordination: ['domain', 'contracts', 'db', 'identity', 'auth', 'routing', 'execution', 'adapters', 'broker', 'anthropic-proxy', 'llm'],
 };
 
 export interface ImportRef {

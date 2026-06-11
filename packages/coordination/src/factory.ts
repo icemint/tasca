@@ -10,7 +10,7 @@ import { PgClaimRepository, PgDispatchQueue } from '@tasca/db';
 import { PgIdentityRepository } from '@tasca/identity';
 import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
-import { DefaultPmProposer, type LlmClassifierPort } from '@tasca/routing';
+import { DefaultPmProposer, type LlmClassifierPort, type DecomposerPort } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
@@ -39,7 +39,13 @@ export interface CreateCoordinationDeps {
   /** Optional auth handler (GET/POST /api/auth/*); absent → those paths 404. */
   authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   content: TaskContentSource;
+  /** The LLM tier classifier (slice: LLM wiring). Injected by the host when an LLM client is enabled;
+   *  used by BOTH the routing engine (estimateTier, budgeted/skip-on-high-confidence) AND the triage
+   *  proposer. Absent → the engine + triage use the heuristic prior (fail-soft, today's behavior). */
   classifier?: LlmClassifierPort;
+  /** The LLM decomposer (slice: LLM wiring). Injected by the host when an LLM client is enabled; used
+   *  by the decomposition proposer ON DEMAND only. Absent → decomposition yields no suggestion. */
+  decomposer?: DecomposerPort;
   /** Optional repo provisioner (clone-on-dispatch); absent → repoRef used as-is. */
   provisioner?: RepoProvisioner;
   /** Enable split dispatch: enqueue jobs for an agent-runner (no in-process fallback —
@@ -205,9 +211,12 @@ export function createCoordination(
       directory,
       content: input.content,
       // routing = deterministic match; triage = the tier engine, LLM-backed when a classifier is
-      // injected (same optional classifier the routing pipeline uses), else heuristic-only; decomposition
-      // = an injected LLM decomposer (none wired yet → no decomposition suggestion). All fail-soft.
-      proposer: new DefaultPmProposer(input.classifier ? { classifier: input.classifier } : {}),
+      // injected (the SAME classifier the routing pipeline uses), else heuristic-only; decomposition
+      // = the injected LLM decomposer (absent → no decomposition suggestion). All fail-soft.
+      proposer: new DefaultPmProposer({
+        ...(input.classifier ? { classifier: input.classifier } : {}),
+        ...(input.decomposer ? { decomposer: input.decomposer } : {}),
+      }),
       enabled: input.pmAssistantEnabled === true,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
