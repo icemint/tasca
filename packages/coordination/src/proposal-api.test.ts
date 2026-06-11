@@ -47,6 +47,10 @@ class FakeProposalStore {
   async getTask(_orgId: string, taskId: string) {
     return this.tasks.get(taskId) ?? null;
   }
+  statusCounts: Record<string, number> = {};
+  async getTaskStatusCounts() {
+    return this.statusCounts;
+  }
   async listProposals() {
     return [...this.proposals.values()];
   }
@@ -521,5 +525,48 @@ describe('decomposition kind (W3-S1c)', () => {
     const r = await run(deps(f), fakeReq('POST', '/api/proposals/pd/accept', { headers: csrf() }));
     expect(r.statusCode).toBe(409);
     expect(f.store.decomposed).toEqual([]);
+  });
+});
+
+describe('standup kind (W3-S1d) — READ-ONLY, org-wide, no write', () => {
+  it('generate kind=standup returns a summary of the org task states and persists NOTHING', async () => {
+    const f = newFakes();
+    f.store.statusCounts = { in_review: 1, done: 1, executing: 1, needs_attention: 1, failed: 1, routable: 1 };
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ kind: 'standup' }) }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).standup).toEqual({ shipped: 2, inFlight: 1, needsYou: 2, queued: 1, total: 6 });
+    // READ-ONLY: a standup creates no proposal + touches no binding write
+    expect(f.store.created).toEqual([]);
+    expect(f.store.accepted).toEqual([]);
+    expect(f.store.triaged).toEqual([]);
+    expect(f.store.decomposed).toEqual([]);
+  });
+
+  it('counts EVERY task (an aggregate, no pagination) — a large org is never under-counted', async () => {
+    const f = newFakes();
+    f.store.statusCounts = { done: 5000, needs_attention: 300 }; // far beyond any list cap
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ kind: 'standup' }) }));
+    expect(JSON.parse(r.body).standup).toEqual({ shipped: 5000, inFlight: 0, needsYou: 300, queued: 0, total: 5300 });
+  });
+
+  it('standup needs NO taskId (it is org-wide)', async () => {
+    const f = newFakes();
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ kind: 'standup' }) }));
+    expect(r.statusCode).toBe(200); // not a 400 'taskId is required'
+    expect(JSON.parse(r.body).standup.total).toBe(0);
+  });
+
+  it('FLAG-OFF refuses standup generation server-side (403)', async () => {
+    const f = newFakes();
+    const r = await run(deps(f, { enabled: false }), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ kind: 'standup' }) }));
+    expect(r.statusCode).toBe(403);
+  });
+
+  it('standup requires CSRF + a session (no anonymous read of org task state)', async () => {
+    const f = newFakes();
+    const noCsrf = await run(deps(f), fakeReq('POST', '/api/proposals/generate', { body: JSON.stringify({ kind: 'standup' }) }));
+    expect(noCsrf.statusCode).toBe(403);
+    const noSession = await run(deps(f, { verifySession: () => null }), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ kind: 'standup' }) }));
+    expect(noSession.statusCode).toBe(401);
   });
 });

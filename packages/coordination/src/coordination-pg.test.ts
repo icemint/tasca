@@ -613,6 +613,21 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(await childCount(parentId)).toBe(0);
       expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
     });
+
+    // ── standup (W3-S1d) — the read-only aggregate ──
+    it('getTaskStatusCounts counts EVERY task by status and is ORG-SCOPED (no cross-tenant count)', async () => {
+      // org_default: 2 routable + 1 done; org_other: 5 routable (must NOT be counted for org_default)
+      await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status) VALUES
+        ('c1','org_default','s1','shortcut','routable'),('c2','org_default','s2','shortcut','routable'),
+        ('c3','org_default','s3','shortcut','done')`);
+      for (let i = 0; i < 5; i++) {
+        await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status) VALUES ($1,'org_other',$2,'shortcut','routable')`, [`o${i}`, `os${i}`]);
+      }
+      const counts = await store.getTaskStatusCounts(ORG);
+      expect(counts.routable).toBe(2); // org_default only — org_other's 5 are NOT counted
+      expect(counts.done).toBe(1);
+      expect(counts.executing ?? 0).toBe(0);
+    });
   });
 });
 

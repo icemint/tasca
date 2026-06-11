@@ -45,6 +45,7 @@ export interface ProposalApiDeps {
     | 'acceptTriageProposal'
     | 'acceptDecompositionProposal'
     | 'getTask'
+    | 'getTaskStatusCounts'
   >;
   /** Resolves a session → its org (membership = tenant boundary, fail-closed) AND role (5b). */
   membership: RoleReader;
@@ -198,14 +199,24 @@ async function handleGenerate(
     sendJson(res, 400, { error: 'invalid body' });
     return;
   }
+  const kind = body.kind === undefined ? 'routing' : body.kind;
+  if (kind !== 'routing' && kind !== 'triage' && kind !== 'decomposition' && kind !== 'standup') {
+    sendJson(res, 400, { error: "kind must be 'routing', 'triage', 'decomposition', or 'standup'" });
+    return;
+  }
+
+  // STANDUP (slice W3-S1d) is READ-ONLY + org-wide: it summarizes the org's task states and returns
+  // the report. There is NO taskId, NO proposer, NO createProposal — nothing is persisted and nothing
+  // is written. A standup for org A reads ONLY A's tasks (listTasks is org-scoped). It has no accept.
+  if (kind === 'standup') {
+    const counts = await deps.store.getTaskStatusCounts(orgId);
+    sendJson(res, 200, { standup: computeStandup(counts) });
+    return;
+  }
+
   const taskId = body.taskId;
   if (typeof taskId !== 'string' || taskId.length === 0) {
     sendJson(res, 400, { error: 'taskId is required' });
-    return;
-  }
-  const kind = body.kind === undefined ? 'routing' : body.kind;
-  if (kind !== 'routing' && kind !== 'triage' && kind !== 'decomposition') {
-    sendJson(res, 400, { error: "kind must be 'routing', 'triage', or 'decomposition'" });
     return;
   }
   const task = await deps.store.getTask(orgId, taskId);
@@ -348,6 +359,27 @@ async function handleAccept(
 
   // standup accepts land in 1d (standup is read-only — it will have no accept).
   sendJson(res, 400, { error: 'this proposal kind cannot be accepted yet', code: 'unsupported_kind' });
+}
+
+/** A standup report (slice W3-S1d): a READ-ONLY snapshot of the org's task states. Produced from
+ *  listTasks (org-scoped); never persisted, never written. No accept — a standup changes nothing. */
+export interface StandupSummary {
+  shipped: number; // in_review + done
+  inFlight: number; // executing + claimed
+  needsYou: number; // needs_attention + failed
+  queued: number; // routable + ingested
+  total: number;
+}
+
+/** Bucket the per-status counts (from getTaskStatusCounts) into the standup's report. Counts EVERY
+ *  task in the org — no pagination, so a large org is never under-counted. */
+function computeStandup(counts: Record<string, number>): StandupSummary {
+  const n = (s: string) => counts[s] ?? 0;
+  const shipped = n('in_review') + n('done');
+  const inFlight = n('executing') + n('claimed');
+  const needsYou = n('needs_attention') + n('failed');
+  const queued = n('routable') + n('ingested');
+  return { shipped, inFlight, needsYou, queued, total: shipped + inFlight + needsYou + queued };
 }
 
 /** Join the directory's candidate profiles with the roster's display names into the proposer's

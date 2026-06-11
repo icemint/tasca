@@ -5,7 +5,7 @@
 // PENDING proposals with Accept / Dismiss live writes, plus an on-demand "Suggest routing"
 // affordance over the org's routable tasks. Nothing here is applied until a human accepts.
 
-import { getProposals, getTasks, acceptProposal, dismissProposal, generateProposal } from '../api';
+import { getProposals, getTasks, acceptProposal, dismissProposal, generateProposal, generateStandup, redirectToLogin } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction, type LiveActionOpts } from '../live';
@@ -152,10 +152,16 @@ function onState(proposals: ProposalSummary[], suggestable: TaskSummary[]): stri
   const gen = suggestable.length
     ? `<div class="pm-gen"><div class="pm-gen-h mono">Generate a suggestion</div>${suggestable.map(suggestRow).join('')}</div>`
     : '';
+  // The standup is READ-ONLY (org-wide; nothing is created or applied) — a generated report, not a
+  // suggestion, so it has no Accept/Dismiss. Rendered into its own slot on demand.
+  const standup = `<div class="pm-gen pm-standup"><div class="pm-gen-h mono">Daily standup · read-only</div>
+    <div class="pm-srow"><span class="pm-srow-id">A snapshot of your team's work — generated, never applied.</span>
+      <button class="ictl pm-standup-btn" type="button" data-action="standup" aria-label="Generate a standup report">${SPARK} Generate standup</button></div>
+    <div class="pm-standup-out" aria-live="polite"></div></div>`;
   return `<div class="pm-on">
     <div class="pm-on-head"><div><div class="pm-on-t"><span class="pm-mark sm">${SPARK}</span> PM assistant <span class="pm-badge advisory sm">Advisory · on</span></div>
       <div class="pm-on-s">Suggestions below. Nothing here has been applied — accept or dismiss each.</div></div></div>
-    ${cards}${gen}</div>`;
+    ${cards}${gen}${standup}</div>`;
 }
 
 export async function loadPmAssistant(): Promise<LoadResult> {
@@ -185,7 +191,42 @@ function describeProposal(r: WriteResult<unknown>): string {
   return 'Couldn’t apply that. Showing the latest.';
 }
 
+function standupCard(s: { shipped: number; inFlight: number; needsYou: number; queued: number; total: number }): string {
+  const stat = (label: string, n: number, warn = false) =>
+    `<div class="pm-stat${warn && n > 0 ? ' warn' : ''}"><span class="pm-stat-n">${n}</span><span class="pm-stat-l">${label}</span></div>`;
+  return `<div class="pm-standup-card"><span class="pm-badge advisory sm">Read-only · not applied</span>
+    <div class="pm-stats">${stat('Shipped', s.shipped)}${stat('In flight', s.inFlight)}${stat('Needs you', s.needsYou, true)}${stat('Queued', s.queued)}</div>
+    <div class="pms-meta mono dim">${s.total} tasks · a snapshot, yours to read or share</div></div>`;
+}
+
+/** The standup is read-only: clicking Generate fetches the report and renders it INLINE (no rerun,
+ *  nothing persisted). Wired separately from the optimistic accept/dismiss/generate controls. */
+function wireStandup(el: HTMLElement): void {
+  const btn = el.querySelector<HTMLButtonElement>('.pm-standup-btn');
+  const out = el.querySelector<HTMLElement>('.pm-standup-out');
+  if (!btn || !out) return;
+  btn.addEventListener('click', async () => {
+    if (btn.dataset.busy === '1') return;
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    const prev = btn.textContent;
+    btn.textContent = 'Generating…';
+    const r = await generateStandup();
+    btn.dataset.busy = '0';
+    btn.disabled = false;
+    btn.removeAttribute('aria-busy');
+    btn.textContent = prev;
+    if (r.kind === 'unauth') {
+      redirectToLogin();
+      return;
+    }
+    out.innerHTML = r.kind === 'ok' ? standupCard(r.data.standup) : `<div class="pms-meta mono dim">Couldn’t generate the standup — please retry.</div>`;
+  });
+}
+
 export function wirePmAssistant(el: HTMLElement, rerun: () => Promise<void>): void {
+  wireStandup(el);
   el.querySelectorAll<HTMLButtonElement>('.pm-ctl[data-action]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.action;

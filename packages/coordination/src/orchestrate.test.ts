@@ -175,6 +175,7 @@ class FakeStore implements CoordinationStore {
   }
   // read-side
   async listTasks() { return []; }
+  async getTaskStatusCounts() { return {}; }
   async getRoutingDecisionForTask() { return null; }
   async listRoutingDecisions() { return []; }
   async listPullRequestsForTask(_orgId: string, taskId: string) {
