@@ -259,3 +259,52 @@ describe('agent-runner — lease heartbeat keeps a long task alive', () => {
     await p;
   });
 });
+
+describe('agent-runner — per-job usage attribution (slice W3-S4b)', () => {
+  type Ctx = { taskId: string; orgId: string } | null;
+  function setupCtx(over: { execute?: ExecuteJob; payload?: Record<string, unknown> } = {}) {
+    const queue = new FakeQueue();
+    queue.jobs = [job({ payload: over.payload ?? { repoRef: 'acme/widgets', taskId: 't1', orgId: 'o1' } })];
+    const { broker } = brokerThatMints();
+    const contexts: Ctx[] = [];
+    const runner = createRunner({
+      queue,
+      broker,
+      execute: over.execute ?? (async (): Promise<ExecuteOutcome> => ({ ok: true })),
+      runnerId: 'r',
+      revoke: async () => {},
+      setUsageContext: (ctx) => contexts.push(ctx),
+    });
+    return { queue, runner, contexts };
+  }
+
+  it('sets the {taskId,orgId} BEFORE execute and clears it (null) after a successful job', async () => {
+    let ctxDuringExecute: Ctx = null;
+    const { runner, contexts } = setupCtx({
+      execute: async () => {
+        ctxDuringExecute = contexts[contexts.length - 1] ?? null; // what was set when execute ran
+        return { ok: true };
+      },
+    });
+    await runner.runOnce();
+    expect(ctxDuringExecute).toEqual({ taskId: 't1', orgId: 'o1' }); // attribution live DURING the call
+    expect(contexts).toEqual([{ taskId: 't1', orgId: 'o1' }, null]); // set, then cleared
+  });
+
+  it('clears the attribution even when execute THROWS (no call is misattributed to a finished job)', async () => {
+    const { runner, contexts } = setupCtx({
+      execute: async () => {
+        throw new Error('boom');
+      },
+    });
+    await runner.runOnce();
+    expect(contexts[contexts.length - 1]).toBeNull(); // last action is always a clear
+  });
+
+  it('does NOT set a context when the payload lacks orgId (best-effort; the job still runs)', async () => {
+    const { runner, contexts, queue } = setupCtx({ payload: { repoRef: 'acme/widgets', taskId: 't1' } });
+    await runner.runOnce();
+    expect(queue.completed).toHaveLength(1); // the job ran fine
+    expect(contexts).toEqual([null]); // only the finally-clear fired; no (partial) attribution set
+  });
+});

@@ -181,6 +181,9 @@ const DEFAULT_RUNNER_POLL_MS = 500;
  *  execute the task. Mirrors @tasca/agent-runner's DispatchPayload (jsonb on the wire). */
 export interface DispatchPayload {
   taskId: string;
+  /** The task's org — carried in the payload (like taskId) so the runner can stamp per-task/per-org
+   *  attribution onto the agent's model calls for metering (slice W3-S4b). */
+  orgId: string;
   repoRef: string;
   platform: AdapterEvent['platform'];
   externalStoryId: string;
@@ -498,6 +501,7 @@ export async function orchestrateTaskAssigned(
     if (deps.dispatchQueue && repoRef) {
       const payload: DispatchPayload = {
         taskId: task.id,
+        orgId,
         repoRef,
         platform: event.platform,
         externalStoryId: event.externalStoryId,

@@ -351,7 +351,32 @@ async function main(): Promise<void> {
       const socketMode = process.env.TASCA_ANTHROPIC_PROXY_SOCKET_MODE
         ? parseInt(process.env.TASCA_ANTHROPIC_PROXY_SOCKET_MODE, 8)
         : 0o660;
-      anthropicProxyHandle = await serveAnthropicProxy({ socketPath: anthropicSocket, apiKey: anthropicKey, logger, socketMode });
+      // Agent-call metering (slice W3-S4b): the proxy tees each agent response, extracts the usage, and
+      // reports it HERE with the {org,task} the runner's bridge stamped onto the request. Recorded as
+      // source='agent', CAS-idempotent on the Anthropic response id (same dedupe as the coordination
+      // path). Org/task are EXPLICIT in the call (from the verified header), not ambient — no ALS here.
+      // Fire-and-forget: a record failure is logged, never breaks or delays the agent's stream.
+      const agentUsageStore = new PgCoordinationStore(pool);
+      anthropicProxyHandle = await serveAnthropicProxy({
+        socketPath: anthropicSocket,
+        apiKey: anthropicKey,
+        logger,
+        socketMode,
+        usageSink: {
+          record(e): void {
+            void agentUsageStore
+              .recordUsage(e.orgId, {
+                taskId: e.taskId,
+                source: 'agent',
+                model: e.model,
+                inputTokens: e.inputTokens,
+                outputTokens: e.outputTokens,
+                idempotencyKey: e.idempotencyKey,
+              })
+              .catch((err: unknown) => logger.error('anthropic-proxy: agent usage record failed', { err: String(err) }));
+          },
+        },
+      });
       logger.info?.('anthropic credential proxy serving', { socketPath: anthropicSocket });
     } catch (err) {
       // Loud but non-fatal: the runner's agent calls will fail to auth until fixed, but

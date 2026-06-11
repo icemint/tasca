@@ -68,7 +68,17 @@ async function main(): Promise<void> {
   // The real execute: clone (scoped-token env-auth) → spawn → commit → openPr.
   const execute = makeRunnerExecute({ execution, reposDir, logger: console });
 
-  const runner = createRunner({ queue, broker, execute, runnerId, logger: console });
+  const runner = createRunner({
+    queue,
+    broker,
+    execute,
+    runnerId,
+    // Per-job attribution for agent-call metering (slice W3-S4b): the bridge stamps these onto each
+    // request head so the worker proxy records usage_event{source:'agent'}. No bridge (dev/no-proxy)
+    // → no-op (the agent calls Anthropic directly, unmetered by this path).
+    ...(anthropicBridge ? { setUsageContext: (ctx) => anthropicBridge!.setContext(ctx) } : {}),
+    logger: console,
+  });
   runner.start();
   console.log('agent-runner: started', { runnerId, reposDir });
 
