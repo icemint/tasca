@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { createServer as createHttpServer, request as httpRequest, type Server, type IncomingMessage } from 'node:http';
 import { connect } from 'node:net';
-import { serveAnthropicProxy, serveAnthropicBridge, type AnthropicProxyHandle, type AnthropicBridgeHandle } from './index';
+import { serveAnthropicProxy, serveAnthropicBridge, type AnthropicProxyHandle, type AnthropicBridgeHandle, type AgentCallUsage } from './index';
 
 // The master Anthropic key the worker holds — it must NEVER reach the runner/agent: not
 // downstream to the client, not over the unix socket wire, not in a log. Only the upstream
@@ -60,6 +60,23 @@ async function startProxy(upstreamOrigin: string, logger?: Parameters<typeof ser
   return socketPath;
 }
 
+/** Start a proxy with a usage sink that captures every reported agent-call usage (slice W3-S4b). */
+async function startProxyWithSink(upstreamOrigin: string): Promise<{ socketPath: string; records: Array<AgentCallUsage & { orgId: string; taskId: string }> }> {
+  const socketPath = sockPath();
+  const records: Array<AgentCallUsage & { orgId: string; taskId: string }> = [];
+  proxies.push(
+    await serveAnthropicProxy({
+      socketPath,
+      apiKey: MASTER_KEY,
+      upstreamOrigin,
+      usageSink: { record: (e) => records.push(e) },
+    })
+  );
+  return { socketPath, records };
+}
+
+const tick = (ms = 25): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 /** Make an HTTP request to a unix socket (the proxy) — what the bridge pipes to. */
 function reqViaSocket(
   socketPath: string,
@@ -76,8 +93,7 @@ function reqViaSocket(
       }
     );
     r.on('error', reject);
-    if (opts.body !== undefined) r.write(opts.body);
-    r.end();
+    r.end(opts.body ?? undefined); // end(body) → Content-Length (what the real Anthropic client sends)
   });
 }
 
@@ -97,8 +113,7 @@ function reqViaTcp(
       }
     );
     r.on('error', reject);
-    if (opts.body !== undefined) r.write(opts.body);
-    r.end();
+    r.end(opts.body ?? undefined); // end(body) → Content-Length (what the real Anthropic client sends)
   });
 }
 
@@ -312,5 +327,237 @@ describe('the keyless bridge (runner side)', () => {
     expect(up.received[0]!.headers['x-api-key']).toBe(MASTER_KEY);
     // The bridge module holds no key — it is a raw byte pipe (asserted structurally by the
     // forged-key strip test above + the raw-wire capture; here we confirm the e2e path works).
+  });
+});
+
+// Slice W3-S4b: agent-call metering. The bridge stamps the current {task,org} onto each request
+// head; the worker proxy tees the response, extracts the usage, and reports it via the usageSink.
+// These re-prove the 2b break-targets UNDER the new code: the key still never crosses to the runner,
+// streams stay per-connection isolated + un-stalled, and the tee never corrupts the response.
+describe('agent-call metering (S4b) — attribution via the bridge + usage tee', () => {
+  const SSE_BODY = (id: string) =>
+    `event: message_start\ndata: {"type":"message_start","message":{"id":"${id}","model":"claude-haiku-4-5","usage":{"input_tokens":25,"output_tokens":1}}}\n\n` +
+    `event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":42}}\n\n`;
+
+  it('meters a non-streaming agent call with the {org,task} the bridge stamped', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_RT1', model: 'claude-haiku-4-5', usage: { input_tokens: 11, output_tokens: 22 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath });
+    bridges.push(bridge);
+    bridge.setContext({ taskId: 'task-A', orgId: 'org-1' });
+
+    const out = await reqViaTcp(bridge.port, { body: JSON.stringify({ model: 'claude' }) });
+    expect(out.status).toBe(200);
+    await tick();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toEqual({ orgId: 'org-1', taskId: 'task-A', model: 'claude-haiku-4-5', inputTokens: 11, outputTokens: 22, idempotencyKey: 'msg_RT1' });
+    // The proxy STRIPS the attribution headers — Anthropic never sees them.
+    expect(up.received[0]!.headers['x-tasca-task-id']).toBeUndefined();
+    expect(up.received[0]!.headers['x-tasca-org-id']).toBeUndefined();
+  });
+
+  it('meters a STREAMING (SSE) call from the final message_delta — response byte-identical and NOT stalled', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`event: message_start\ndata: {"type":"message_start","message":{"id":"msg_S1","model":"claude-haiku-4-5","usage":{"input_tokens":25,"output_tokens":1}}}\n\n`);
+      setTimeout(() => {
+        res.write(`event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":42}}\n\n`);
+        res.end();
+      }, 40);
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath });
+    bridges.push(bridge);
+    bridge.setContext({ taskId: 'task-S', orgId: 'org-9' });
+
+    const { firstChunkAt, endAt, body } = await new Promise<{ firstChunkAt: number; endAt: number; body: string }>((resolve, reject) => {
+      const r = httpRequest({ host: '127.0.0.1', port: bridge.port, path: '/v1/messages', method: 'POST' }, (res) => {
+        let b = '';
+        let firstChunkAt = 0;
+        res.setEncoding('utf8');
+        res.on('data', (c) => {
+          if (firstChunkAt === 0) firstChunkAt = Date.now();
+          b += c;
+        });
+        res.on('end', () => resolve({ firstChunkAt, endAt: Date.now(), body: b }));
+      });
+      r.on('error', reject);
+      r.end('{}');
+    });
+
+    expect(body).toBe(SSE_BODY('msg_S1')); // every byte forwarded unchanged THROUGH the tee
+    expect(endAt - firstChunkAt).toBeGreaterThanOrEqual(25); // streamed progressively — the tee did not buffer/stall
+    await tick();
+    expect(records).toEqual([{ orgId: 'org-9', taskId: 'task-S', model: 'claude-haiku-4-5', inputTokens: 25, outputTokens: 42, idempotencyKey: 'msg_S1' }]);
+  });
+
+  it('RE-PROOF: with metering wired + a context set, the master key still never crosses the bridge wire', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_K', model: 'm', usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath });
+    bridges.push(bridge);
+    bridge.setContext({ taskId: 'task-K', orgId: 'org-K' });
+
+    // Raw-capture the bytes the bridge sends back over the TCP (runner-side) wire.
+    const wireBytes = await new Promise<string>((resolve, reject) => {
+      const c = connect({ host: '127.0.0.1', port: bridge.port });
+      let buf = '';
+      c.setEncoding('utf8');
+      c.on('connect', () => c.write('POST /v1/messages HTTP/1.1\r\nhost: x\r\nconnection: close\r\ncontent-length: 2\r\n\r\n{}'));
+      c.on('data', (d) => (buf += d));
+      c.on('end', () => resolve(buf));
+      c.on('error', reject);
+    });
+    expect(wireBytes).toContain('200');
+    expect(wireBytes).not.toContain(MASTER_KEY); // key never on the runner-side wire, even with the tee
+    expect(up.received[0]!.headers['x-api-key']).toBe(MASTER_KEY); // injected upstream as before
+    await tick();
+    expect(records).toHaveLength(1); // and the call WAS metered (the stamper framed the raw request)
+  });
+
+  it('an agent that forges x-tasca-* through the bridge cannot spoof attribution (bridge strips, runner context wins)', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_F', model: 'm', usage: { input_tokens: 2, output_tokens: 3 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath });
+    bridges.push(bridge);
+    bridge.setContext({ taskId: 'task-REAL', orgId: 'org-REAL' });
+
+    await reqViaTcp(bridge.port, {
+      headers: { 'x-tasca-task-id': 'task-FORGED', 'x-tasca-org-id': 'org-VICTIM' },
+      body: '{}',
+    });
+    await tick();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.taskId).toBe('task-REAL'); // the runner's context, NOT the agent's forgery
+    expect(records[0]!.orgId).toBe('org-REAL');
+  });
+
+  it('no attribution headers (e.g. a call outside any job) → no usage recorded, response unaffected', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_N', model: 'm', usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    // Hit the proxy socket directly with NO x-tasca-* headers (no bridge / no context).
+    const out = await reqViaSocket(socketPath, { body: '{}' });
+    expect(out.status).toBe(200);
+    await tick();
+    expect(records).toHaveLength(0); // nothing to attribute → nothing recorded; the call still succeeded
+  });
+
+  it('CONCURRENT metered calls never cross attribution — each usage row carries ITS OWN task', async () => {
+    // Echo a per-request response id so each tee extracts a distinct idempotency key; drive the
+    // proxy socket directly with distinct x-tasca headers (what distinct stamped connections look like).
+    const up = await fakeUpstream((_req, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const marker = JSON.parse(body).marker as string;
+      res.end(JSON.stringify({ id: `msg_${marker}`, model: 'm', usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+
+    const ids = Array.from({ length: 12 }, (_, i) => `c${i}`);
+    await Promise.all(
+      ids.map((id) =>
+        reqViaSocket(socketPath, {
+          headers: { 'x-tasca-task-id': `task-${id}`, 'x-tasca-org-id': 'org-1', 'content-type': 'application/json' },
+          body: JSON.stringify({ marker: id }),
+        })
+      )
+    );
+    await tick(50);
+    expect(records).toHaveLength(12);
+    // Each recorded usage's task matches its own response id — no cross-attribution under concurrency.
+    for (const r of records) {
+      expect(r.idempotencyKey).toBe(`msg_${r.taskId.replace('task-', '')}`);
+    }
+  });
+
+  it('PARTIAL attribution (only one of the two headers) → unmetered, the call still succeeds', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_P', model: 'm', usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    // Drive the proxy directly with only ONE of the two ids — `meter` requires BOTH (server.ts).
+    const a = await reqViaSocket(socketPath, { headers: { 'x-tasca-task-id': 't', 'content-type': 'application/json' }, body: '{}' });
+    const b = await reqViaSocket(socketPath, { headers: { 'x-tasca-org-id': 'o', 'content-type': 'application/json' }, body: '{}' });
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    await tick();
+    expect(records).toHaveLength(0); // neither call had a complete {task,org} → nothing recorded
+  });
+
+  it('a CHUNKED request through the bridge falls back to raw — unmetered, LOGGED, response still works', async () => {
+    const logs: Array<{ m: string; ctx?: Record<string, unknown> }> = [];
+    const logger = { error: (m: string, ctx?: Record<string, unknown>) => logs.push({ m, ...(ctx ? { ctx } : {}) }) };
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_CH', model: 'm', usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath, logger });
+    bridges.push(bridge);
+    bridge.setContext({ taskId: 'task-C', orgId: 'org-C' });
+
+    const resp = await new Promise<string>((resolve, reject) => {
+      const c = connect({ host: '127.0.0.1', port: bridge.port });
+      let buf = '';
+      c.setEncoding('utf8');
+      c.on('connect', () => c.write('POST /v1/messages HTTP/1.1\r\nhost: x\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n'));
+      c.on('data', (d) => (buf += d));
+      c.on('end', () => resolve(buf));
+      c.on('error', reject);
+    });
+
+    expect(resp).toContain('200'); // the chunked request was still proxied (raw) and answered
+    await tick();
+    expect(records).toHaveLength(0); // fallback → no attribution stamped → unmetered
+    expect(logs.some((l) => /fell back to raw/.test(l.m))).toBe(true); // …and the under-metering was logged, not silent
+  });
+
+  it('close() promptly tears down an in-flight connection (graceful shutdown does not hang on a live stream)', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: a\ndata: 1\n\n'); // …then hold the stream open forever
+    });
+    const { socketPath } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath }); // NOT pushed — we close it here
+    bridge.setContext({ taskId: 'task-H', orgId: 'org-H' });
+
+    await new Promise<void>((resolve) => {
+      const r = httpRequest({ host: '127.0.0.1', port: bridge.port, path: '/v1/messages', method: 'POST' }, (res) => {
+        res.on('data', () => resolve()); // got the first chunk → a live, open connection
+      });
+      r.on('error', () => resolve());
+      r.end('{}');
+    });
+
+    const start = Date.now();
+    await bridge.close();
+    expect(Date.now() - start).toBeLessThan(1000); // resolved promptly — the open connection was torn down
+  });
+
+  it('a metered call to a NON-2xx upstream is not recorded (no metering of an error body)', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(429, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'rate_limit' } }));
+    });
+    const { socketPath, records } = await startProxyWithSink(up.origin);
+    const bridge = await serveAnthropicBridge({ listenPort: 0, socketPath });
+    bridges.push(bridge);
+    bridge.setContext({ taskId: 'task-E', orgId: 'org-E' });
+    const out = await reqViaTcp(bridge.port, { body: '{}' });
+    expect(out.status).toBe(429); // the error is forwarded faithfully
+    await tick();
+    expect(records).toHaveLength(0); // …but a 4xx/5xx carries no usage → nothing recorded
   });
 });

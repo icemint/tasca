@@ -19,6 +19,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { unlink, chmod } from 'node:fs/promises';
+import { usageTee, type AgentCallUsage } from './usage-tee';
+
+/** Where the proxy REPORTS an agent call's usage (slice W3-S4b). The worker supplies an impl that
+ *  writes usage_event{org_id, task_id, source:'agent', ...}. A plain callback — the proxy keeps zero
+ *  @tasca deps (a leaf). Fire-and-forget: metering must never break or delay the agent's stream. */
+export interface AgentUsageSink {
+  record(e: AgentCallUsage & { orgId: string; taskId: string }): void;
+}
 
 export interface AnthropicProxyLogger {
   info?(message: string, ctx?: Record<string, unknown>): void;
@@ -39,6 +47,10 @@ export interface AnthropicProxyOptions {
   socketMode?: number;
   /** Per-request upstream timeout. Default 600000ms (long, for streaming completions). */
   requestTimeoutMs?: number;
+  /** Usage sink (slice W3-S4b). When present AND the request carries the X-Tasca-Task-Id/Org-Id headers
+   *  (stamped by the runner's bridge), the proxy tees the response to extract usage and reports it here.
+   *  Absent → no agent metering (the response still streams normally). */
+  usageSink?: AgentUsageSink;
   logger?: AnthropicProxyLogger;
 }
 
@@ -48,6 +60,11 @@ export interface AnthropicProxyHandle {
 
 const DEFAULT_UPSTREAM = 'https://api.anthropic.com';
 const DEFAULT_TIMEOUT_MS = 600_000;
+
+/** A Node header value is `string | string[] | undefined`; collapse to the first string (or undefined). */
+function firstHeader(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
 
 // The agent must NOT control auth or framing — auth is supplied worker-side, framing is
 // recomputed by the upstream client. `x-api-key`/`authorization` are stripped so the
@@ -61,6 +78,10 @@ const STRIP_REQUEST_HEADERS = new Set([
   'proxy-connection',
   'content-length',
   'transfer-encoding',
+  // Tasca-internal attribution headers (slice W3-S4b): read worker-side for metering, then STRIPPED —
+  // never forwarded to Anthropic (an internal task/org id is not Anthropic's business).
+  'x-tasca-task-id',
+  'x-tasca-org-id',
 ]);
 
 // Hop-by-hop response headers not forwarded to the client.
@@ -94,6 +115,12 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
       return;
     }
 
+    // Read the attribution headers (slice W3-S4b) BEFORE the strip loop removes them. Both must be
+    // present (and a sink wired) to meter this call; otherwise the response just streams normally.
+    const taskId = firstHeader(req.headers['x-tasca-task-id']);
+    const orgId = firstHeader(req.headers['x-tasca-org-id']);
+    const meter = options.usageSink && taskId && orgId ? { sink: options.usageSink, taskId, orgId } : null;
+
     const headers: Record<string, string | string[]> = {};
     for (const [name, value] of Object.entries(req.headers)) {
       if (value === undefined) continue;
@@ -124,7 +151,24 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
         outHeaders[name] = value;
       }
       res.writeHead(upRes.statusCode ?? 502, outHeaders);
-      upRes.pipe(res); // STREAM the response — SSE-safe, no buffering
+      // STREAM the response — SSE-safe, no buffering. When metering this call (a runner request with
+      // the attribution headers + a sink), interpose a passthrough tee that forwards every byte
+      // UNCHANGED and extracts the usage on the side; report it best-effort. A 2xx only (don't meter
+      // an error body). The tee can never corrupt/stall the stream (it pushes each chunk as-is).
+      const status = upRes.statusCode ?? 502;
+      if (meter && status >= 200 && status < 300) {
+        const tee = usageTee(firstHeader(upRes.headers['content-type']), (u) => {
+          try {
+            meter.sink.record({ ...u, orgId: meter.orgId, taskId: meter.taskId });
+          } catch (err) {
+            options.logger?.error?.('anthropic-proxy: usage sink threw', { err: String(err) });
+          }
+        });
+        tee.on('error', () => res.destroy());
+        upRes.pipe(tee).pipe(res);
+      } else {
+        upRes.pipe(res);
+      }
       upRes.on('error', () => res.destroy());
     });
 

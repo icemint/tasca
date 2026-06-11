@@ -21,6 +21,11 @@ export interface DispatchPayload {
   repoRef: string;
   /** Internal task id (the agent PTY id). */
   taskId: string;
+  /** The task's org — stamped (with taskId) onto the agent's model calls for per-task/per-org
+   *  metering (slice W3-S4b). Carried in the payload like taskId. This payload value is AUTHORITATIVE
+   *  for agent-call metering (the worker records the org from the stamped header); the dispatch_job.org_id
+   *  column is the same value written atomically at enqueue, kept for queue-side observability. */
+  orgId: string;
   /** The source story id (used for the worktree label + PR title). */
   externalStoryId: string;
   /** The agent prompt (the real story content). */
@@ -74,6 +79,11 @@ export interface RunnerOptions {
   retryDelaySeconds?: number;
   /** Revoke the scoped token after each task. Default: real GitHub revoke. Injectable for tests. */
   revoke?: (token: string) => Promise<unknown>;
+  /** Set/clear the attribution stamped onto the agent's model calls for this job (slice W3-S4b) —
+   *  the bridge's setContext in production. Called with the job's {taskId, orgId} before execute and
+   *  cleared (null) after, so metering only attributes calls made during the job. Absent → no-op
+   *  (dev/no-proxy: no bridge to stamp). The runner is sequential, so one context is live at a time. */
+  setUsageContext?: (ctx: { taskId: string; orgId: string } | null) => void;
   logger?: RunnerLogger;
 }
 
@@ -160,6 +170,16 @@ export function createRunner(opts: RunnerOptions): Runner {
 
     try {
       token = await opts.broker.mintRepoToken(payload.repoRef);
+      // Stamp this job's attribution onto the agent's model calls (metering, slice W3-S4b). Best-effort:
+      // only when both ids are present; the job runs regardless. Cleared in finally so a call made
+      // outside a job (or after it) is never misattributed to this task.
+      if (opts.setUsageContext && typeof payload.taskId === 'string' && typeof payload.orgId === 'string') {
+        opts.setUsageContext({ taskId: payload.taskId, orgId: payload.orgId });
+      } else if (opts.setUsageContext) {
+        // A payload missing taskId/orgId (e.g. enqueued before orgId joined DispatchPayload) means this
+        // job's agent calls go UNMETERED — surface it rather than under-bill silently.
+        opts.logger?.error?.('runner: job payload missing taskId/orgId; agent calls for this job are unmetered', { jobId: job.id });
+      }
       const control: ExecuteControl = {
         signal: abort.signal,
         beginPublish: () => opts.queue.beginPublish(job.id, job.fence),
@@ -184,6 +204,9 @@ export function createRunner(opts: RunnerOptions): Runner {
       await opts.queue.release(job.id, job.fence, { delaySeconds: retryDelay }).catch(() => {});
     } finally {
       clearInterval(heartbeat);
+      // Clear the attribution as soon as the job ends — the next claim sets its own; a model call
+      // between jobs (there shouldn't be one) is then metered to no task rather than this one.
+      opts.setUsageContext?.(null);
       // ALWAYS revoke the scoped token (even on failure) so its effective lifetime is
       // this task, not GitHub's ~1h cap. Best-effort: never throws (try/await/catch
       // tolerates a synchronously-throwing injected revoke too), and a FAILED revoke is

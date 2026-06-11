@@ -3,3 +3,6 @@ node_modules/
 dist/
 .turbo/
 .astro/
+
+# tsc -b incremental build cache
+*.tsbuildinfo

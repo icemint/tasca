@@ -62,6 +62,7 @@ function fakeExecution(over: Partial<ExecutionPort> = {}): {
 
 const PAYLOAD: DispatchPayload = {
   taskId: 'task-1',
+  orgId: 'org-1',
   repoRef: 'acme/widgets',
   externalStoryId: 'acme/widgets#5',
   prompt: 'Fix the bug',
