@@ -441,6 +441,7 @@ async function main(): Promise<void> {
       onLogin: async (userId) => {
         await onboardingRepo.ensurePersonalOrg(userId);
       },
+      logger, // server-side OAuth callback diagnostics (the per-branch failure reason)
     });
     // Hourly sweep of expired sessions + oauth-state rows. unref() so it never
     // holds the process open during shutdown.
