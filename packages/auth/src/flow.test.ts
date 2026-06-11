@@ -234,3 +234,73 @@ describe('completeAuth', () => {
     expect(res).toEqual({ ok: false, error: 'state_mismatch' });
   });
 });
+
+describe('completeAuth — diagnostic logging (the failure path must NOT be silent)', () => {
+  type LogEntry = { level: 'info' | 'error'; message: string; ctx?: Record<string, unknown> };
+  function captureLogger(into: LogEntry[]) {
+    return {
+      info: (message: string, ctx?: Record<string, unknown>) => into.push({ level: 'info', message, ...(ctx ? { ctx } : {}) }),
+      error: (message: string, ctx?: Record<string, unknown>) => into.push({ level: 'error', message, ...(ctx ? { ctx } : {}) }),
+    };
+  }
+
+  it('a MISSING oauth cookie logs reason=state_cookie_mismatch with cookieStatePresent=false (the Cloudflare symptom)', async () => {
+    const repo = new FakeRepo();
+    const logs: LogEntry[] = [];
+    const { oauthCookie } = await beginAuth('github', depsWith(repo));
+    await completeAuth(
+      'github',
+      { code: 'c', state: oauthCookie /* oauthCookieState ABSENT — cookie did not round-trip */ },
+      { ...depsWith(repo, githubSuccessFetch), logger: captureLogger(logs) }
+    );
+    const f = logs.find((l) => l.ctx?.reason === 'state_cookie_mismatch');
+    expect(f).toBeTruthy();
+    expect(f!.level).toBe('error');
+    expect(f!.ctx).toMatchObject({ urlStatePresent: true, cookieStatePresent: false });
+  });
+
+  it('a token-exchange failure logs reason=provider_error with the (non-secret) detail + redirectUri', async () => {
+    const repo = new FakeRepo();
+    const logs: LogEntry[] = [];
+    const { oauthCookie } = await beginAuth('github', depsWith(repo));
+    const failFetch = fakeFetch({
+      [PROVIDER_CONFIG.github.tokenUrl]: () => new Response('boom', { status: 401 }),
+    });
+    await completeAuth(
+      'github',
+      { code: 'c', state: oauthCookie, oauthCookieState: oauthCookie },
+      { ...depsWith(repo, failFetch), logger: captureLogger(logs) }
+    );
+    const f = logs.find((l) => l.ctx?.reason === 'provider_error');
+    expect(f).toBeTruthy();
+    expect(String(f!.ctx?.detail)).toContain('401');
+    expect(f!.ctx?.redirectUri).toBe('https://app.tasca.dev/api/auth/github/callback');
+  });
+
+  it('a consumed/expired state row logs reason=state_row_not_found (not the cookie branch)', async () => {
+    const repo = new FakeRepo();
+    const logs: LogEntry[] = [];
+    // A url+cookie state that matches each other but was never persisted (cached-begin / replay).
+    await completeAuth(
+      'github',
+      { code: 'c', state: 'ghost-state', oauthCookieState: 'ghost-state' },
+      { ...depsWith(repo, githubSuccessFetch), logger: captureLogger(logs) }
+    );
+    const f = logs.find((l) => l.ctx?.reason === 'state_row_not_found');
+    expect(f).toBeTruthy();
+    expect(f!.level).toBe('error');
+  });
+
+  it('the happy path logs success (no failure noise)', async () => {
+    const repo = new FakeRepo();
+    const logs: LogEntry[] = [];
+    const { oauthCookie } = await beginAuth('github', depsWith(repo));
+    await completeAuth(
+      'github',
+      { code: 'c', state: oauthCookie, oauthCookieState: oauthCookie },
+      { ...depsWith(repo, githubSuccessFetch), logger: captureLogger(logs) }
+    );
+    expect(logs.some((l) => l.message === 'auth.callback success')).toBe(true);
+    expect(logs.some((l) => l.level === 'error')).toBe(false);
+  });
+});

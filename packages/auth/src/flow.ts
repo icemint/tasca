@@ -21,6 +21,12 @@ export const SESSION_TTL_SEC = 7 * 24 * 60 * 60;
 /** Sliding-refresh threshold: re-extend a session once it is older than 1 day. */
 export const SESSION_REFRESH_AFTER_SEC = 24 * 60 * 60;
 
+/** Structured logger for auth diagnostics (optional — tests omit it). */
+export interface AuthLogger {
+  info?(message: string, ctx?: Record<string, unknown>): void;
+  error?(message: string, ctx?: Record<string, unknown>): void;
+}
+
 /** The dependencies the flow needs — repo + provider creds + injectable fetch. */
 export interface FlowDeps {
   repo: PgAuthRepository;
@@ -28,6 +34,11 @@ export interface FlowDeps {
   clientIds: Record<Provider, string>;
   clientSecrets: Record<Provider, string>;
   fetchImpl?: typeof fetch;
+  /** Server-side diagnostics for the OAuth callback. Logs the SPECIFIC failure branch (state/cookie
+   *  mismatch, provider error, unverified email, …) so a silent `/?error=` redirect is debuggable.
+   *  Never logs secrets: no code, client secret, access/session token, cookie value, or email address —
+   *  only presence flags, equality, the (non-secret) ProviderError message, and the verified flag. */
+  logger?: AuthLogger;
   /**
    * Post-login hook, run after the user is upserted and BEFORE the session is minted (slice 5a).
    * The composition root injects org provisioning here (ensurePersonalOrg), so a logged-in user
@@ -124,17 +135,40 @@ export async function completeAuth(
   input: CompleteAuthInput,
   deps: FlowDeps
 ): Promise<CompleteAuthResult> {
+  const log = deps.logger;
   if (input.errorParam || !input.code) {
+    // User cancelled at the consent screen, or the provider sent no code — benign.
+    log?.info?.('auth.callback denied', {
+      provider,
+      reason: input.errorParam ? 'provider_error_param' : 'missing_code',
+      errorParam: input.errorParam ?? null,
+    });
     return { ok: false, error: 'denied' };
   }
-  // CSRF: the state in the URL must equal the state we set in the cookie.
+  // CSRF: the state in the URL must equal the state we set in the tasca_oauth cookie. A MISSING
+  // cookie here (with the url state present) is the classic "Set-Cookie stripped/cached at the
+  // edge, or SameSite/domain dropped it" symptom — distinguished by cookieStatePresent below.
   if (!input.state || !input.oauthCookieState || input.state !== input.oauthCookieState) {
+    log?.error?.('auth.callback failed: state/cookie mismatch', {
+      provider,
+      reason: 'state_cookie_mismatch',
+      urlStatePresent: Boolean(input.state),
+      cookieStatePresent: Boolean(input.oauthCookieState),
+      statesEqual: Boolean(input.state && input.oauthCookieState && input.state === input.oauthCookieState),
+    });
     return { ok: false, error: 'state_mismatch' };
   }
 
   // Consume the persisted state (replay-safe: a second callback finds nothing).
   const stateRow = await deps.repo.consumeOAuthState(input.state);
   if (!stateRow || stateRow.provider !== provider) {
+    log?.error?.('auth.callback failed: state row not consumable', {
+      provider,
+      reason: stateRow ? 'state_provider_mismatch' : 'state_row_not_found',
+      // not_found ⇒ the state was never persisted (a CACHED begin response serving a stale token),
+      // already consumed (a double callback), or expired (>10 min on the consent screen).
+      ...(stateRow ? { rowProvider: stateRow.provider } : {}),
+    });
     return { ok: false, error: 'state_mismatch' };
   }
 
@@ -153,7 +187,18 @@ export async function completeAuth(
     );
     identity = await fetchIdentity(provider, accessToken, deps.fetchImpl);
   } catch (err) {
-    if (err instanceof ProviderError) return { ok: false, error: 'provider_unavailable' };
+    if (err instanceof ProviderError) {
+      // ProviderError messages are non-secret (e.g. "token exchange github returned 401",
+      // "token exchange response missing access_token") and pinpoint exchange vs identity fetch.
+      log?.error?.('auth.callback failed: provider error', {
+        provider,
+        reason: 'provider_error',
+        detail: err.message,
+        redirectUri: redirectUriFor(deps.redirectBase, provider),
+      });
+      return { ok: false, error: 'provider_unavailable' };
+    }
+    log?.error?.('auth.callback threw (non-provider error)', { provider, err: err instanceof Error ? err.message : String(err) });
     throw err;
   }
 
@@ -161,6 +206,12 @@ export async function completeAuth(
   // unverified address would let a user register / collide on an email they have
   // not proven they own — refuse it rather than admit an unverified identity.
   if (!identity.email || !identity.emailVerified) {
+    log?.error?.('auth.callback failed: email unverified or missing', {
+      provider,
+      reason: 'email_unverified_or_missing',
+      hasEmail: Boolean(identity.email),
+      emailVerified: identity.emailVerified,
+    });
     return { ok: false, error: 'no_email' };
   }
 
@@ -179,11 +230,18 @@ export async function completeAuth(
   if (deps.onLogin) {
     try {
       await deps.onLogin(user.id);
-    } catch {
+    } catch (err) {
+      log?.error?.('auth.callback failed: onLogin (org provisioning) threw', {
+        provider,
+        reason: 'onlogin_failed',
+        userId: user.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
       return { ok: false, error: 'provider_unavailable' };
     }
   }
 
   const sessionToken = await deps.repo.createSession(user.id, SESSION_TTL_SEC);
+  log?.info?.('auth.callback success', { provider, userId: user.id });
   return { ok: true, sessionToken };
 }

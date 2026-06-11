@@ -189,6 +189,20 @@ async function handleCallback(
   cookies: Record<string, string>,
   secure: boolean
 ): Promise<void> {
+  // HTTP-layer diagnostic: does the tasca_oauth cookie round-trip back from the browser? If
+  // oauthCookiePresent is false while the url carries code+state, the Set-Cookie from /api/auth/:provider
+  // never reached the browser (begin response cached at the edge so Set-Cookie was stripped) or was
+  // dropped (SameSite/domain/Secure) — the prime suspect behind a state_mismatch. Cookie NAMES only,
+  // never values (the value is the single-use state/CSRF token).
+  deps.logger?.info?.('auth.callback received', {
+    provider,
+    hasCode: url.searchParams.has('code'),
+    hasState: url.searchParams.has('state'),
+    hasErrorParam: url.searchParams.has('error'),
+    oauthCookiePresent: Boolean(cookies[OAUTH_COOKIE]),
+    cookieNames: Object.keys(cookies),
+  });
+
   const result = await completeAuth(
     provider,
     {
@@ -204,6 +218,13 @@ async function handleCallback(
   const clearOauth = clearCookie(OAUTH_COOKIE, { path: '/', httpOnly: true, secure, sameSite: 'Lax' });
 
   if (!result.ok) {
+    // The specific branch was already logged inside completeAuth; this records the user-visible
+    // mapping (typed error → the `?error=` code the SPA banner reads) so the two correlate in logs.
+    deps.logger?.error?.('auth.callback redirecting with error', {
+      provider,
+      error: result.error,
+      redirectCode: errorReason(result.error),
+    });
     redirectTo(res, `/?error=${errorReason(result.error)}`, [clearOauth]);
     return;
   }
