@@ -23,7 +23,7 @@ import {
 } from '@tasca/execution';
 import type { DispatchJob, DispatchJobInput, DispatchQueue } from '@tasca/db';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
-import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome } from './store';
+import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
 import type { AgentDirectory, AuditSink, RepoProvisioner, TaskContentSource } from './orchestrate';
 import type { MatchCandidate } from '@tasca/routing';
@@ -81,6 +81,12 @@ class FakeStore implements CoordinationStore {
   }
   async getTask(_orgId: string, taskId: string) {
     return this.tasks.get(taskId) ?? null;
+  }
+  // Task origins (slice W3-S1c) — seed an entry to simulate a decomposition child (stored content
+  // + parent story); absent = a normal task (content fetched from the platform).
+  origins = new Map<string, TaskOrigin>();
+  async getTaskOrigin(_orgId: string, taskId: string): Promise<TaskOrigin | null> {
+    return this.origins.get(taskId) ?? null;
   }
   async setTierEstimate(_orgId: string, taskId: string, estimate: TierEstimate) {
     const t = this.tasks.get(taskId)!;
@@ -187,6 +193,7 @@ class FakeStore implements CoordinationStore {
   async dismissProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async acceptRoutingProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async acceptTriageProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async acceptDecompositionProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
 }
 
 /** A claim port that wins iff the task is still routable at the expected version. */
@@ -668,6 +675,59 @@ describe('orchestrateTaskAssigned — preferred-agent routing (accepted PM propo
     if (outcome.kind !== 'dispatched') return;
     expect(outcome.agentId).toBe('agent-mona'); // preference wins over the label
     void taskId;
+  });
+});
+
+describe('orchestrateTaskAssigned — decomposition child (synthetic, W3-S1c)', () => {
+  let store: FakeStore;
+  let execution: FakeExecution;
+  let status: FakeStatus;
+  let audit: FakeAudit;
+  beforeEach(() => {
+    store = new FakeStore();
+    execution = new FakeExecution();
+    status = new FakeStatus();
+    audit = new FakeAudit();
+  });
+
+  // A synthetic child has NO platform story — content.fetch MUST NOT be the source. This content
+  // source throws, so a dispatch can only succeed by using the STORED content (content precedence).
+  const throwingContent: TaskContentSource = {
+    async fetch() {
+      throw new Error('a synthetic child has no platform story to fetch');
+    },
+  };
+
+  function seedChild(): string {
+    const id = randomUUID();
+    store.tasks.set(id, {
+      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null, preferredAgentId: null,
+    });
+    store.origins.set(id, {
+      content: { title: 'Subtask: schema migration', body: 'add the tables' },
+      parentTaskId: 'parent-x',
+      parentExternalStoryId: 'sc-parent',
+    });
+    return id;
+  }
+
+  it('routes + executes from STORED content (never the platform), and posts status to the PARENT story', async () => {
+    const taskId = seedChild();
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, content: throwingContent })
+    );
+    expect(outcome.kind).toBe('dispatched'); // succeeded → it used the stored content, not the throwing fetch
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.taskId).toBe(taskId);
+    // the agent ran on the child's stored content
+    expect(execution.spawnInputs[0]!.prompt).toContain('schema migration');
+    expect(execution.spawnInputs[0]!.prompt).toContain('add the tables');
+    // STATUS-TO-PARENT: the child's status posts to the PARENT story, not its own synthetic id
+    expect(status.updates).toHaveLength(1);
+    expect(status.updates[0]!.externalStoryId).toBe('sc-parent');
+    expect(status.updates[0]!.comment).toContain('Subtask');
   });
 });
 

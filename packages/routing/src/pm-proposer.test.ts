@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import type { CapabilityProfile, TierEstimate, TierFeatures } from '@tasca/domain';
-import type { RoutingProposal, TriageProposal } from '@tasca/contracts';
+import type { RoutingProposal, TriageProposal, DecompositionProposal } from '@tasca/contracts';
 import type { LlmClassifierPort } from './ports';
 import {
   DefaultPmProposer,
   proposeRoutingFailSoft,
   proposeTriageFailSoft,
+  proposeDecompositionFailSoft,
   type PmProposerPort,
   type RoutingCandidate,
+  type DecomposerPort,
 } from './pm-proposer';
 
 function profile(over: Partial<CapabilityProfile> = {}): CapabilityProfile {
@@ -124,14 +126,14 @@ describe('DefaultPmProposer.proposeTriage — the tier engine surfaced as a sugg
     const classifier: LlmClassifierPort = {
       classify: async (_in: { title: string; body: string; features: TierFeatures }) => ({ tier: 'ultra', confidence: 0.95 }),
     };
-    const out = await new DefaultPmProposer(classifier).proposeTriage({ task: triageTask });
+    const out = await new DefaultPmProposer({ classifier }).proposeTriage({ task: triageTask });
     expect(out!.tier).toBe('ultra');
     expect(out!.why).toContain('classifier');
   });
 
   it('a classifier that THROWS degrades to the heuristic prior (estimateTier is fail-soft)', async () => {
     const classifier: LlmClassifierPort = { classify: async () => { throw new Error('LLM down'); } };
-    const out = await new DefaultPmProposer(classifier).proposeTriage({ task: triageTask });
+    const out = await new DefaultPmProposer({ classifier }).proposeTriage({ task: triageTask });
     expect(out).not.toBeNull(); // never throws — degraded to heuristics
     expect(out!.why).toContain('heuristics');
   });
@@ -155,5 +157,45 @@ describe('proposeTriageFailSoft — a triage outage never reaches the loop', () 
       proposeTriage: async () => ({ tier: 'gigantic', why: 'x', confidence: 9 }) as unknown as TriageProposal,
     };
     await expect(proposeTriageFailSoft(port, input)).resolves.toBeNull();
+  });
+});
+
+describe('DefaultPmProposer.proposeDecomposition — LLM-backed, no deterministic fallback', () => {
+  const task = { title: 'Billing reconciliation v2', body: 'a large, multi-part story' };
+
+  it('returns null when NO decomposer is wired (a split needs a model)', async () => {
+    expect(await new DefaultPmProposer().proposeDecomposition({ task })).toBeNull();
+  });
+
+  it('uses the injected decomposer when present', async () => {
+    const decomposer: DecomposerPort = {
+      decompose: async () => ({ children: [{ title: 'migration', body: '' }, { title: 'engine', body: '' }], why: 'splits cleanly' }),
+    };
+    const out = await new DefaultPmProposer({ decomposer }).proposeDecomposition({ task });
+    expect(out!.children).toHaveLength(2);
+  });
+});
+
+describe('proposeDecompositionFailSoft — an LLM decomposer outage never reaches the loop', () => {
+  const input = { task: { title: 't', body: 'b' } };
+
+  it('a THROWING decomposer → null', async () => {
+    const port: Pick<PmProposerPort, 'proposeDecomposition'> = { proposeDecomposition: async () => { throw new Error('LLM down'); } };
+    await expect(proposeDecompositionFailSoft(port, input)).resolves.toBeNull();
+  });
+
+  it('a MALFORMED split (empty children) → null', async () => {
+    const port: Pick<PmProposerPort, 'proposeDecomposition'> = {
+      proposeDecomposition: async () => ({ children: [], why: 'x' }) as unknown as DecompositionProposal,
+    };
+    await expect(proposeDecompositionFailSoft(port, input)).resolves.toBeNull();
+  });
+
+  it('happy path validates and returns the split', async () => {
+    const port: Pick<PmProposerPort, 'proposeDecomposition'> = {
+      proposeDecomposition: async () => ({ children: [{ title: 'a', body: '' }], why: 'ok' }),
+    };
+    const out = await proposeDecompositionFailSoft(port, input);
+    expect(out!.children[0]!.title).toBe('a');
   });
 });

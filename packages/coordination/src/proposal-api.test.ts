@@ -80,6 +80,12 @@ class FakeProposalStore {
     this.triaged.push({ id, tier });
     return this.nextTriage;
   }
+  decomposed: Array<{ id: string; count: number }> = [];
+  nextDecomp: ProposalWriteOutcome = { ok: true };
+  async acceptDecompositionProposal(_orgId: string, id: string, children: Array<{ title: string; body: string }>): Promise<ProposalWriteOutcome> {
+    this.decomposed.push({ id, count: children.length });
+    return this.nextDecomp;
+  }
 }
 
 class FakeMembership {
@@ -181,6 +187,9 @@ function deps(f: Fakes, over: Partial<ProposalApiDeps> = {}): ProposalApiDeps {
       },
       async proposeTriage() {
         return { tier: 'hard' as const, why: 'reasoning language + multi-file scope', confidence: 0.72 };
+      },
+      async proposeDecomposition() {
+        return { children: [{ title: 'schema migration', body: '' }, { title: 'recon engine', body: '' }], why: 'splits cleanly' };
       },
     },
     content: { async fetch() { return { title: 'Refactor auth', body: 'redesign the token flow' }; } },
@@ -298,6 +307,7 @@ describe('POST /api/proposals/generate — flag-gated, on-demand', () => {
     const throwing = {
       async proposeRouting() { throw new Error('LLM down'); },
       async proposeTriage() { throw new Error('LLM down'); },
+      async proposeDecomposition() { throw new Error('LLM down'); },
     };
     const r = await run(deps(f, { proposer: throwing }), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1' }) }));
     expect(r.statusCode).toBe(200);
@@ -450,5 +460,66 @@ describe('triage kind (W3-S1b)', () => {
     const r = await run(deps(f), fakeReq('POST', '/api/proposals/pt/accept', { headers: csrf() }));
     expect(r.statusCode).toBe(409);
     expect(JSON.parse(r.body).code).toBe('conflict');
+  });
+});
+
+describe('decomposition kind (W3-S1c)', () => {
+  it('generate kind=decomposition persists a DECOMPOSITION proposal from the LLM decomposer', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const r = await run(
+      deps(f),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'decomposition' }) })
+    );
+    expect(r.statusCode).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.proposal.kind).toBe('decomposition');
+    expect(body.proposal.payload.children).toHaveLength(2);
+  });
+
+  it('FLAG-OFF refuses decomposition generation server-side (403)', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const r = await run(
+      deps(f, { enabled: false }),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'decomposition' }) })
+    );
+    expect(r.statusCode).toBe(403);
+    expect(f.store.created).toEqual([]);
+  });
+
+  it('a content-fetch failure → 200 proposal:null (the LLM never sees content, no write)', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const r = await run(
+      deps(f, { content: { async fetch() { throw new Error('no story'); } } }),
+      fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'decomposition' }) })
+    );
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body).proposal).toBeNull();
+  });
+
+  it('accept of a decomposition proposal calls acceptDecompositionProposal with the children — ONLY binding path', async () => {
+    const f = newFakes();
+    f.store.proposals.set('pd', {
+      id: 'pd', kind: 'decomposition', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+      createdAt: '2026-01-01T00:00:00Z', payload: { children: [{ title: 'a', body: '' }, { title: 'b', body: '' }], why: 'split' },
+    });
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/pd/accept', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(f.store.decomposed).toEqual([{ id: 'pd', count: 2 }]);
+    expect(f.store.accepted).toEqual([]); // never touched routing
+    expect(f.store.triaged).toEqual([]); // never touched triage
+  });
+
+  it('a malformed decomposition payload (empty children) → 409', async () => {
+    const f = newFakes();
+    f.store.proposals.set('pd', {
+      id: 'pd', kind: 'decomposition', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+      createdAt: '2026-01-01T00:00:00Z', payload: { children: [], why: 'x' },
+    });
+    const r = await run(deps(f), fakeReq('POST', '/api/proposals/pd/accept', { headers: csrf() }));
+    expect(r.statusCode).toBe(409);
+    expect(f.store.decomposed).toEqual([]);
   });
 });

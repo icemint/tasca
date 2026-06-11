@@ -41,6 +41,22 @@ export const TriageProposalSchema = z.object({
 });
 export type TriageProposal = z.infer<typeof TriageProposalSchema>;
 
+/** A decomposition proposal's payload (slice W3-S1c): a draft split of a parent task into smaller
+ *  child tasks. Accepting it creates each child via getOrCreateTask (deterministic synthetic story
+ *  id → idempotent re-accept) — never a status/claim/routing write on the parent. Bounded sizes keep
+ *  an LLM from persisting unbounded text or an unbounded child count. */
+export const DecompositionChildSchema = z.object({
+  title: z.string().min(1).max(300),
+  body: z.string().max(4000).default(''),
+});
+export type DecompositionChild = z.infer<typeof DecompositionChildSchema>;
+
+export const DecompositionProposalSchema = z.object({
+  children: z.array(DecompositionChildSchema).min(1).max(10),
+  why: z.string().min(1).max(2000),
+});
+export type DecompositionProposal = z.infer<typeof DecompositionProposalSchema>;
+
 /** Normalized inbound platform event (adapters emit this; coordination consumes it). */
 export const AdapterEventSchema = z.object({
   type: z.literal('task.assigned'),

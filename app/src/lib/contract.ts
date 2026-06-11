@@ -141,12 +141,18 @@ export interface TriageProposalPayload {
   confidence: number;
 }
 
+/** A decomposition proposal's payload (W3-S1c): a draft split into child tasks. */
+export interface DecompositionProposalPayload {
+  children: Array<{ title: string; body?: string }>;
+  why: string;
+}
+
 export interface ProposalSummary {
   id: string;
   kind: 'triage' | 'decomposition' | 'routing' | 'standup';
   targetTaskId: string | null;
   targetVersion: number | null;
-  payload: RoutingProposalPayload | TriageProposalPayload | Record<string, unknown>;
+  payload: RoutingProposalPayload | TriageProposalPayload | DecompositionProposalPayload | Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   version: number;
   createdAt: string;

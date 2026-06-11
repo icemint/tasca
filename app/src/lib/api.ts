@@ -241,7 +241,7 @@ export const interruptTask = (id: string) =>
 export const getProposals = () => get<ProposalsResponse>('/api/proposals');
 /** Generate a suggestion for a task (on-demand). `kind` = routing (uses the stored estimate) or
  *  triage (the tier engine). 200 with `{proposal}` (possibly null when there's no suggestion). */
-export const generateProposal = (taskId: string, kind: 'routing' | 'triage' = 'routing') =>
+export const generateProposal = (taskId: string, kind: 'routing' | 'triage' | 'decomposition' = 'routing') =>
   post<{ proposal: ProposalSummary | null }>(`/api/proposals/generate`, { taskId, kind });
 /** Accept a proposal — routes through the binding method (re-route to the proposed agent). */
 export const acceptProposal = (id: string) =>

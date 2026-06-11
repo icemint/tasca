@@ -10,7 +10,7 @@ import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction, type LiveActionOpts } from '../live';
 import { I, esc, taskRef, tierTag, roControl } from '../ui';
-import type { ProposalSummary, RoutingProposalPayload, TriageProposalPayload, TaskSummary, Tier } from '../contract';
+import type { ProposalSummary, RoutingProposalPayload, TriageProposalPayload, DecompositionProposalPayload, TaskSummary, Tier } from '../contract';
 import type { WriteResult } from '../api';
 
 const SPARK = I.spark;
@@ -101,7 +101,28 @@ function triageCard(p: ProposalSummary): string {
       </div></div></div>`;
 }
 
-/** A task is a candidate for an on-demand suggestion: any routable/blocked task can be triaged;
+function decompositionCard(p: ProposalSummary): string {
+  const pay = p.payload as DecompositionProposalPayload;
+  const chips = (pay.children ?? [])
+    .map((c, i) => `<span class="pm-chip">${i + 1} · ${esc(c.title)}</span>`)
+    .join(' ');
+  const target = p.targetTaskId
+    ? `<a class="pms-target mono" href="/tasks?id=${encodeURIComponent(p.targetTaskId)}">${taskRef(p.targetTaskId)}</a>`
+    : '';
+  return `<div class="pm-suggestion" data-proposal="${esc(p.id)}">
+    <div class="pms-top"><span class="pm-cap-ic sm">${CAP_IC.decomp}</span><span class="pms-tag">Decomposition</span>
+      <span class="pm-badge advisory sm">Suggestion · not applied</span></div>
+    <div class="pms-title">Split into ${(pay.children ?? []).length} subtasks ${target}</div>
+    <div class="pms-body">${chips}</div>
+    <div class="pms-foot"><span class="pms-meta mono dim">${esc(pay.why ?? '')} · nothing is created until you accept</span>
+      <div class="pms-act">
+        <button class="ictl pm-ctl" type="button" data-action="dismiss" data-proposal="${esc(p.id)}" aria-label="Dismiss this suggestion">Dismiss</button>
+        ${roControl('Edit', { gate: 'Editing a proposal arrives with the next sub-slice' })}
+        <button class="ictl signal pm-ctl" type="button" data-action="accept" data-proposal="${esc(p.id)}" aria-label="Accept — create the subtasks">Accept</button>
+      </div></div></div>`;
+}
+
+/** A task is a candidate for an on-demand suggestion: any open task can be triaged or decomposed;
  *  routing additionally needs a tier estimate (the server returns no suggestion otherwise). */
 function suggestRow(t: TaskSummary): string {
   const route = t.tierEstimate !== null
@@ -111,16 +132,23 @@ function suggestRow(t: TaskSummary): string {
     <span class="pm-srow-id">${taskRef(t.id)} ${tierTag(t.tierEstimate)}</span>
     <span class="pm-srow-act">
       <button class="ictl pm-ctl" type="button" data-action="generate" data-kind="triage" data-task-id="${esc(t.id)}" aria-label="Suggest a triage for ${esc(t.id)}">${SPARK} Triage</button>
+      <button class="ictl pm-ctl" type="button" data-action="generate" data-kind="decomposition" data-task-id="${esc(t.id)}" aria-label="Suggest a decomposition for ${esc(t.id)}">Decompose</button>
       ${route}
     </span>
   </div>`;
 }
 
+function suggestionCard(p: ProposalSummary): string {
+  if (p.kind === 'triage') return triageCard(p);
+  if (p.kind === 'decomposition') return decompositionCard(p);
+  return routingCard(p);
+}
+
 function onState(proposals: ProposalSummary[], suggestable: TaskSummary[]): string {
-  const cardsFor = proposals.filter((p) => p.kind === 'routing' || p.kind === 'triage');
+  const cardsFor = proposals.filter((p) => p.kind === 'routing' || p.kind === 'triage' || p.kind === 'decomposition');
   const cards = cardsFor.length
-    ? `<div class="pm-suggestions">${cardsFor.map((p) => (p.kind === 'triage' ? triageCard(p) : routingCard(p))).join('')}</div>`
-    : empty('No suggestions yet', 'Generate a triage or routing suggestion from one of your tasks below — nothing is applied until you accept it.', SPARK);
+    ? `<div class="pm-suggestions">${cardsFor.map(suggestionCard).join('')}</div>`
+    : empty('No suggestions yet', 'Generate a triage, routing, or decomposition suggestion from one of your tasks below — nothing is applied until you accept it.', SPARK);
   const gen = suggestable.length
     ? `<div class="pm-gen"><div class="pm-gen-h mono">Generate a suggestion</div>${suggestable.map(suggestRow).join('')}</div>`
     : '';
@@ -170,7 +198,8 @@ export function wirePmAssistant(el: HTMLElement, rerun: () => Promise<void>): vo
         write: () => {
           if (action === 'accept') return acceptProposal(btn.dataset.proposal ?? '');
           if (action === 'dismiss') return dismissProposal(btn.dataset.proposal ?? '');
-          const kind = btn.dataset.kind === 'triage' ? 'triage' : 'routing';
+          const k = btn.dataset.kind;
+          const kind = k === 'triage' || k === 'decomposition' ? k : 'routing';
           return generateProposal(btn.dataset.taskId ?? '', kind);
         },
       };

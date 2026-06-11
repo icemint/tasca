@@ -37,6 +37,15 @@ ALTER TABLE task ADD COLUMN IF NOT EXISTS last_error text;
 -- reference. It is a PREFERENCE, never a binding assignment -- the engine + atomic claim still
 -- decide. Cleared on a plain reassign (clean slate).
 ALTER TABLE task ADD COLUMN IF NOT EXISTS preferred_agent_id text;
+-- Decomposition children (slice W3-S1c): a Tasca-INTERNAL subtask created by accepting a
+-- decomposition proposal carries its content here (it has no platform story to fetch from) and
+-- points at its parent. content (jsonb {title,body}) is the routing/execution input for a
+-- synthetic child; NULL for a normal task (which fetches content from its platform adapter).
+-- parent_task_id (the originating task) is where the child's status posts back (the child has
+-- no native story of its own), self-referencing the org-scoped task table -- no cross-org child.
+ALTER TABLE task ADD COLUMN IF NOT EXISTS content jsonb;
+ALTER TABLE task ADD COLUMN IF NOT EXISTS parent_task_id text REFERENCES task(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS task_parent_idx ON task (parent_task_id);
 DO $$ BEGIN
   ALTER TABLE task ADD CONSTRAINT task_status_chk CHECK (
     status IN ('ingested','routable','claimed','executing','in_review','done','failed','needs_attention')
