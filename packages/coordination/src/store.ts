@@ -65,6 +65,26 @@ export type ProposalWriteOutcome =
   | { ok: true }
   | { ok: false; reason: 'not_found' | 'conflict' | 'agent_not_hired' };
 
+// ── LLM usage metering (slice W3-S4a) ─────────────────────────────────────────
+/** Why an LLM call was made. `agent` is the agent-execution path (reserved for S4b). */
+export type UsageSource = 'classifier' | 'triage' | 'decomposition' | 'agent';
+
+export interface UsageRecordInput {
+  taskId: string | null;
+  source: UsageSource;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** The Anthropic response id — UNIQUE, so a retried report is a no-op (no double-count). */
+  idempotencyKey: string;
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  bySource: Record<string, { inputTokens: number; outputTokens: number }>;
+}
+
 /**
  * Inverse of TASK_TRANSITIONS: for each status, the statuses it may legally be
  * reached FROM. Derived once so the write-path guard (setStatus) enforces the
@@ -450,6 +470,15 @@ export interface CoordinationStore {
   /** Aggregate count of the org's tasks by status (slice W3-S1d) — the standup's data source. Counts
    *  EVERY task (no pagination/cap, so a large org is never under-counted). Org-scoped. */
   getTaskStatusCounts(orgId: string): Promise<Record<string, number>>;
+
+  /** Record one LLM call's usage (slice W3-S4a). Org-scoped + CAS-idempotent (ON CONFLICT on the
+   *  unique idempotency_key) — a retried/concurrent report of the SAME call inserts at most one row,
+   *  never a double-count. Returns nothing; metering is best-effort and must not affect the LLM call. */
+  recordUsage(orgId: string, e: UsageRecordInput): Promise<void>;
+
+  /** Sum the org's LLM usage (slice W3-S4a), optionally for one task / since a time. ORG-SCOPED — a
+   *  query sums only this org's spend (a cross-org sum would be a billing leak). */
+  getUsage(orgId: string, opts?: { taskId?: string; since?: string }): Promise<UsageTotals>;
 
   /** The most recent routing decision for a task, or null if none recorded yet. */
   getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null>;
@@ -1301,6 +1330,44 @@ export class PgCoordinationStore implements CoordinationStore {
     const out: Record<string, number> = {};
     for (const row of res.rows) out[row.status] = row.n;
     return out;
+  }
+
+  async recordUsage(orgId: string, e: UsageRecordInput): Promise<void> {
+    // CAS-idempotent: the UNIQUE idempotency_key makes a retried/concurrent report of the SAME call a
+    // no-op insert — at most one row per call, never a double-count. Org-scoped (org_id from the caller).
+    await this.db.query(
+      `INSERT INTO usage_event (id, org_id, task_id, source, model, input_tokens, output_tokens, idempotency_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [randomUUID(), orgId, e.taskId, e.source, e.model, e.inputTokens, e.outputTokens, e.idempotencyKey]
+    );
+  }
+
+  async getUsage(orgId: string, opts?: { taskId?: string; since?: string }): Promise<UsageTotals> {
+    const params: unknown[] = [orgId];
+    let where = 'WHERE org_id = $1'; // ORG-SCOPED: a cross-org sum would be a billing leak
+    if (opts?.taskId) {
+      params.push(opts.taskId);
+      where += ` AND task_id = $${params.length}`;
+    }
+    if (opts?.since) {
+      params.push(opts.since);
+      where += ` AND created_at >= $${params.length}`;
+    }
+    const res = await this.db.query<{ source: string; input: number; output: number }>(
+      `SELECT source, sum(input_tokens)::int AS input, sum(output_tokens)::int AS output
+         FROM usage_event ${where} GROUP BY source`,
+      params
+    );
+    const bySource: Record<string, { inputTokens: number; outputTokens: number }> = {};
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const r of res.rows) {
+      bySource[r.source] = { inputTokens: r.input, outputTokens: r.output };
+      inputTokens += r.input;
+      outputTokens += r.output;
+    }
+    return { inputTokens, outputTokens, bySource };
   }
 
   async getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null> {

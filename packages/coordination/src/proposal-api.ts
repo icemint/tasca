@@ -31,6 +31,7 @@ import type { OrgRosterRepo } from './roster';
 import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
 import { resolveOrg } from './resolve-org';
+import { withUsageContext } from './usage-context';
 import { atLeast, type RoleReader } from './membership';
 import { sendJson, readJsonBody, verifyCsrf } from './http-util';
 
@@ -236,10 +237,14 @@ async function handleGenerate(
       sendJson(res, 200, { proposal: null });
       return;
     }
-    const payload =
+    // Attribute the proposer's LLM call to this task/org (slice W3-S4a) — source = the kind (triage
+    // goes through the classifier; decomposition through the decomposer). withUsageContext spans the call.
+    const proposer = deps.proposer;
+    const payload: unknown = await withUsageContext<unknown>({ orgId, taskId: task.id, source: kind }, () =>
       kind === 'triage'
-        ? await proposeTriageFailSoft(deps.proposer, { task: content })
-        : await proposeDecompositionFailSoft(deps.proposer, { task: content });
+        ? proposeTriageFailSoft(proposer, { task: content })
+        : proposeDecompositionFailSoft(proposer, { task: content })
+    );
     if (!payload) {
       sendJson(res, 200, { proposal: null });
       return;

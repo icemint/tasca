@@ -23,6 +23,7 @@ import {
 } from '@tasca/execution';
 import type { DispatchJob, DispatchJobInput, DispatchQueue } from '@tasca/db';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
+import { currentUsageContext } from './usage-context';
 import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
 import type { AgentDirectory, AuditSink, RepoProvisioner, TaskContentSource } from './orchestrate';
@@ -176,6 +177,11 @@ class FakeStore implements CoordinationStore {
   // read-side
   async listTasks() { return []; }
   async getTaskStatusCounts() { return {}; }
+  usageRecords: Array<{ orgId: string; source: string; idempotencyKey: string }> = [];
+  async recordUsage(orgId: string, e: { source: string; idempotencyKey: string }) {
+    this.usageRecords.push({ orgId, source: e.source, idempotencyKey: e.idempotencyKey });
+  }
+  async getUsage() { return { inputTokens: 0, outputTokens: 0, bySource: {} }; }
   async getRoutingDecisionForTask() { return null; }
   async listRoutingDecisions() { return []; }
   async listPullRequestsForTask(_orgId: string, taskId: string) {
@@ -382,6 +388,7 @@ function makeDeps(opts: {
   candidates?: MatchCandidate[];
   content?: TaskContentSource;
   names?: Record<string, string>;
+  classifier?: OrchestrationDeps['classifier'];
 }): OrchestrationDeps {
   const candidates = opts.candidates ?? [{ profile: elvisProfile(), state: 'idle', activeCount: 0 }];
   return {
@@ -392,6 +399,7 @@ function makeDeps(opts: {
     directory: new FakeDirectory(candidates, opts.names),
     audit: opts.audit,
     content: opts.content ?? content,
+    ...(opts.classifier ? { classifier: opts.classifier } : {}),
   };
 }
 
@@ -676,6 +684,28 @@ describe('orchestrateTaskAssigned — preferred-agent routing (accepted PM propo
     if (outcome.kind !== 'dispatched') return;
     expect(outcome.agentId).toBe('agent-mona'); // preference wins over the label
     void taskId;
+  });
+});
+
+describe('orchestrateTaskAssigned — usage context (W3-S4a)', () => {
+  it('wraps the classifier call with the task usage context (org/task, source=classifier)', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const status = new FakeStatus();
+    const audit = new FakeAudit();
+    // The default content has no tier label → heuristic prior < 0.8 → estimateTier CALLS the classifier.
+    let captured: ReturnType<typeof currentUsageContext>;
+    const classifier = {
+      async classify() {
+        captured = currentUsageContext();
+        return { tier: 'medium' as const, confidence: 0.9 };
+      },
+    };
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, classifier }));
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    // the classifier ran INSIDE the usage context → attributable to this task as source='classifier'
+    expect(captured).toEqual({ orgId: 'org_default', taskId: outcome.taskId, source: 'classifier' });
   });
 });
 

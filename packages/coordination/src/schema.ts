@@ -344,6 +344,29 @@ CREATE TABLE IF NOT EXISTS proposal (
 CREATE INDEX IF NOT EXISTS proposal_org_status_kind_idx ON proposal (org_id, status, kind);
 CREATE INDEX IF NOT EXISTS proposal_org_task_idx ON proposal (org_id, target_task_id);`;
 
+/**
+ * Per-task / per-org LLM usage ledger (slice W3-S4a) — the metering surface. One row per LLM call
+ * (the coordination classifier/triage/decomposition now; the agent-execution path in S4b). Org-scoped
+ * tenant data (org_id NOT NULL FK; in the org-scoping CI guard's TENANT_TABLES; every store method
+ * required-orgId). idempotency_key (the Anthropic response id) is UNIQUE so a retried report is a
+ * no-op INSERT (CAS-grade — no double-count). task_id is a PLAIN nullable column (no FK): usage is
+ * BILLING HISTORY and must survive its task being deleted. ON DELETE CASCADE on org_id only.
+ */
+export const USAGE_EVENT_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS usage_event (
+  id              text PRIMARY KEY,
+  org_id          text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  task_id         text,
+  source          text NOT NULL CHECK (source IN ('classifier','triage','decomposition','agent')),
+  model           text NOT NULL,
+  input_tokens    integer NOT NULL,
+  output_tokens   integer NOT NULL,
+  idempotency_key text NOT NULL UNIQUE,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS usage_event_org_created_idx ON usage_event (org_id, created_at);
+CREATE INDEX IF NOT EXISTS usage_event_org_task_idx ON usage_event (org_id, task_id);`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -354,4 +377,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   ORG_CONTRACT_DDL,
   ORG_DISPATCH_CONTRACT_DDL,
   PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
+  USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
 ];

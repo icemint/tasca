@@ -95,7 +95,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+    await pool.query('TRUNCATE usage_event, proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
     await pool.query('TRUNCATE audit_event, identity_binding, delegation, capability_profile, service_user, agent, rbac_role CASCADE');
     await pool.query(`INSERT INTO organization (id, name) VALUES ('org_other','Other') ON CONFLICT (id) DO NOTHING`);
     const created = await identity.createAgent({ name: 'Elvis', model: 'claude-sonnet', vendor: 'claude' });
@@ -615,6 +615,50 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     });
 
     // ── standup (W3-S1d) — the read-only aggregate ──
+    // ── usage metering (W3-S4a) — CAS-idempotent + org-scoped ──
+    const usage = (over: Partial<{ taskId: string | null; source: 'classifier' | 'triage' | 'decomposition' | 'agent'; model: string; inputTokens: number; outputTokens: number; idempotencyKey: string }> = {}) => ({
+      taskId: null, source: 'classifier' as const, model: 'haiku', inputTokens: 100, outputTokens: 10, idempotencyKey: 'msg_1', ...over,
+    });
+
+    it('recordUsage + getUsage: sums by source + total, org-scoped', async () => {
+      await store.recordUsage(ORG, usage({ idempotencyKey: 'a', source: 'classifier', inputTokens: 100, outputTokens: 10 }));
+      await store.recordUsage(ORG, usage({ idempotencyKey: 'b', source: 'triage', inputTokens: 200, outputTokens: 20 }));
+      await store.recordUsage(ORG, usage({ idempotencyKey: 'c', source: 'classifier', inputTokens: 50, outputTokens: 5 }));
+      const totals = await store.getUsage(ORG);
+      expect(totals.inputTokens).toBe(350);
+      expect(totals.outputTokens).toBe(35);
+      expect(totals.bySource.classifier).toEqual({ inputTokens: 150, outputTokens: 15 });
+      expect(totals.bySource.triage).toEqual({ inputTokens: 200, outputTokens: 20 });
+    });
+
+    it('CAS-IDEMPOTENT: re-recording the SAME idempotency_key is a no-op (no double-count)', async () => {
+      await store.recordUsage(ORG, usage({ idempotencyKey: 'dup', inputTokens: 100, outputTokens: 10 }));
+      await store.recordUsage(ORG, usage({ idempotencyKey: 'dup', inputTokens: 999, outputTokens: 999 })); // retry — ignored
+      const totals = await store.getUsage(ORG);
+      expect(totals.inputTokens).toBe(100); // counted once, the first write
+      expect((await pool.query<{ c: number }>(`SELECT count(*)::int AS c FROM usage_event WHERE idempotency_key='dup'`)).rows[0]!.c).toBe(1);
+    });
+
+    it('FORCED PARALLELISM: concurrent reports of the SAME call → exactly one row (no double-count)', async () => {
+      await Promise.all(Array.from({ length: 8 }, () => store.recordUsage(ORG, usage({ idempotencyKey: 'race', inputTokens: 100, outputTokens: 10 }))));
+      const totals = await store.getUsage(ORG);
+      expect(totals.inputTokens).toBe(100); // 8 concurrent reports, counted ONCE
+      expect((await pool.query<{ c: number }>(`SELECT count(*)::int AS c FROM usage_event WHERE idempotency_key='race'`)).rows[0]!.c).toBe(1);
+    });
+
+    it('ORG-SCOPED: getUsage sums ONLY the org (a cross-org sum would be a billing leak)', async () => {
+      await store.recordUsage(ORG, usage({ idempotencyKey: 'mine', inputTokens: 100, outputTokens: 10 }));
+      await store.recordUsage('org_other', usage({ idempotencyKey: 'theirs', inputTokens: 5000, outputTokens: 5000 }));
+      expect((await store.getUsage(ORG)).inputTokens).toBe(100); // org_other's 5000 NOT included
+      expect((await store.getUsage('org_other')).inputTokens).toBe(5000);
+    });
+
+    it('getUsage filters by task (per-task spend)', async () => {
+      await store.recordUsage(ORG, usage({ idempotencyKey: 't1a', taskId: 'task-1', inputTokens: 100, outputTokens: 10 }));
+      await store.recordUsage(ORG, usage({ idempotencyKey: 't2a', taskId: 'task-2', inputTokens: 200, outputTokens: 20 }));
+      expect((await store.getUsage(ORG, { taskId: 'task-1' })).inputTokens).toBe(100);
+    });
+
     it('getTaskStatusCounts counts EVERY task by status and is ORG-SCOPED (no cross-tenant count)', async () => {
       // org_default: 2 routable + 1 done; org_other: 5 routable (must NOT be counted for org_default)
       await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status) VALUES

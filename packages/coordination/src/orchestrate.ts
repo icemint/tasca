@@ -35,6 +35,7 @@ import type { DispatchQueue } from '@tasca/db';
 import { ExecutionError, type ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
 import type { StatusReporter, Logger } from './ports';
+import { withUsageContext } from './usage-context';
 import { DEFAULT_ORG_ID } from './resolve-org';
 
 /**
@@ -339,9 +340,10 @@ export async function orchestrateTaskAssigned(
     // for a synthetic child; a NORMAL task (no stored content) fetches from its platform adapter.
     const origin = await deps.store.getTaskOrigin(orgId, task.id);
     const content: TaskInput = origin?.content ?? (await deps.content.fetch(event));
-    const estimate = await estimateTier(
-      content,
-      deps.classifier ? { classifier: deps.classifier } : {}
+    // Attribute the classifier's LLM call (if any) to this task/org (slice W3-S4a). estimateTier may
+    // call the classifier; the usage context tags its spend as source='classifier' for this task.
+    const estimate = await withUsageContext({ orgId, taskId: task.id, source: 'classifier' }, () =>
+      estimateTier(content, deps.classifier ? { classifier: deps.classifier } : {})
     );
     await deps.store.setTierEstimate(orgId, task.id, estimate);
 
