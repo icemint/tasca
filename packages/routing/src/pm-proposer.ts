@@ -9,8 +9,10 @@ import type { CapabilityProfile, AgentState, TierEstimate } from '@tasca/domain'
 import {
   RoutingProposalSchema,
   TriageProposalSchema,
+  DecompositionProposalSchema,
   type RoutingProposal,
   type TriageProposal,
+  type DecompositionProposal,
 } from '@tasca/contracts';
 import { estimateTier, type TaskInput, type EstimateTierOptions } from './tier';
 import { matchCapability, type MatchCandidate } from './match';
@@ -36,13 +38,30 @@ export interface ProposeTriageInput {
   task: TaskInput;
 }
 
-/** The proposer seam. The routing kind is deterministic (match-based); the triage kind is the
- *  tier engine surfaced as a suggestion (LLM-backed when a classifier is injected). The
- *  language-heavy kinds (decomposition/standup) arrive in later sub-slices. Each returns null
- *  when it has no suggestion. */
+export interface ProposeDecompositionInput {
+  task: TaskInput;
+}
+
+/** An injectable LLM decomposer — splits a parent task into child tasks. There is NO deterministic
+ *  fallback (a split needs a model), so without one the decomposition kind yields no suggestion. */
+export interface DecomposerPort {
+  decompose(input: TaskInput): Promise<DecompositionProposal | null>;
+}
+
+/** The proposer seam. routing = deterministic (match-based); triage = the tier engine (LLM-backed
+ *  when a classifier is injected); decomposition = an injected LLM decomposer (none → no suggestion).
+ *  standup arrives in 1d. Each returns null when it has no suggestion. */
 export interface PmProposerPort {
   proposeRouting(input: ProposeRoutingInput): Promise<RoutingProposal | null>;
   proposeTriage(input: ProposeTriageInput): Promise<TriageProposal | null>;
+  proposeDecomposition(input: ProposeDecompositionInput): Promise<DecompositionProposal | null>;
+}
+
+/** Injected language models for the LLM-backed kinds. Both optional — an absent model means that
+ *  kind yields no suggestion (the assistant is inert for it, never errors). */
+export interface PmProposerConfig {
+  classifier?: LlmClassifierPort;
+  decomposer?: DecomposerPort;
 }
 
 /**
@@ -58,7 +77,7 @@ export interface PmProposerPort {
  * Both return null for an honest "no suggestion", never a guess.
  */
 export class DefaultPmProposer implements PmProposerPort {
-  constructor(private readonly classifier?: LlmClassifierPort) {}
+  constructor(private readonly cfg: PmProposerConfig = {}) {}
 
   async proposeRouting(input: ProposeRoutingInput): Promise<RoutingProposal | null> {
     const byId = new Map(input.candidates.map((c) => [c.agentId, c]));
@@ -79,9 +98,15 @@ export class DefaultPmProposer implements PmProposerPort {
   }
 
   async proposeTriage(input: ProposeTriageInput): Promise<TriageProposal | null> {
-    const opts: EstimateTierOptions = this.classifier ? { classifier: this.classifier } : {};
+    const opts: EstimateTierOptions = this.cfg.classifier ? { classifier: this.cfg.classifier } : {};
     const est = await estimateTier(input.task, opts);
     return { tier: est.tier, why: triageWhy(est), confidence: est.confidence };
+  }
+
+  async proposeDecomposition(input: ProposeDecompositionInput): Promise<DecompositionProposal | null> {
+    // No deterministic fallback — a split needs a model. Without a decomposer wired, no suggestion.
+    if (!this.cfg.decomposer) return null;
+    return this.cfg.decomposer.decompose(input.task);
   }
 }
 
@@ -135,6 +160,26 @@ export async function proposeTriageFailSoft(
   }
   if (raw === null) return null;
   const parsed = TriageProposalSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Fail-soft wrapper around a decomposition proposer call — validate at the boundary, bound with a
+ *  timeout, degrade ANY failure to null. The decomposer is an LLM, so a timeout/throw/malformed
+ *  split → no proposal, never an error and never a task write. */
+export async function proposeDecompositionFailSoft(
+  port: Pick<PmProposerPort, 'proposeDecomposition'>,
+  input: ProposeDecompositionInput,
+  opts: { timeoutMs?: number } = {}
+): Promise<DecompositionProposal | null> {
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  let raw: DecompositionProposal | null;
+  try {
+    raw = await withTimeout(port.proposeDecomposition(input), timeoutMs);
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  const parsed = DecompositionProposalSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 

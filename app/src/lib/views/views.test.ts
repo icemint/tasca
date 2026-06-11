@@ -285,6 +285,37 @@ describe('pm-assistant (W3-S1)', () => {
     expect((html.match(/data-kind="routing"/g) || []).length).toBe(1);
   });
 
+  it('renders a pending DECOMPOSITION suggestion with the child chips and Accept/Dismiss', async () => {
+    stubFetch({
+      '/api/proposals': {
+        body: {
+          enabled: true,
+          proposals: [
+            { id: 'pd', kind: 'decomposition', targetTaskId: 't1', targetVersion: 3, status: 'pending', version: 0,
+              createdAt: '2026-01-01T00:00:00Z', payload: { children: [{ title: 'schema migration' }, { title: 'recon engine' }], why: 'splits cleanly' } },
+          ],
+        },
+      },
+      '/api/tasks': { body: [] },
+    });
+    const html = htmlOf(await loadPmAssistant());
+    expect(html).toContain('Decomposition');
+    expect(html).toContain('Split into 2 subtasks');
+    expect(html).toContain('schema migration');
+    expect(html).toContain('recon engine');
+    expect(html).toContain('Suggestion · not applied');
+  });
+
+  it('the generate list offers triage + decompose on every open task', async () => {
+    stubFetch({
+      '/api/proposals': { body: { enabled: true, proposals: [] } },
+      '/api/tasks': { body: [{ id: 't10', externalStoryId: 'acme/api#10', platform: 'github', status: 'routable', tierEstimate: null, repoRef: 'acme/api', claimedBy: null, failureCount: 0 }] },
+    });
+    const html = htmlOf(await loadPmAssistant());
+    expect(html).toContain('data-kind="triage"');
+    expect(html).toContain('data-kind="decomposition"');
+  });
+
   it('renders a pending TRIAGE suggestion with the proposed tier and Accept/Dismiss', async () => {
     stubFetch({
       '/api/proposals': {

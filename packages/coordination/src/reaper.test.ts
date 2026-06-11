@@ -78,6 +78,11 @@ function fakeStore(over: Partial<CoordinationStore> = {}): { store: Coordination
     async setStatus(_orgId: string, taskId: string, status: string) {
       calls.setStatus.push([taskId, status]);
     },
+    // slice W3-S1c: finalizeDispatch resolves the status target (parent for a decomposition child).
+    // A normal task has no origin → status posts to its own story.
+    async getTaskOrigin() {
+      return null;
+    },
     ...over,
   } as unknown as CoordinationStore;
   return { store, calls };

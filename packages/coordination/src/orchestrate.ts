@@ -334,8 +334,11 @@ export async function orchestrateTaskAssigned(
   let provisionedWorktree: { path: string; branch: string } | undefined;
   try {
     // §6.5 — estimate tier (heuristics + one budgeted/cached classifier call),
-    // then persist it (inspectable).
-    const content = await deps.content.fetch(event);
+    // then persist it (inspectable). CONTENT PRECEDENCE (slice W3-S1c): a decomposition CHILD is a
+    // Tasca-internal task with NO platform story — it carries its own content. Use the stored content
+    // for a synthetic child; a NORMAL task (no stored content) fetches from its platform adapter.
+    const origin = await deps.store.getTaskOrigin(orgId, task.id);
+    const content: TaskInput = origin?.content ?? (await deps.content.fetch(event));
     const estimate = await estimateTier(
       content,
       deps.classifier ? { classifier: deps.classifier } : {}
@@ -850,6 +853,14 @@ export async function finalizeDispatch(
     }
   };
 
+  // STATUS-TO-PARENT (slice W3-S1c): a decomposition CHILD has no native platform story — its status
+  // posts to the PARENT story (resolved org-scoped via the FK). A normal task posts to its own story.
+  // This covers BOTH the in-process and the reaper (queue-mode) finalize paths, so a synthetic child
+  // can never post to a non-existent story of its own and silently drop the update.
+  const origin = await deps.store.getTaskOrigin(orgId, taskId);
+  const statusStoryId = origin?.parentExternalStoryId ?? event.externalStoryId;
+  const isChild = origin?.parentExternalStoryId != null;
+
   // setStatus is idempotent (in_review→in_review is rejected + swallowed), so it always
   // runs to reconcile a left-behind 'executing'. The post + audits are additive
   // (a second 'PR opened' comment hits the customer), so they're gated on first finalize.
@@ -860,10 +871,10 @@ export async function finalizeDispatch(
     await safe('status.post', () =>
       deps.status.postStatus({
         platform: event.platform,
-        externalStoryId: event.externalStoryId,
+        externalStoryId: statusStoryId,
         agentId,
         state: 'in_review',
-        comment: 'PR opened',
+        comment: isChild ? `Subtask ${event.externalStoryId}: PR opened` : 'PR opened',
         prUrl,
       })
     );

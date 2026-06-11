@@ -535,6 +535,84 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect((await store.getProposal(ORG, routing.id))!.status).toBe('pending');
       expect((await store.getTask(ORG, taskId))!.tierEstimate).toBeNull();
     });
+
+    // ── decomposition kind (W3-S1c) — accept routes ONLY through getOrCreateTask per child ──
+    const children = [{ title: 'schema migration', body: 'add tables' }, { title: 'recon engine', body: 'the core' }];
+    const decompPayload = { children, why: 'splits cleanly' };
+    const childCount = (parentId: string) =>
+      pool.query<{ c: number }>(`SELECT count(*)::int AS c FROM task WHERE parent_task_id = $1`, [parentId]).then((r) => r.rows[0]!.c);
+
+    it('acceptDecompositionProposal creates children with deterministic ids + stored content + parent link', async () => {
+      const { id: parentId, version } = await seedTask(); // parent story 'sc-prop'
+      const p = await store.createProposal(ORG, { kind: 'decomposition', targetTaskId: parentId, targetVersion: version, payload: decompPayload });
+      expect(await store.acceptDecompositionProposal(ORG, p.id, children)).toEqual({ ok: true });
+      expect(await childCount(parentId)).toBe(2);
+      // children are routable Tasca tasks with deterministic synthetic story ids
+      const sub0 = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-prop#sub-0', platform: 'shortcut' });
+      expect(sub0.status).toBe('routable');
+      // getTaskOrigin: the child carries its content + resolves the PARENT's story (status target)
+      const origin = await store.getTaskOrigin(ORG, sub0.id);
+      expect(origin!.content).toEqual({ title: 'schema migration', body: 'add tables' });
+      expect(origin!.parentTaskId).toBe(parentId);
+      expect(origin!.parentExternalStoryId).toBe('sc-prop');
+      // STRUCTURAL: the PARENT is untouched (no status/claim/tier/routing write)
+      const parent = await store.getTask(ORG, parentId);
+      expect(parent!.status).toBe('routable');
+      expect(parent!.tierEstimate).toBeNull();
+      // a NORMAL task has a null origin
+      expect((await store.getTaskOrigin(ORG, parentId))!.content).toBeNull();
+    });
+
+    it('DECOMPOSE-ONCE: a parent that already has children → conflict, no second split, existing content untouched', async () => {
+      const { id: parentId, version } = await seedTask();
+      // an already-decomposed parent (a child with its OWN content exists)
+      await store.getOrCreateTask(ORG, { externalStoryId: 'sc-prop#sub-0', platform: 'shortcut', content: { title: 'existing child', body: 'live' }, parentTaskId: parentId });
+      const p = await store.createProposal(ORG, { kind: 'decomposition', targetTaskId: parentId, targetVersion: version, payload: decompPayload });
+      // a SECOND, DIFFERENT decomposition must NOT silently shadow the first (the deterministic ids
+      // would collide and keep the first's content) — it's rejected.
+      expect(await store.acceptDecompositionProposal(ORG, p.id, children)).toEqual({ ok: false, reason: 'conflict' });
+      expect(await childCount(parentId)).toBe(1); // unchanged
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
+      // the live child's content was NOT overwritten by the rejected split
+      const existing = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-prop#sub-0', platform: 'shortcut' });
+      expect((await store.getTaskOrigin(ORG, existing.id))!.content).toEqual({ title: 'existing child', body: 'live' });
+    });
+
+    it('VERSION FENCE: decomposition accept after the parent moved → conflict, NO children, stays pending', async () => {
+      const { id: parentId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'decomposition', targetTaskId: parentId, targetVersion: version, payload: decompPayload });
+      await pool.query(`UPDATE task SET version = version + 1 WHERE id = $1`, [parentId]); // parent moves
+      expect(await store.acceptDecompositionProposal(ORG, p.id, children)).toEqual({ ok: false, reason: 'conflict' });
+      expect(await childCount(parentId)).toBe(0); // all-or-nothing — no orphan children
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
+    });
+
+    it('DONE GUARD: decomposition accept on a finished parent → conflict, no children', async () => {
+      const { id: parentId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'decomposition', targetTaskId: parentId, targetVersion: version, payload: decompPayload });
+      await pool.query(`UPDATE task SET status = 'done' WHERE id = $1`, [parentId]);
+      expect(await store.acceptDecompositionProposal(ORG, p.id, children)).toEqual({ ok: false, reason: 'conflict' });
+      expect(await childCount(parentId)).toBe(0);
+    });
+
+    it('DOUBLE-ACCEPT race (decomposition): exactly one ok, children created once', async () => {
+      const { id: parentId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'decomposition', targetTaskId: parentId, targetVersion: version, payload: decompPayload });
+      const [a, b] = await Promise.all([
+        store.acceptDecompositionProposal(ORG, p.id, children),
+        store.acceptDecompositionProposal(ORG, p.id, children),
+      ]);
+      expect([a, b].filter((r) => r.ok).length).toBe(1);
+      expect(await childCount(parentId)).toBe(2); // children created once (deterministic ids + the CAS)
+    });
+
+    it('CROSS-ORG: org_other cannot accept org_default\'s decomposition → not_found, no children', async () => {
+      const { id: parentId, version } = await seedTask();
+      const p = await store.createProposal(ORG, { kind: 'decomposition', targetTaskId: parentId, targetVersion: version, payload: decompPayload });
+      expect(await store.acceptDecompositionProposal('org_other', p.id, children)).toEqual({ ok: false, reason: 'not_found' });
+      expect(await childCount(parentId)).toBe(0);
+      expect((await store.getProposal(ORG, p.id))!.status).toBe('pending');
+    });
   });
 });
 

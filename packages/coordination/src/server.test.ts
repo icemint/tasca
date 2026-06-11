@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus, TierEstimate } from '@tasca/domain';
-import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome } from './store';
+import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin } from './store';
 import type { WebhookVerifier, RawWebhook, VerifiedWebhook, StatusReporter, Logger } from './ports';
 import type {
   AgentDirectory,
@@ -73,6 +73,7 @@ class CountingStore implements CoordinationStore {
     return task;
   }
   async getTask() { return null; }
+  async getTaskOrigin(): Promise<TaskOrigin | null> { return null; }
   async setTierEstimate(_org: string, _id: string, _e: TierEstimate) {}
   async setStatus(_org: string, _id: string, _s: TaskStatus) {}
   async recordFailureAndTransition(_org: string, _id: string, threshold: number) {
@@ -107,6 +108,7 @@ class CountingStore implements CoordinationStore {
   async dismissProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async acceptRoutingProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async acceptTriageProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async acceptDecompositionProposal(): Promise<ProposalWriteOutcome> { return { ok: false, reason: 'not_found' }; }
 }
 
 const noopExecution: ExecutionPort = {

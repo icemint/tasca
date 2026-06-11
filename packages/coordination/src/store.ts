@@ -134,6 +134,21 @@ export interface CreateTaskInput {
   externalStoryId: string;
   platform: 'shortcut' | 'github' | 'linear';
   repoRef?: string | null;
+  /** Decomposition child (slice W3-S1c): the child's own content (it has no platform story to
+   *  fetch). Absent/null for a normal task. */
+  content?: { title: string; body: string } | null;
+  /** Decomposition child: the parent task it was split from (status posts back there). */
+  parentTaskId?: string | null;
+}
+
+/** Where a task's content + status come from (slice W3-S1c). For a normal task both are null
+ *  (content fetched from the platform; status posts to its own story). For a decomposition child,
+ *  `content` is its stored content and `parentExternalStoryId` is the parent's platform story
+ *  (resolved via the FK) — the child routes from `content` and posts status to the parent. */
+export interface TaskOrigin {
+  content: { title: string; body: string } | null;
+  parentTaskId: string | null;
+  parentExternalStoryId: string | null;
 }
 
 export interface RecordWebhookResult {
@@ -189,6 +204,12 @@ export interface CoordinationStore {
   getOrCreateTask(orgId: string, input: CreateTaskInput): Promise<Task>;
 
   getTask(orgId: string, taskId: string): Promise<Task | null>;
+
+  /** A task's content/status origin (slice W3-S1c): stored content + the parent's platform story
+   *  for a decomposition child, both null for a normal task. Org-scoped; null if the task is absent.
+   *  Routing reads `content` (falls back to the platform fetch when null); status-back posts to
+   *  `parentExternalStoryId` when present (the child has no native story). */
+  getTaskOrigin(orgId: string, taskId: string): Promise<TaskOrigin | null>;
 
   /** Persist the inspectable tier estimate onto the task. */
   setTierEstimate(orgId: string, taskId: string, estimate: TierEstimate): Promise<void>;
@@ -338,6 +359,22 @@ export interface CoordinationStore {
    * At-most-once under a double-accept race (the proposal CAS serializes).
    */
   acceptTriageProposal(orgId: string, id: string, tier: Tier): Promise<ProposalWriteOutcome>;
+
+  /**
+   * Accept a DECOMPOSITION proposal: atomically (one tx) CAS the proposal pending→accepted AND
+   * create each child via getOrCreateTask (the ONLY binding write — no status/claim/routing write on
+   * the parent). Children get a DETERMINISTIC synthetic story id (parent story + index) so a re-run
+   * after a rolled-back tx re-creates the SAME children with NO duplicates (the (org,platform,
+   * external_story_id) unique dedups). Each child inherits the parent's org/platform/repo and carries
+   * its own content + a parent pointer. Version-fenced to the parent's target_version + parent-not-
+   * done; a parent that moved/finished → conflict and the whole tx rolls back (all-or-nothing — no
+   * partial child set, proposal stays pending). At-most-once under a double-accept race.
+   */
+  acceptDecompositionProposal(
+    orgId: string,
+    id: string,
+    children: Array<{ title: string; body: string }>
+  ): Promise<ProposalWriteOutcome>;
 
   // ── GitHub App installation (write-back installation resolution) ──────────────
 
@@ -540,20 +577,50 @@ export class PgCoordinationStore implements CoordinationStore {
   }
 
   async getOrCreateTask(orgId: string, input: CreateTaskInput): Promise<Task> {
-    // Get-or-create on (org_id, platform, external_story_id). The no-op DO UPDATE makes
-    // RETURNING fire on conflict too, so we always get the live row back — a new
-    // one on first delivery, the existing one (with its accumulated version /
-    // failure_count / status) on re-delivery. The conflict target is the org-prefixed
-    // unique created by ORG_CONTRACT_DDL, in lockstep with org_id in the column set.
-    const res = await this.db.query<TaskRow>(
-      `INSERT INTO task (id, org_id, external_story_id, platform, status, version, failure_count, repo_ref)
-       VALUES ($1,$2,$3,$4,'routable',0,0,$5)
+    return this.getOrCreateTaskOn(this.db, orgId, input);
+  }
+
+  /** Get-or-create on (org_id, platform, external_story_id), against a given Queryable so it can run
+   *  inside the accept-decomposition tx (children share the parent's tx) AND standalone (webhook
+   *  ingest). The no-op DO UPDATE makes RETURNING fire on conflict too, so we always get the live row
+   *  back — a new one on first create, the EXISTING one on a re-create (a decomposition re-accept with
+   *  the SAME deterministic child story id → the existing child, NO duplicate, NO content overwrite).
+   *  content/parent_task_id are set only on first insert (decomposition children); a normal task
+   *  passes neither. The conflict target is the org-prefixed unique (ORG_CONTRACT_DDL). */
+  private async getOrCreateTaskOn(db: Queryable, orgId: string, input: CreateTaskInput): Promise<Task> {
+    const res = await db.query<TaskRow>(
+      `INSERT INTO task (id, org_id, external_story_id, platform, status, version, failure_count, repo_ref, content, parent_task_id)
+       VALUES ($1,$2,$3,$4,'routable',0,0,$5,$6::jsonb,$7)
        ON CONFLICT (org_id, platform, external_story_id)
          DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
        RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id`,
-      [randomUUID(), orgId, input.externalStoryId, input.platform, input.repoRef ?? null]
+      [
+        randomUUID(),
+        orgId,
+        input.externalStoryId,
+        input.platform,
+        input.repoRef ?? null,
+        input.content ? JSON.stringify(input.content) : null,
+        input.parentTaskId ?? null,
+      ]
     );
     return mapTask(res.rows[0]!);
+  }
+
+  async getTaskOrigin(orgId: string, taskId: string): Promise<TaskOrigin | null> {
+    // One org-scoped read: the task's stored content + its parent's platform story (the status
+    // target). The JOIN is org-scoped on both sides — a child can only resolve a parent in its OWN
+    // org (parent_task_id FKs the same org-scoped task table), so no cross-org parent leak.
+    const res = await this.db.query<{ content: { title: string; body: string } | null; parent_task_id: string | null; parent_story: string | null }>(
+      `SELECT t.content, t.parent_task_id, p.external_story_id AS parent_story
+         FROM task t
+         LEFT JOIN task p ON p.id = t.parent_task_id AND p.org_id = t.org_id
+        WHERE t.org_id = $1 AND t.id = $2`,
+      [orgId, taskId]
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return { content: row.content, parentTaskId: row.parent_task_id, parentExternalStoryId: row.parent_story };
   }
 
   async getTask(orgId: string, taskId: string): Promise<Task | null> {
@@ -893,6 +960,73 @@ export class PgCoordinationStore implements CoordinationStore {
       const outcome = await this.tierEstimateWrite(db, orgId, targetTaskId, tier, targetVersion);
       if (!outcome.ok) {
         throw new RollbackProposal({ ok: false, reason: outcome.reason === 'not_found' ? 'not_found' : 'conflict' });
+      }
+      return { ok: true };
+    }).catch((err) => {
+      if (err instanceof RollbackProposal) return err.outcome;
+      throw err;
+    });
+  }
+
+  async acceptDecompositionProposal(
+    orgId: string,
+    id: string,
+    children: Array<{ title: string; body: string }>
+  ): Promise<ProposalWriteOutcome> {
+    return this.withTaskTx<ProposalWriteOutcome>(async (db) => {
+      // 1) CAS the proposal pending→accepted (org + kind='decomposition'). At-most-once.
+      const claimed = await db.query<{ target_task_id: string | null; target_version: number | null }>(
+        `UPDATE proposal SET status = 'accepted', version = version + 1, updated_at = now()
+          WHERE org_id = $1 AND id = $2 AND status = 'pending' AND kind = 'decomposition'
+        RETURNING target_task_id, target_version`,
+        [orgId, id]
+      );
+      if (claimed.rowCount !== 1) return this.proposalMissOutcome(orgId, id, db);
+      const parentTaskId = claimed.rows[0]!.target_task_id;
+      const targetVersion = claimed.rows[0]!.target_version;
+      if (!parentTaskId) throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      // target_version is an integer column; guard it before interpolation so a corrupt value can
+      // never reach the SQL as `version = NaN` (which would match nothing — fail closed — but
+      // silently). An explicit conflict makes the invariant legible.
+      if (targetVersion !== null && !Number.isInteger(targetVersion)) {
+        throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      }
+      // 2) Read the PARENT in the same tx, version-fenced + not-done. A parent that moved/finished
+      //    since the proposal was generated → conflict, roll back (all-or-nothing — no orphan children).
+      const fence = targetVersion === null ? '' : ` AND version = ${targetVersion}`;
+      const parent = await db.query<{ external_story_id: string; platform: string; repo_ref: string | null }>(
+        `SELECT external_story_id, platform, repo_ref FROM task
+          WHERE org_id = $1 AND id = $2 AND status <> 'done'${fence}`,
+        [orgId, parentTaskId]
+      );
+      if (parent.rowCount !== 1) {
+        const exists = await db.query(`SELECT 1 FROM task WHERE org_id = $1 AND id = $2`, [orgId, parentTaskId]);
+        throw new RollbackProposal({ ok: false, reason: exists.rowCount ? 'conflict' : 'not_found' });
+      }
+      // DECOMPOSE-ONCE: a parent is split at most once. The child story ids are deterministic
+      // (`parent#sub-N`), so a SECOND (different) decomposition of the same parent would collide on
+      // those ids and silently keep the FIRST decomposition's content (ON CONFLICT does not overwrite
+      // a child — a child may already be in flight). Reject instead, so a stale split can never
+      // shadow a live one. (A re-accept of the SAME proposal is already blocked by the CAS above; a
+      // rolled-back tx leaves no children, so a genuine retry still proceeds cleanly.)
+      const already = await db.query(
+        `SELECT 1 FROM task WHERE org_id = $1 AND parent_task_id = $2 LIMIT 1`,
+        [orgId, parentTaskId]
+      );
+      if (already.rowCount) throw new RollbackProposal({ ok: false, reason: 'conflict' });
+      const p = parent.rows[0]!;
+      // 3) The binding write: create each child via getOrCreateTask. Children inherit the parent's
+      //    org/platform/repo and carry their own content + a parent pointer. NOTHING is written to the
+      //    parent (status/claim/routing untouched) — the parent keeps its lifecycle; the children are
+      //    new routable tasks. The deterministic id + the decompose-once guard make this idempotent.
+      for (let i = 0; i < children.length; i++) {
+        await this.getOrCreateTaskOn(db, orgId, {
+          externalStoryId: `${p.external_story_id}#sub-${i}`,
+          platform: p.platform as CreateTaskInput['platform'],
+          repoRef: p.repo_ref,
+          content: { title: children[i]!.title, body: children[i]!.body },
+          parentTaskId,
+        });
       }
       return { ok: true };
     }).catch((err) => {

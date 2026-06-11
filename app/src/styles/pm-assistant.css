@@ -48,6 +48,7 @@
 .pms-title b { color: var(--fg); }
 .pms-target { margin-left: 6px; font-size: var(--fs-xs); color: var(--fg-3); }
 .pms-body { font-size: var(--fs-sm); color: var(--fg-3); line-height: 1.6; }
+.pm-chip { display: inline-block; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-2); padding: 3px 9px; border-radius: var(--radius-tag); border: 1px solid var(--line-2); background: var(--surface-2); margin: 2px 2px 0 0; }
 .pms-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
 .pms-meta { font-size: var(--fs-2xs); }
 .pms-act { display: flex; align-items: center; gap: 8px; margin-left: auto; }

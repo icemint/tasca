@@ -205,8 +205,9 @@ export function createCoordination(
       directory,
       content: input.content,
       // routing = deterministic match; triage = the tier engine, LLM-backed when a classifier is
-      // injected (same optional classifier the routing pipeline uses), else heuristic-only. Both fail-soft.
-      proposer: new DefaultPmProposer(input.classifier),
+      // injected (same optional classifier the routing pipeline uses), else heuristic-only; decomposition
+      // = an injected LLM decomposer (none wired yet → no decomposition suggestion). All fail-soft.
+      proposer: new DefaultPmProposer(input.classifier ? { classifier: input.classifier } : {}),
       enabled: input.pmAssistantEnabled === true,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),

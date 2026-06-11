@@ -17,10 +17,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Task } from '@tasca/domain';
 import type { AdapterEvent } from '@tasca/contracts';
-import { RoutingProposalSchema, TriageProposalSchema } from '@tasca/contracts';
+import { RoutingProposalSchema, TriageProposalSchema, DecompositionProposalSchema } from '@tasca/contracts';
 import {
   proposeRoutingFailSoft,
   proposeTriageFailSoft,
+  proposeDecompositionFailSoft,
   type PmProposerPort,
   type RoutingCandidate,
 } from '@tasca/routing';
@@ -42,6 +43,7 @@ export interface ProposalApiDeps {
     | 'dismissProposal'
     | 'acceptRoutingProposal'
     | 'acceptTriageProposal'
+    | 'acceptDecompositionProposal'
     | 'getTask'
   >;
   /** Resolves a session → its org (membership = tenant boundary, fail-closed) AND role (5b). */
@@ -202,8 +204,8 @@ async function handleGenerate(
     return;
   }
   const kind = body.kind === undefined ? 'routing' : body.kind;
-  if (kind !== 'routing' && kind !== 'triage') {
-    sendJson(res, 400, { error: "kind must be 'routing' or 'triage'" });
+  if (kind !== 'routing' && kind !== 'triage' && kind !== 'decomposition') {
+    sendJson(res, 400, { error: "kind must be 'routing', 'triage', or 'decomposition'" });
     return;
   }
   const task = await deps.store.getTask(orgId, taskId);
@@ -216,14 +218,23 @@ async function handleGenerate(
     return;
   }
 
-  if (kind === 'triage') {
-    const payload = await generateTriage(deps, task);
+  if (kind === 'triage' || kind === 'decomposition') {
+    // Both need the task's real content (the LLM reads title/body). A content-fetch failure → null.
+    const content = await fetchContent(deps, task);
+    if (!content) {
+      sendJson(res, 200, { proposal: null });
+      return;
+    }
+    const payload =
+      kind === 'triage'
+        ? await proposeTriageFailSoft(deps.proposer, { task: content })
+        : await proposeDecompositionFailSoft(deps.proposer, { task: content });
     if (!payload) {
       sendJson(res, 200, { proposal: null });
       return;
     }
     const proposal = await deps.store.createProposal(orgId, {
-      kind: 'triage',
+      kind,
       targetTaskId: task.id,
       targetVersion: task.version,
       payload,
@@ -256,10 +267,14 @@ async function handleGenerate(
   sendJson(res, 200, { proposal });
 }
 
-/** Triage generation: fetch the task's real content, run the (fail-soft) tier-engine proposer. A
- *  content-fetch failure or an absent content source → no proposal (never throws, never writes). */
-async function generateTriage(deps: ProposalApiDeps, task: Task) {
-  if (!deps.content || !deps.proposer) return null;
+/** Fetch a task's real content for the LLM-backed kinds (triage/decomposition). Returns the content
+ *  as a proposer input, or null on a fetch failure / absent content source (fail-soft — no proposal,
+ *  never throws, never writes). */
+async function fetchContent(
+  deps: ProposalApiDeps,
+  task: Task
+): Promise<{ title: string; body: string; labels?: string[] } | null> {
+  if (!deps.content) return null;
   const event: AdapterEvent = {
     type: 'task.assigned',
     platform: task.platform,
@@ -267,15 +282,12 @@ async function generateTriage(deps: ProposalApiDeps, task: Task) {
     agentExternalId: '',
     ...(task.repoRef ? { repoHint: task.repoRef } : {}),
   };
-  let content: { title: string; body: string; labels?: string[] };
   try {
-    content = await deps.content.fetch(event);
+    const c = await deps.content.fetch(event);
+    return { title: c.title, body: c.body, ...(c.labels ? { labels: c.labels } : {}) };
   } catch {
-    return null; // content fetch failed → fail-soft, no suggestion
+    return null;
   }
-  return proposeTriageFailSoft(deps.proposer, {
-    task: { title: content.title, body: content.body, ...(content.labels ? { labels: content.labels } : {}) },
-  });
 }
 
 /** Accept a routing proposal: resolve its agent name to a HIRED id (fail closed if unhired), then
@@ -321,7 +333,20 @@ async function handleAccept(
     return;
   }
 
-  // decomposition/standup accepts land in 1c/1d.
+  if (proposal.kind === 'decomposition') {
+    const parsed = DecompositionProposalSchema.safeParse(proposal.payload);
+    if (!parsed.success) {
+      sendJson(res, 409, { error: 'proposal payload is malformed', code: 'conflict' });
+      return;
+    }
+    // The ONLY binding write a decomposition accept reaches is acceptDecompositionProposal →
+    // getOrCreateTask per child (deterministic synthetic story id, parent's org/platform/repo
+    // inherited). No status/claim/routing write on the parent.
+    sendProposalOutcome(res, await deps.store.acceptDecompositionProposal(orgId, id, parsed.data.children));
+    return;
+  }
+
+  // standup accepts land in 1d (standup is read-only — it will have no accept).
   sendJson(res, 400, { error: 'this proposal kind cannot be accepted yet', code: 'unsupported_kind' });
 }
 
