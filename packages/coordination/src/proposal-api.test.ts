@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Task, TierEstimate } from '@tasca/domain';
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
+import { currentUsageContext } from './usage-context';
 import type { Proposal, CreateProposalInput, ProposalWriteOutcome } from './store';
 import type { OrgRole } from './membership';
 import type { HiredAgent } from './roster';
@@ -525,6 +526,32 @@ describe('decomposition kind (W3-S1c)', () => {
     const r = await run(deps(f), fakeReq('POST', '/api/proposals/pd/accept', { headers: csrf() }));
     expect(r.statusCode).toBe(409);
     expect(f.store.decomposed).toEqual([]);
+  });
+});
+
+describe('usage context (W3-S4a) — the proposer call is attributed to the task/source', () => {
+  function capturingProposer(captured: { ctx?: ReturnType<typeof currentUsageContext> }) {
+    return {
+      async proposeRouting() { return null; },
+      async proposeTriage() { captured.ctx = currentUsageContext(); return { tier: 'hard' as const, why: 'x', confidence: 0.8 }; },
+      async proposeDecomposition() { captured.ctx = currentUsageContext(); return { children: [{ title: 'a', body: '' }], why: 'x' }; },
+    };
+  }
+
+  it('triage generation runs the proposer inside the usage context (source=triage)', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const captured: { ctx?: ReturnType<typeof currentUsageContext> } = {};
+    await run(deps(f, { proposer: capturingProposer(captured) }), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'triage' }) }));
+    expect(captured.ctx).toEqual({ orgId: 'org_default', taskId: 't1', source: 'triage' });
+  });
+
+  it('decomposition generation runs the proposer inside the usage context (source=decomposition)', async () => {
+    const f = newFakes();
+    f.store.tasks.set('t1', fakeTask());
+    const captured: { ctx?: ReturnType<typeof currentUsageContext> } = {};
+    await run(deps(f, { proposer: capturingProposer(captured) }), fakeReq('POST', '/api/proposals/generate', { headers: csrf(), body: JSON.stringify({ taskId: 't1', kind: 'decomposition' }) }));
+    expect(captured.ctx).toEqual({ orgId: 'org_default', taskId: 't1', source: 'decomposition' });
   });
 });
 

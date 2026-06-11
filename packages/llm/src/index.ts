@@ -13,6 +13,23 @@
 import type { Tier, TierFeatures, LlmClassifierPort } from '@tasca/domain';
 import type { DecomposerPort, DecompositionProposal } from '@tasca/contracts';
 
+/** The per-call usage a model returned (input/output tokens), plus the response id used as the
+ *  idempotency key so a retried report can't double-count. */
+export interface CallUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** The Anthropic response id — a stable idempotency key for the usage record. */
+  idempotencyKey: string;
+}
+
+/** Where the client REPORTS per-call usage. The recorder (coordination) supplies the org/task/source
+ *  from its own per-request context — the client knows none of that, it just reports what the call
+ *  cost. Fire-and-forget (void): metering must NEVER block or fail an LLM call. */
+export interface UsageSink {
+  record(usage: CallUsage): void;
+}
+
 /** A fetch-like transport (injectable for tests; defaults to global fetch). */
 export type FetchLike = (
   url: string,
@@ -46,7 +63,7 @@ export class AnthropicChat {
     this.doFetch = cfg.fetch ?? ((url, init) => globalThis.fetch(url, init as RequestInit));
   }
 
-  async complete(input: { system?: string; prompt: string; maxTokens: number }): Promise<string> {
+  async complete(input: { system?: string; prompt: string; maxTokens: number }): Promise<CompletionResult> {
     const body = JSON.stringify({
       model: this.cfg.model,
       max_tokens: input.maxTokens,
@@ -81,11 +98,30 @@ export class AnthropicChat {
     }
     if (!res.ok) throw new Error(`anthropic ${res.status}`);
     const raw = await res.text();
-    const parsed = JSON.parse(raw) as { content?: Array<{ type?: string; text?: string }> };
+    const parsed = JSON.parse(raw) as {
+      id?: string;
+      content?: Array<{ type?: string; text?: string }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+    };
     const text = parsed.content?.find((b) => b.type === 'text')?.text;
     if (typeof text !== 'string' || text.length === 0) throw new Error('anthropic: no text content');
-    return text;
+    // Surface the usage + id for metering. A response always carries them; if absent, usage is null
+    // and the caller simply doesn't meter that call (the call itself still succeeds). The response `id`
+    // is the metering idempotency key: this client does NOT retry, and orchestration runs each call
+    // once (webhook-idempotent / on-demand), so every distinct LLM call has a distinct id — a concurrent
+    // re-report of the SAME response dedups (ON CONFLICT), and two different calls never collide on an id.
+    const usage =
+      parsed.id && typeof parsed.usage?.input_tokens === 'number' && typeof parsed.usage?.output_tokens === 'number'
+        ? { model: this.cfg.model, inputTokens: parsed.usage.input_tokens, outputTokens: parsed.usage.output_tokens, idempotencyKey: parsed.id }
+        : null;
+    return { text, usage };
   }
+}
+
+export interface CompletionResult {
+  text: string;
+  /** Per-call usage for metering, or null if the response didn't carry it (the call still succeeded). */
+  usage: CallUsage | null;
 }
 
 /** Extract the first JSON object from model text — models wrap JSON in prose / ```json fences.
@@ -107,14 +143,20 @@ const CLASSIFIER_SYSTEM =
  *  (ClassifierOutputSchema) and falls back to the heuristic prior on a throw or malformed result, so a
  *  bad tier here is safe — it degrades the routing decision to heuristics, never breaks it. */
 export class AnthropicClassifier implements LlmClassifierPort {
-  constructor(private readonly chat: AnthropicChat) {}
+  constructor(
+    private readonly chat: AnthropicChat,
+    /** Optional usage sink — reports this call's tokens for per-task metering. Absent → no metering
+     *  (e.g. the dev smoke harness). Reporting is fire-and-forget; it never affects the classify result. */
+    private readonly sink?: UsageSink
+  ) {}
 
   async classify(input: { title: string; body: string; features: TierFeatures }): Promise<{ tier: Tier; confidence: number }> {
-    const text = await this.chat.complete({
+    const { text, usage } = await this.chat.complete({
       system: CLASSIFIER_SYSTEM,
       prompt: `Title: ${input.title}\n\nBody: ${input.body}\n\nHeuristic signals: ${JSON.stringify(input.features)}`,
       maxTokens: 64,
     });
+    if (usage) this.sink?.record(usage); // meter BEFORE parsing — a parse failure must not lose the spend
     const obj = extractJson(text) as { tier?: unknown; confidence?: unknown };
     // Returned loosely; estimateTier's ClassifierOutputSchema.safeParse is the trust boundary.
     return { tier: obj.tier as Tier, confidence: Number(obj.confidence) };
@@ -129,14 +171,18 @@ const DECOMPOSER_SYSTEM =
  *  Zod-validates the output (DecompositionProposalSchema) and returns null on a throw or malformed
  *  result, so a bad split here is safe — it yields no suggestion, never a bad task creation. */
 export class AnthropicDecomposer implements DecomposerPort {
-  constructor(private readonly chat: AnthropicChat) {}
+  constructor(
+    private readonly chat: AnthropicChat,
+    private readonly sink?: UsageSink
+  ) {}
 
   async decompose(input: { title: string; body: string }): Promise<DecompositionProposal | null> {
-    const text = await this.chat.complete({
+    const { text, usage } = await this.chat.complete({
       system: DECOMPOSER_SYSTEM,
       prompt: `Title: ${input.title}\n\nBody: ${input.body}`,
       maxTokens: 1024,
     });
+    if (usage) this.sink?.record(usage);
     return extractJson(text) as DecompositionProposal;
   }
 }

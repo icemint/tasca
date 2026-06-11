@@ -36,6 +36,7 @@ import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
 import { serveAnthropicProxy, type AnthropicProxyHandle } from '@tasca/anthropic-proxy';
 import { AnthropicChat, AnthropicClassifier, AnthropicDecomposer } from '@tasca/llm';
+import { makeUsageSink } from './usage-context';
 import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent } from '@tasca/contracts';
@@ -374,9 +375,15 @@ async function main(): Promise<void> {
   if (process.env.TASCA_LLM === 'on' && anthropicKey) {
     const model = process.env.TASCA_LLM_MODEL ?? 'claude-haiku-4-5-20251001';
     const chat = new AnthropicChat({ apiKey: anthropicKey, model });
-    llmClassifier = new AnthropicClassifier(chat);
-    llmDecomposer = new AnthropicDecomposer(chat);
-    logger.info?.('coordination LLM client enabled', { model });
+    // Metering (slice W3-S4a): the sink attributes each LLM call to the ambient per-request context
+    // (org/task/source) and records it (org-scoped, CAS-idempotent). Fire-and-forget — never blocks
+    // the LLM call. Wiring it to BOTH ports HERE means every PRODUCTION coordination LLM call meters
+    // (the sink is optional on the ports — the dev smoke harness + tests construct them without it;
+    // production is the only caller that wires it, so production has no unmetered coordination call).
+    const usageSink = makeUsageSink(new PgCoordinationStore(pool), logger);
+    llmClassifier = new AnthropicClassifier(chat, usageSink);
+    llmDecomposer = new AnthropicDecomposer(chat, usageSink);
+    logger.info?.('coordination LLM client enabled (metered)', { model });
   }
 
   // Human OAuth login (GitHub + Google). Feature flag OFF by default: only when

@@ -97,6 +97,8 @@ class CountingStore implements CoordinationStore {
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
   async getTaskStatusCounts() { return {}; }
+  async recordUsage() {}
+  async getUsage() { return { inputTokens: 0, outputTokens: 0, bySource: {} }; }
   async getRoutingDecisionForTask() { return null; }
   async listRoutingDecisions() { return []; }
   async listPullRequestsForTask(_orgId: string, _taskId: string) { return []; }
