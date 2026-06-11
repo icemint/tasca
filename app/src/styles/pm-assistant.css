@@ -62,3 +62,12 @@
 .pm-srow-id { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--fg-2); }
 .pm-srow-act { display: flex; align-items: center; gap: 8px; }
 .pm-srow .ictl svg { width: 14px; height: 14px; }
+
+/* read-only standup report */
+.pm-standup-out:not(:empty) { margin-top: 12px; }
+.pm-standup-card { border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); padding: 16px 18px; }
+.pm-stats { display: flex; gap: 22px; margin: 12px 0 8px; flex-wrap: wrap; }
+.pm-stat { display: flex; flex-direction: column; gap: 2px; }
+.pm-stat-n { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 600; color: var(--fg); line-height: 1; }
+.pm-stat-l { font-size: var(--fs-2xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-4); }
+.pm-stat.warn .pm-stat-n { color: var(--amber); }

@@ -447,6 +447,10 @@ export interface CoordinationStore {
   /** List task summaries, newest first; optionally filtered by status, capped by limit. */
   listTasks(orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]>;
 
+  /** Aggregate count of the org's tasks by status (slice W3-S1d) — the standup's data source. Counts
+   *  EVERY task (no pagination/cap, so a large org is never under-counted). Org-scoped. */
+  getTaskStatusCounts(orgId: string): Promise<Record<string, number>>;
+
   /** The most recent routing decision for a task, or null if none recorded yet. */
   getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null>;
 
@@ -1284,6 +1288,19 @@ export class PgCoordinationStore implements CoordinationStore {
       params
     );
     return res.rows.map(mapTaskSummary);
+  }
+
+  async getTaskStatusCounts(orgId: string): Promise<Record<string, number>> {
+    // Aggregate count of the org's tasks by status — the standup's data source (slice W3-S1d). An
+    // aggregate, NOT a paginated list: it counts EVERY task in the org (no LIMIT, so a large org is
+    // never silently under-counted), and is cheaper than fetching the rows. Org-scoped.
+    const res = await this.db.query<{ status: string; n: number }>(
+      `SELECT status, count(*)::int AS n FROM task WHERE org_id = $1 GROUP BY status`,
+      [orgId]
+    );
+    const out: Record<string, number> = {};
+    for (const row of res.rows) out[row.status] = row.n;
+    return out;
   }
 
   async getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null> {

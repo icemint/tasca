@@ -20,6 +20,7 @@ import type {
   ConnectionsResponse,
   ProposalsResponse,
   ProposalSummary,
+  StandupSummary,
   SessionResponse,
   TaskDetail,
   TaskSummary,
@@ -243,6 +244,9 @@ export const getProposals = () => get<ProposalsResponse>('/api/proposals');
  *  triage (the tier engine). 200 with `{proposal}` (possibly null when there's no suggestion). */
 export const generateProposal = (taskId: string, kind: 'routing' | 'triage' | 'decomposition' = 'routing') =>
   post<{ proposal: ProposalSummary | null }>(`/api/proposals/generate`, { taskId, kind });
+/** Generate a READ-ONLY standup (org-wide; nothing persisted, no accept). */
+export const generateStandup = () =>
+  post<{ standup: StandupSummary }>(`/api/proposals/generate`, { kind: 'standup' });
 /** Accept a proposal — routes through the binding method (re-route to the proposed agent). */
 export const acceptProposal = (id: string) =>
   post<{ ok: true } | { error: string; code?: string }>(`/api/proposals/${encodeURIComponent(id)}/accept`, {});

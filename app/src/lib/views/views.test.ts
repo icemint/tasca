@@ -306,6 +306,17 @@ describe('pm-assistant (W3-S1)', () => {
     expect(html).toContain('Suggestion · not applied');
   });
 
+  it('offers a READ-ONLY standup generator (no accept) in the on-state', async () => {
+    stubFetch({
+      '/api/proposals': { body: { enabled: true, proposals: [] } },
+      '/api/tasks': { body: [] },
+    });
+    const html = htmlOf(await loadPmAssistant());
+    expect(html).toContain('Daily standup · read-only');
+    expect(html).toContain('data-action="standup"');
+    expect(html).toContain('Generate standup');
+  });
+
   it('the generate list offers triage + decompose on every open task', async () => {
     stubFetch({
       '/api/proposals': { body: { enabled: true, proposals: [] } },

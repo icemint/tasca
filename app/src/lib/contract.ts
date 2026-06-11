@@ -163,3 +163,12 @@ export interface ProposalsResponse {
   /** The PM-assistant feature flag — drives the off/on view state. */
   enabled: boolean;
 }
+
+/** A read-only standup snapshot (W3-S1d) — org task-state counts; never persisted, no accept. */
+export interface StandupSummary {
+  shipped: number;
+  inFlight: number;
+  needsYou: number;
+  queued: number;
+  total: number;
+}
