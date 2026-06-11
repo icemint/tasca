@@ -514,9 +514,14 @@ async function main(): Promise<void> {
       agents: agentIds.length,
       shortcutBindings: registeredShortcutIds.size,
       githubBindings: githubBindingRows.rows.length,
-      github: ghVerifier ? 'verifying' : 'disabled (no secret)',
+      // Per-route webhook status — named by ROUTE so neither can be misread as "all webhooks".
+      // Each reflects that route's REAL gate: the github route 404s without GITHUB_WEBHOOK_SECRET
+      // (ghVerifier undefined → server maps the path to 404); the shortcut route 401-rejects
+      // without SHORTCUT_WEBHOOK_SECRET (rejectAllVerifier). They are INDEPENDENT — one verifying
+      // while the other is unconfigured is normal, not a fault.
+      githubWebhook: ghVerifier ? 'verifying' : 'disabled (no GITHUB_WEBHOOK_SECRET)',
+      shortcutWebhook: webhookSecret ? 'verifying' : 'rejecting (no SHORTCUT_WEBHOOK_SECRET)',
       githubWriteback: githubWritebackEnabled ? 'enabled' : 'disabled',
-      webhooks: webhookSecret ? 'verifying' : 'rejecting (no secret)',
       auth: authHandler ? 'enabled' : 'disabled',
       dispatch: coordination.reaper ? 'queue (reaper on)' : 'in-process',
     });
