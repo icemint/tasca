@@ -92,6 +92,25 @@ export function redirectToLogin(): void {
   if (typeof location !== 'undefined') location.assign('/');
 }
 
+/** The app home a logged-in user lands on (mirrors the worker's APP_HOME + AppShell's home link). */
+export const APP_HOME = '/roster';
+
+/**
+ * Inverse of the island session gate: on the LOGIN page (`/`), if a real session already exists, go
+ * straight into the app. Without this, a user the worker just authenticated (its success callback 302s
+ * into the app, but a logged-in user landing on `/` directly otherwise never asks /api/auth/me) would
+ * see the sign-in screen. Uses location.replace so the login page is not left in history. Returns true
+ * if it redirected.
+ */
+export async function redirectIfAuthenticated(home: string = APP_HOME): Promise<boolean> {
+  const session = await getSession();
+  if (session.kind === 'ok' && session.data.authenticated === true) {
+    if (typeof location !== 'undefined') location.replace(home);
+    return true;
+  }
+  return false;
+}
+
 // ── read endpoints ──────────────────────────────────────────────────────────
 
 export const getAgents = () => get<Agent[]>('/api/agents');

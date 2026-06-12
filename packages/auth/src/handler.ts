@@ -25,6 +25,10 @@ import { OAUTH_PROVIDERS, type MeResponse, type Provider } from './contract';
 export const SESSION_COOKIE = 'tasca_session';
 /** The short-lived OAuth-state cookie name (cleared at callback). */
 export const OAUTH_COOKIE = 'tasca_oauth';
+/** Where a SUCCESSFUL login lands — the app home, NOT `/` (which is the login page). Redirecting a
+ *  freshly-authenticated user back to `/` made the SPA re-render sign-in (it has no "already logged
+ *  in?" check), so the user looped. Send them into the app instead. Matches AppShell's home link. */
+export const APP_HOME = '/roster';
 
 export interface AuthHandlerDeps extends FlowDeps {
   /**
@@ -234,7 +238,7 @@ async function handleCallback(
     return;
   }
 
-  redirectTo(res, '/', [
+  redirectTo(res, APP_HOME, [
     clearOauth,
     sessionCookie(result.sessionToken, secure, SESSION_TTL_SEC),
   ]);

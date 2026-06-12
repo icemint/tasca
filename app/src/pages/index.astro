@@ -53,6 +53,13 @@ import { MARK, GITHUB, GOOGLE } from '../lib/icons';
   </div>
 
   <script>
+    // If the visitor already has a valid session (the worker's success callback lands them in the app,
+    // but a logged-in user re-opening `/` would otherwise see sign-in), go straight into the app.
+    import { redirectIfAuthenticated } from '../lib/api';
+    void redirectIfAuthenticated();
+  </script>
+
+  <script>
     // Surface an OAuth failure passed back as ?error=… from the worker callback.
     (function () {
       const messages: Record<string, string> = {
