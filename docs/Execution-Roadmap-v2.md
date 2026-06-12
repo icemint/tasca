@@ -33,6 +33,7 @@ The work to make an org self-sufficient (identity/roles → keys → agents → 
 | **D4** | **Org identity** = name + slug + path-based vanity URL. | `name` (display, editable) · `slug` (URL-safe, **derived** from name, **unique** org-wide) · vanity `app.tasca.dev/o/<slug>` via **path routing, NOT subdomain**. Slug collisions resolved deterministically (slugify + numeric suffix on conflict). |
 | **D5** | **Three roles** (capability matrix below). | First registrant = **owner-admin**. **Multiple owner-admins** allowed; any can delete the org or promote others to owner-admin. |
 | **D6** | **Agent creation scope** = name + vendor/model + tier/capability. | **No** system-prompt / persona authoring yet. The chosen model is **pinned at spawn** (config == runtime — folds in #3). Creatable by **User and above** (agents are work). |
+| **D7** | **Auth = OAuth-only** (GitHub/Google). **No** email/password, **no** magic-link. | Audience is developers (GitHub login is near-universal). Invites bridge the email↔OAuth-identity gap via a **signed single-use token** (possession of the link = authorization), **not** email matching — invited email and OAuth email need not match. Leave room for a future magic-link provider (non-dev members) but **do not build it now**. |
 
 **Role capability matrix (D5):**
 
@@ -139,17 +140,40 @@ The disabled **"Add agent"** (left gated in W4-S3) becomes real: orgs **build th
 
 ---
 
-### 3.5-D — Member invites  ·  *parallelizable*
+### 3.5-D — Member invites (signed-token + OAuth)  ·  *parallelizable*
 
-Invite a human teammate **by email** → joins the org with a **role**. **Owner-admin / admin only.**
+Invite a human teammate **by email** → they join the org with a **role**, authenticating via **OAuth only** (GitHub/Google) per D7. The invite bridges the email↔OAuth-identity gap with a **signed single-use token**, **not** email matching.
+
+**Invite flow (locked):**
+1. **Create** (owner-admin / admin): `{ email, org_id, role, signed single-use token, expiry ~7d }` → Tasca sends a **transactional email** with an accept link carrying the token.
+2. **Accept** — invitee clicks the link:
+   - **Logged in** → bind the **current session user** to `{org_id, role}` (no forced re-auth).
+   - **Not logged in** → OAuth (GitHub/Google, **any** account/email) → on callback, **consume the token** → bind the authenticated user to `{org_id, role}` via `org_membership`.
+3. **The token is the authorization** (possession of the link = proof of invited-inbox control); **OAuth is identity.** The invited email and the OAuth email **need not match** — a deliberate trust choice (the link is the secret).
+
+**Edge cases (must handle):**
+- Already-logged-in clicker → bind to the **session user**, no forced re-auth.
+- Expired / already-used token → **honest error + "request a new invite."**
+- Already-a-member → **idempotent no-op** (no duplicate membership, no role downgrade surprise).
+- **Single-use consumption + expiry enforced server-side** (the token row is consumed atomically, replay finds nothing — mirrors the `oauth_state` / `github_install_state` nonce pattern).
+- Cross-tenant invite acceptance → **fail-closed** (the token binds to its `org_id`; it can't be redirected to another org).
 
 **Definition of done:**
-- [ ] Invite by email (existing user → immediate membership; non-user → pending invite consumed on first login). Admin+ gated, server-enforced, CSRF.
+- [ ] Signed single-use invite token (`{email, org_id, role}`, ~7d expiry), issued by owner-admin/admin only (server-gated, CSRF); stored server-side, consumed atomically.
+- [ ] Accept endpoint: logged-in → bind session user; logged-out → OAuth → consume → bind. Email-need-not-match is intentional + documented.
+- [ ] All edge cases above implemented + tested (expired/used → honest error; already-member → idempotent; cross-tenant → fail-closed; single-use enforced server-side).
 - [ ] Role assignment at invite (owner-admin / admin / user); last-owner-admin protection.
-- [ ] Settings → "Members" UI: list + invite + role change + remove, admin-gated with honest disabled states.
-- [ ] Adversarial panel: org isolation (invite only into your own org; no self-escalation), fail-closed on a stale/forged invite token.
+- [ ] **Transactional email** wired (see the infra dependency below) — invite send + a basic template (accept link, org name, inviter).
+- [ ] Settings → "Members" UI: list + pending-invites + invite + role change + remove, admin-gated with honest disabled states.
+- [ ] Adversarial panel: token integrity (signature + single-use + expiry, no forge/replay), org isolation (invite only into your own org; no self-escalation; cross-tenant accept fail-closed), and the email-≠-OAuth trust choice is sound (link possession is the authorization).
 
-**Dependencies:** **3.5-B** (the role model). Independent of A/C/E.
+**NEW INFRA DEPENDENCY — transactional email (the one new external service):**
+- **Provider:** flag one of **Resend / Postmark / SES** (recommend at design time; Resend or Postmark for low-friction dev-grade transactional). This is the only new external service Wave 3.5 adds.
+- **Key custody:** the email API key is **server-level platform infra**, **NOT** org BYOK — invites are **Tasca's** email, not the org's. It lives in the server secret store (deploy env / KMS), distinct from `org_vendor_credential`.
+- **Sending domain:** invites come from a `tasca.dev` address (e.g. `invites@tasca.dev`); the sending domain needs **SPF + DKIM** (and DMARC) configured so invites land, not in spam. Infra/DNS task, surfaced for the maintainer.
+- **Failure handling:** an email-send failure must not strand the invite — the token is persisted first, so a failed send is retryable / the link is re-issuable; surface "couldn't send — retry" honestly.
+
+**Dependencies:** **3.5-B** (the role model) + the transactional-email provider. Independent of A/C/E.
 
 ---
 
@@ -252,3 +276,4 @@ Engine DoD = [#259 gap analysis Part F](PRD-Completion-Gap-Analysis.md). This ro
 3. **Role migration** — owner→owner-admin, admin→admin, member→user is the proposed mapping; confirm the **member→user gains agent + task CRUD** (a capability *increase* for existing members) is intended.
 4. **Per-org LLM client cache** eviction on rotation — recommend short TTL + explicit bust on key replace.
 5. **Vendor abstraction depth** — build 3.5-A vendor-parameterized (Anthropic now) so OpenAI is config, not a rewrite.
+6. **Transactional email provider + domain** (3.5-D) — pick **Resend / Postmark / SES**; confirm the sending address (`invites@tasca.dev`?) and that **SPF/DKIM/DMARC** on the sending domain are in scope (DNS task). The key is **server-level** infra, not org BYOK. Recommend Resend or Postmark for dev-grade transactional.
