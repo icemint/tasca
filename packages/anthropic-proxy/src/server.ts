@@ -265,6 +265,12 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
   return {
     ...(address ? { address } : {}),
     async close(): Promise<void> {
+      // Force-close in-flight connections (incl. lingering keep-alive sockets) FIRST so close() can't
+      // hang on a live stream — the same liveness guard the bridge applies via its teardowns set. Node's
+      // server.close() otherwise drains keep-alive connections and never force-closes them, so a single
+      // lingering loopback socket would wedge a per-task proxy's close() and pin its key-bearing closure
+      // (slice 3.5-A.2b: per-task proxies would then accumulate without bound). Node ≥18.2; we target 22.
+      server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       // Unix mode only: remove the socket file we created. TCP has nothing to unlink.
       if (useSocket) await unlink(options.socketPath!).catch(() => {});

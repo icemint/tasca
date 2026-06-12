@@ -637,4 +637,26 @@ describe('TCP-listen mode + baked usage context (in-process per-task proxy)', ()
     expect(records[0]!.orgId).toBe('org-REAL'); // the baked context, not the forged header
     expect(records[0]!.taskId).toBe('task-REAL');
   });
+
+  it('close() promptly tears down a lingering TCP connection (a per-task proxy can never wedge on a held keep-alive socket)', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: a\ndata: 1\n\n'); // …then hold the stream open forever
+    });
+    // Built directly (not via startTcpProxy) so we own the handle and close it here.
+    const handle = await serveAnthropicProxy({ tcpPort: 0, tcpHost: '127.0.0.1', apiKey: MASTER_KEY, upstreamOrigin: up.origin });
+    const port = handle.address!.port;
+
+    await new Promise<void>((resolve) => {
+      const r = httpRequest({ host: '127.0.0.1', port, path: '/v1/messages', method: 'POST' }, (res) => {
+        res.on('data', () => resolve()); // first chunk → a live, open loopback connection held by the agent
+      });
+      r.on('error', () => resolve());
+      r.end('{}');
+    });
+
+    const start = Date.now();
+    await handle.close();
+    expect(Date.now() - start).toBeLessThan(1000); // resolved promptly — closeAllConnections() tore the live socket down
+  });
 });

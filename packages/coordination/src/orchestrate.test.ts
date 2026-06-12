@@ -800,6 +800,36 @@ describe('orchestrateTaskAssigned — BYOK agent execution (3.5-A.2b)', () => {
     expect(store.noChangesCalls).toHaveLength(1); // retired via the no-breaker terminal path
   });
 
+  it('resolver THROWS (transient credential-store fault) → fail closed via the no-breaker terminal, NOT the breaker', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    let proxyStarted = false;
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store,
+        execution,
+        status: new FakeStatus(),
+        audit: new FakeAudit(),
+        agentVendorResolver: async () => {
+          throw new Error('pg read timeout'); // a transient vault/DB read fault, not a clean "no key"
+        },
+        startAgentProxy: async () => {
+          proxyStarted = true;
+          return { baseUrl: 'http://127.0.0.1:1', close: async () => {} };
+        },
+      })
+    );
+    expect(outcome.kind).toBe('key_unavailable'); // distinct from no_agent_key — the resolve itself failed
+    expect(proxyStarted).toBe(false); // never started a proxy
+    expect(execution.spawnCalls).toBe(0); // and never spawned the agent (fail-closed safety holds on a throw)
+    const task = store.tasks.get((outcome as { taskId: string }).taskId)!;
+    expect(task.status).toBe('needs_attention');
+    expect(task.lastError).toBe('credential service unavailable — retry when restored');
+    expect(store.noChangesCalls).toHaveLength(1); // routed to the no-breaker terminal...
+    expect(task.failureCount).toBe(0); // ...NOT the breaker (no failure_count burn, no misleading task.failed)
+  });
+
   it('key present → starts a per-task proxy with {apiKey, usageContext}, spawns with env.ANTHROPIC_BASE_URL, closes after the run, and meters the agent path', async () => {
     const store = new FakeStore();
     const execution = new FakeExecution();

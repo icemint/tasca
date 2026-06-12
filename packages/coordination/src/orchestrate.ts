@@ -248,6 +248,9 @@ export type OrchestrationOutcome =
   // The org has no Anthropic vault key (BYOK agent execution, slice 3.5-A.2b) → the agent CANNOT run
   // on a server key (there is none), so the task is retired to needs_attention BEFORE any spawn.
   | { kind: 'no_agent_key'; taskId: string }
+  // The vault key RESOLVE itself threw (a transient credential-store read fault, distinct from a clean
+  // "no key configured") → the task is retired to needs_attention with no breaker burn (slice 3.5-A.2b).
+  | { kind: 'key_unavailable'; taskId: string }
   // An `agent:<name>` label named an agent the org has NOT hired (slice 5d) → needs_attention. The
   // label is a preference within the hired set, not a bypass — so an unhired name fails closed.
   | { kind: 'agent_not_hired'; taskId: string };
@@ -632,7 +635,27 @@ export async function orchestrateTaskAssigned(
     // the agent spawns with no proxy and no key injected (the fake execution port ignores env).
     let agentProxy: { baseUrl: string; close: () => Promise<void> } | undefined;
     if (deps.agentVendorResolver && deps.startAgentProxy) {
-      const orgKey = await deps.agentVendorResolver(orgId);
+      let orgKey: string | null;
+      try {
+        orgKey = await deps.agentVendorResolver(orgId);
+      } catch (err) {
+        // A THROW here is a transient credential-store read fault (the vault reader's pg read is
+        // unguarded — only the decrypt itself fails closed to null), NOT a config issue and NOT an agent
+        // failure. Divert it to the SAME no-breaker terminal as the no-key branch: do NOT fall through to
+        // the outer catch, which would bump failure_count, re-drive the identical task, and surface a
+        // misleading 'task.failed'. The agent never ran (this precedes startAgentProxy + spawn), so
+        // fail-closed safety holds; the operator re-drives once the store is back.
+        const reason = 'credential service unavailable — retry when restored';
+        deps.logger?.error?.('coordination: vendor key resolve failed — agent fail-closed, task → needs_attention', {
+          taskId: task.id,
+          err: String(err),
+        });
+        const acted = await deps.store.retireNoChanges(orgId, task.id, reason);
+        if (!acted) {
+          return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
+        }
+        return { kind: 'key_unavailable', taskId: task.id };
+      }
       if (orgKey === null) {
         const reason = 'no API key configured — ask an admin';
         deps.logger?.info?.('coordination: org has no Anthropic key — agent fail-closed, task → needs_attention', {
