@@ -13,6 +13,7 @@ import type {
 import type { MatchCandidate } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { COORDINATION_SCHEMA_DDL } from './schema';
+import { sealVendorKey, openVendorKey, fingerprintVendorKey } from './vendor-credential';
 import { orchestrateTaskAssigned, type OrchestrationDeps, type AgentDirectory, type AuditSink, type TaskContentSource } from './orchestrate';
 import type { StatusReporter, StatusUpdate } from './ports';
 
@@ -95,7 +96,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE usage_event, proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+    await pool.query('TRUNCATE org_vendor_credential, usage_event, proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
     await pool.query('TRUNCATE audit_event, identity_binding, delegation, capability_profile, service_user, agent, rbac_role CASCADE');
     await pool.query(`INSERT INTO organization (id, name) VALUES ('org_other','Other') ON CONFLICT (id) DO NOTHING`);
     const created = await identity.createAgent({ name: 'Elvis', model: 'claude-sonnet', vendor: 'claude' });
@@ -671,6 +672,38 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(counts.routable).toBe(2); // org_default only — org_other's 5 are NOT counted
       expect(counts.done).toBe(1);
       expect(counts.executing ?? 0).toBe(0);
+    });
+  });
+
+  describe('BYOK vendor credentials — sealed at rest, org-scoped (slice 3.5-A)', () => {
+    const MASTER = Buffer.alloc(32, 7);
+    const SECRET = 'sk-ant-PG-SECRET-do-not-leak-9988776655';
+
+    it('set → status (no key) → sealed roundtrip → delete, all org-scoped', async () => {
+      const sealed = sealVendorKey(SECRET, MASTER);
+      const fp = fingerprintVendorKey('anthropic', SECRET);
+      await store.setVendorCredential(ORG, 'anthropic', sealed, fp, 'u1');
+
+      // status read returns the fingerprint, NEVER the key/ciphertext
+      const statuses = await store.getVendorCredentialStatuses(ORG);
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0]).toMatchObject({ provider: 'anthropic', status: 'active', fingerprint: fp });
+      expect(JSON.stringify(statuses)).not.toContain(SECRET);
+
+      // the sealed blob roundtrips through the master key (the only path to plaintext)
+      const got = await store.getSealedVendorCredential(ORG, 'anthropic');
+      expect(openVendorKey(got!, MASTER)).toBe(SECRET);
+
+      // ORG ISOLATION: org_other sees nothing
+      expect(await store.getVendorCredentialStatuses('org_other')).toEqual([]);
+      expect(await store.getSealedVendorCredential('org_other', 'anthropic')).toBeNull();
+
+      // replace (upsert) keeps one row; delete removes it
+      await store.setVendorCredential(ORG, 'anthropic', sealVendorKey('sk-ant-ROT', MASTER), fingerprintVendorKey('anthropic', 'sk-ant-ROT'), 'u1');
+      expect(await store.getVendorCredentialStatuses(ORG)).toHaveLength(1);
+      expect(await store.deleteVendorCredential(ORG, 'anthropic')).toBe(true);
+      expect(await store.getVendorCredentialStatuses(ORG)).toEqual([]);
+      expect(await store.deleteVendorCredential(ORG, 'anthropic')).toBe(false);
     });
   });
 });

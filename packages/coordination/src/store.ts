@@ -8,6 +8,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { PgDispatchQueue } from '@tasca/db';
+import type {
+  SealedCredential,
+  VendorProvider,
+  VendorCredentialStatus,
+  VendorCredentialStore,
+} from './vendor-credential';
 import {
   TASK_TRANSITIONS,
   type CapabilityMatch,
@@ -566,8 +572,61 @@ class RollbackProposal extends Error {
  * PgClaimRepository / PgIdentityRepository style). Constructor takes a pool or a
  * single connection.
  */
-export class PgCoordinationStore implements CoordinationStore {
+export class PgCoordinationStore implements CoordinationStore, VendorCredentialStore {
   constructor(private readonly db: Queryable) {}
+
+  // ── BYOK vendor credentials (slice 3.5-A) — sealed at rest; no method returns plaintext ──────────
+  async setVendorCredential(
+    orgId: string,
+    provider: VendorProvider,
+    sealed: SealedCredential,
+    fingerprint: string,
+    createdBy: string | null
+  ): Promise<void> {
+    // Upsert (org_id, provider): a replace re-validates → status active + fresh last_validated_at.
+    await this.db.query(
+      `INSERT INTO org_vendor_credential (org_id, provider, ciphertext, nonce, auth_tag, key_fingerprint, status, created_by, last_validated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'active',$7, now())
+       ON CONFLICT (org_id, provider) DO UPDATE SET
+         ciphertext = EXCLUDED.ciphertext, nonce = EXCLUDED.nonce, auth_tag = EXCLUDED.auth_tag,
+         key_fingerprint = EXCLUDED.key_fingerprint, status = 'active', last_validated_at = now()`,
+      [orgId, provider, sealed.ciphertext, sealed.nonce, sealed.authTag, fingerprint, createdBy]
+    );
+  }
+
+  async getVendorCredentialStatuses(orgId: string): Promise<VendorCredentialStatus[]> {
+    // ORG-SCOPED; returns status + fingerprint ONLY (never the ciphertext/key).
+    const res = await this.db.query<{ provider: string; status: string; key_fingerprint: string; last_validated_at: Date | null }>(
+      `SELECT provider, status, key_fingerprint, last_validated_at
+         FROM org_vendor_credential WHERE org_id = $1 ORDER BY provider`,
+      [orgId]
+    );
+    return res.rows.map((r) => ({
+      provider: r.provider as VendorProvider,
+      status: r.status as 'active' | 'invalid',
+      fingerprint: r.key_fingerprint,
+      lastValidatedAt: r.last_validated_at ? toIso(r.last_validated_at) : null,
+    }));
+  }
+
+  async getSealedVendorCredential(orgId: string, provider: VendorProvider): Promise<SealedCredential | null> {
+    // The resolver's read — returns the SEALED blob (the master key to open it lives in env, not here).
+    const res = await this.db.query<{ ciphertext: string; nonce: string; auth_tag: string }>(
+      `SELECT ciphertext, nonce, auth_tag FROM org_vendor_credential
+        WHERE org_id = $1 AND provider = $2 AND status = 'active'`,
+      [orgId, provider]
+    );
+    const row = res.rows[0];
+    return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
+  }
+
+  async deleteVendorCredential(orgId: string, provider: VendorProvider): Promise<boolean> {
+    const res = await this.db.query(
+      `DELETE FROM org_vendor_credential WHERE org_id = $1 AND provider = $2`,
+      [orgId, provider]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
 
   async recordWebhookEvent(
     orgId: string,

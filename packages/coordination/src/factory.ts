@@ -14,6 +14,7 @@ import { DefaultPmProposer, type LlmClassifierPort, type DecomposerPort } from '
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
+import { VendorKeyResolver, type VendorValidator } from './vendor-credential';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
@@ -52,6 +53,9 @@ export interface CreateCoordinationDeps {
    *  if no runner claims, the task is retired to needs_attention). Default OFF (always
    *  in-process, the no-queue/dev mode) until runners are deployed. */
   dispatchQueueEnabled?: boolean;
+  /** BYOK vendor credentials (slice 3.5-A): the env-held master key (null → write surface 503s) + the
+   *  validate-on-input probe. Absent → the credential API is not wired. */
+  vendorCredential?: { masterKey: Buffer | null; validator: VendorValidator };
   /** Window to wait (polling) for a runner to claim before retiring the task to
    *  needs_attention. Default 30000ms. */
   runnerWaitMs?: number;
@@ -201,6 +205,22 @@ export function createCoordination(
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
+    // BYOK vendor-credential API (slice 3.5-A) — wired only when the vendor-credential bits (master key
+    // presence + validator) are supplied. The resolver (org-key injection seam + ~60s cache) is built
+    // over the same store; consumers (per-org classifier) wire to it in the next sub-slice.
+    ...(input.vendorCredential
+      ? {
+          vendorCredentialApi: {
+            store,
+            resolver: new VendorKeyResolver(store, input.vendorCredential.masterKey),
+            validator: input.vendorCredential.validator,
+            masterKey: input.vendorCredential.masterKey,
+            membership,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
+        }
+      : {}),
     // The PM-assistant API (slice W3-S1) — advisory proposals. Accept routes through the store's
     // CAS-guarded binding method; the deterministic match-based proposer ships now (LLM-backed
     // proposers for the language kinds arrive in later sub-slices). Generation is flag-gated.
