@@ -60,7 +60,12 @@ function oauthStateCookie(value: string, secure: boolean): string {
 }
 
 function redirectTo(res: ServerResponse, location: string, setCookies: string[] = []): void {
-  const headers: Record<string, string | string[]> = { location };
+  // no-store at the ORIGIN: every auth 302 here sets or clears a session-critical cookie (tasca_oauth
+  // at begin, tasca_session at the callback). A cacheable cookie-setting response is a footgun — an
+  // edge/proxy (e.g. Cloudflare) that caches the begin 302 would STRIP the Set-Cookie, so the browser
+  // never stores tasca_oauth and the callback fails state validation. Asserting it here holds even if
+  // an edge cache rule is missing or later changes.
+  const headers: Record<string, string | string[]> = { location, 'cache-control': 'no-store' };
   if (setCookies.length) headers['set-cookie'] = setCookies;
   res.writeHead(302, headers);
   res.end();
