@@ -367,6 +367,24 @@ CREATE TABLE IF NOT EXISTS usage_event (
 CREATE INDEX IF NOT EXISTS usage_event_org_created_idx ON usage_event (org_id, created_at);
 CREATE INDEX IF NOT EXISTS usage_event_org_task_idx ON usage_event (org_id, task_id);`;
 
+/** BYOK vendor credentials (slice 3.5-A): one row per (org, provider). Stores ONLY the AEAD ciphertext
+ *  + nonce + auth tag (sealed under the env-held master key — see vendor-credential.ts) + a non-reversible
+ *  fingerprint + status. NO plaintext key. org-scoped, in TENANT_TABLES. */
+export const VENDOR_CREDENTIAL_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS org_vendor_credential (
+  org_id            text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  provider          text NOT NULL CHECK (provider IN ('anthropic')),
+  ciphertext        text NOT NULL,
+  nonce             text NOT NULL,
+  auth_tag          text NOT NULL,
+  key_fingerprint   text NOT NULL,
+  status            text NOT NULL DEFAULT 'active' CHECK (status IN ('active','invalid')),
+  created_by        text,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  last_validated_at timestamptz,
+  PRIMARY KEY (org_id, provider)
+);`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -378,4 +396,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   ORG_DISPATCH_CONTRACT_DDL,
   PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
   USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
+  VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
 ];

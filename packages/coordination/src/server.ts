@@ -22,6 +22,7 @@ import { orchestrateTaskAssigned, workspaceForEvent, resolveWebhookOrg, type Orc
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
+import { vendorCredentialApiHandler, type VendorCredentialApiDeps } from './vendor-credential-api';
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
 
@@ -43,6 +44,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * POSTs CSRF-gated. Absent → those paths fall through to 404 (additive).
    */
   orgApi?: OrgApiDeps;
+  /**
+   * The BYOK vendor-credential API (slice 3.5-A: GET/POST /api/orgs/credentials, DELETE
+   * .../credentials/:provider). Session-gated; mutations CSRF + admin-gated; write-only (never
+   * returns a key). Absent → those paths fall through to 404 (additive).
+   */
+  vendorCredentialApi?: VendorCredentialApiDeps;
   /**
    * The PM-assistant API (slice W3-S1: GET /api/proposals, POST /api/proposals/generate +
    * .../:id/{accept,dismiss}). Session + CSRF + member-gated; advisory (accept routes through an
@@ -308,6 +315,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Org-management API (only when wired). Handles GET/POST /api/orgs + POST /api/active-org —
     // before the read/write API, which don't claim those paths.
     if (deps.orgApi && (await orgApiHandler(req, res, deps.orgApi))) return;
+
+    // BYOK vendor-credential API (only when wired). Handles /api/orgs/credentials before the
+    // org-api/read-api (more specific path; both must run before the generic read API's /api/* claim).
+    if (deps.vendorCredentialApi && (await vendorCredentialApiHandler(req, res, deps.vendorCredentialApi))) return;
 
     // PM-assistant API (only when wired). Handles GET /api/proposals + the mutating POSTs.
     if (deps.proposalApi && (await proposalApiHandler(req, res, deps.proposalApi))) return;

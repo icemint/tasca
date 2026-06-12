@@ -43,6 +43,7 @@ import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
+import { loadMasterKey, liveVendorValidator } from './vendor-credential';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
 import { ORG_AGENT_TABLE_DDL } from './roster';
@@ -516,6 +517,9 @@ async function main(): Promise<void> {
     // proposer; the decomposer wires the decomposition proposer. Absent → heuristic fallback.
     ...(llmClassifier ? { classifier: llmClassifier } : {}),
     ...(llmDecomposer ? { decomposer: llmDecomposer } : {}),
+    // BYOK vendor credentials (slice 3.5-A): the master key lives in the server env (NOT the DB);
+    // absent → the write surface 503s. Live validate-on-input probes the vendor before storing.
+    vendorCredential: { masterKey: loadMasterKey(), validator: liveVendorValidator() },
   });
 
   const server = coordination.createServer();
