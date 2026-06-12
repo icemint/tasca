@@ -151,6 +151,17 @@
 .metric .mv { font-family: var(--font-display); font-size: var(--fs-md); font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; line-height: 1; }
 .metric .mk { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-4); }
 .metric .mv.warn { color: var(--amber); } .metric .mv.bad { color: var(--red); }
+/* Card footer-action row (slice W4-S3): hire-state label + Hire/Unhire control. Mirrors the card's
+   own border-separated rows (.task) + mono label scale (.metric .mk) so the control sits flush. */
+.agentcard .card-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 13px; border-top: 1px solid var(--line); }
+.agentcard .hire-state { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-4); min-width: 0; }
+.agentcard .hire-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); flex: none; }
+.agentcard .hire-state.on { color: var(--fg-2); }
+.agentcard .hire-state.on::before { background: var(--state-shipped); }
+.agentcard .hire-ctl { flex: none; padding: 6px 14px; font-size: var(--fs-xs); }
+.agentcard .hire-ctl.is-hired { border-color: var(--line-2); color: var(--fg-3); background: var(--surface-2); }
+.agentcard .hire-ctl.is-hired:hover { border-color: color-mix(in srgb, var(--red) 45%, transparent); color: var(--red); background: color-mix(in srgb, var(--red) 9%, transparent); }
+.agentcard .card-actions .ro-ctl { flex: none; padding: 6px 14px; font-size: var(--fs-xs); }
 .kebab-btn { width: 28px; height: 28px; border-radius: var(--radius-sm); display: grid; place-items: center; color: var(--fg-4); border: 1px solid var(--line); transition: background var(--dur), color var(--dur); }
 .kebab-btn:hover { background: var(--surface-2); color: var(--fg-2); }
 .kebab-btn svg { width: 14px; height: 14px; }
