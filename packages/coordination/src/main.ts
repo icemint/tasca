@@ -477,6 +477,16 @@ async function main(): Promise<void> {
     });
   }
 
+  // Metering visibility (slice): in IN-PROCESS dispatch (not queue) the worker spawns the agent itself
+  // with the real ANTHROPIC_API_KEY — there is no metering proxy in this path, so agent model-call spend
+  // is UNMETERED. Warn loudly so direct-mode can't hide (it produced PRs while writing zero agent usage).
+  if (process.env.TASCA_DISPATCH_MODE !== 'queue' && anthropicKey) {
+    logger.error(
+      'agent model calls are UNMETERED — in-process dispatch runs the agent with the key directly; ' +
+        'the metering proxy is wired only in queue mode (TASCA_DISPATCH_MODE=queue + a runner) or via in-process proxy wiring'
+    );
+  }
+
   const coordination = createCoordination({
     pool,
     execution,

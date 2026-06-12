@@ -89,6 +89,7 @@ class CountingStore implements CoordinationStore {
   async reassignTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async interruptTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async failNoCapacity(): Promise<boolean> { return false; }
+  async retireNoChanges(): Promise<boolean> { return false; }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() { return null; }
   async updateInstallationByAccount() { return false; }

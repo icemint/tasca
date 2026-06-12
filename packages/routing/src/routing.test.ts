@@ -81,6 +81,46 @@ describe('tier estimation', () => {
     expect(est.confidence).toBe(0.82);
   });
 
+  it('NOTIFIES onClassifierError when the classifier THROWS, then degrades to the heuristic (not silent)', async () => {
+    const errs: unknown[] = [];
+    const est = await estimateTier(
+      { title: 'do', body: 'a thing here please now today' }, // low prior → the classifier is attempted
+      {
+        classifier: { classify: async () => { throw new Error('anthropic 404 (model=claude-haiku-4-5)'); } },
+        classifierConfidenceThreshold: 0.8,
+        onClassifierError: (e) => errs.push(e),
+      }
+    );
+    expect(errs).toHaveLength(1);
+    expect(String(errs[0])).toContain('anthropic 404');
+    expect(est.classifierUsed).toBe(false); // degraded to the heuristic prior
+  });
+
+  it('NOTIFIES onClassifierError when the classifier returns MALFORMED output (not silent)', async () => {
+    const errs: unknown[] = [];
+    const est = await estimateTier(
+      { title: 'do', body: 'a thing here please now today' },
+      {
+        classifier: { classify: async () => ({ nonsense: true }) as unknown as { tier: 'low'; confidence: number } },
+        classifierConfidenceThreshold: 0.8,
+        onClassifierError: (e) => errs.push(e),
+      }
+    );
+    expect(errs).toHaveLength(1);
+    expect(String((errs[0] as Error).message)).toContain('malformed');
+    expect(est.classifierUsed).toBe(false);
+  });
+
+  it('does NOT notify onClassifierError when the classifier is SKIPPED (high-confidence prior)', async () => {
+    const errs: unknown[] = [];
+    const est = await estimateTier(
+      { title: 'x', body: 'x', labels: ['tier:basic'] }, // explicit label → 0.9 prior → skip, no call, no error
+      { classifier: failClassifier, onClassifierError: (e) => errs.push(e) }
+    );
+    expect(errs).toHaveLength(0);
+    expect(est.classifierUsed).toBe(false);
+  });
+
   it('classifies file mentions: prose → unknown, real paths → multi-file, one file → single-file', () => {
     // Prose with abbreviations + a version string — none are real file extensions.
     const prose = heuristics({ title: 'e.g. fix the bug, i.e. the v1.2 regression', body: '' });

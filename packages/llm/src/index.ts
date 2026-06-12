@@ -96,7 +96,9 @@ export class AnthropicChat {
     } finally {
       clearTimeout(timer!);
     }
-    if (!res.ok) throw new Error(`anthropic ${res.status}`);
+    // Include the model + status in the error so a degraded-to-heuristic log is self-diagnosing
+    // (e.g. `anthropic 404 (model=claude-haiku-4-5)` immediately points at a bad model id).
+    if (!res.ok) throw new Error(`anthropic ${res.status} (model=${this.cfg.model})`);
     const raw = await res.text();
     const parsed = JSON.parse(raw) as {
       id?: string;

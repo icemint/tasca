@@ -217,6 +217,9 @@ export type OrchestrationOutcome =
   | { kind: 'not_routable'; taskId: string; status: TaskStatus }
   | { kind: 'needs_attention'; taskId: string; failureCount: number }
   | { kind: 'failed'; taskId: string; failureCount: number }
+  // The agent ran but committed nothing (deterministic no-op) → retired to needs_attention WITHOUT
+  // the breaker (no re-route, no retry-burn). Distinct from `failed` so it reads honestly.
+  | { kind: 'no_changes'; taskId: string }
   // No agent-runner claimed the enqueued job within the wait bound → retired to
   // needs_attention with a "no execution capacity" reason (the breaker is untouched).
   | { kind: 'no_capacity'; taskId: string; agentId: string }
@@ -346,7 +349,22 @@ export async function orchestrateTaskAssigned(
     // Attribute the classifier's LLM call (if any) to this task/org (slice W3-S4a). estimateTier may
     // call the classifier; the usage context tags its spend as source='classifier' for this task.
     const estimate = await withUsageContext({ orgId, taskId: task.id, source: 'classifier' }, () =>
-      estimateTier(content, deps.classifier ? { classifier: deps.classifier } : {})
+      estimateTier(
+        content,
+        deps.classifier
+          ? {
+              classifier: deps.classifier,
+              // The classifier degrades to heuristic on failure (fail-soft) — but LOUDLY: a misconfigured
+              // classifier (bad model id, bad key, endpoint) otherwise silently disables the paid feature
+              // AND writes no usage_event, looking healthy. Surfaced at error level so it can't hide.
+              onClassifierError: (err) =>
+                deps.logger?.error('coordination: tier classifier call FAILED — degraded to heuristic (UNMETERED)', {
+                  taskId: task.id,
+                  err: err instanceof Error ? err.message : String(err),
+                }),
+            }
+          : {}
+      )
     );
     await deps.store.setTierEstimate(orgId, task.id, estimate);
 
@@ -651,6 +669,33 @@ export async function orchestrateTaskAssigned(
 
     return { kind: 'dispatched', taskId: task.id, agentId: winner.agentId, prUrl: pr.url };
   } catch (err) {
+    // §6.14a — NO-CHANGES is a DETERMINISTIC no-op, not a failure: the agent ran fine but had nothing
+    // to commit (e.g. the issue was already resolved / a no-op). Re-running yields the same result, so
+    // terminate to needs_attention with a clear reason WITHOUT the breaker — never re-route and burn N
+    // identical agent runs before the breaker trips. (The agent run + no-diff were already logged above.)
+    if (err instanceof ExecutionError && err.kind === 'no-changes') {
+      const reason = 'agent ran but produced no committed changes — nothing to do (no retry)';
+      deps.logger?.info?.('coordination: dispatch produced no changes — retiring to needs_attention (no breaker)', {
+        taskId: task.id,
+      });
+      // The retire is guarded to executing/claimed — if an operator cancel/reassign moved the task
+      // during the agent run, it returns false and OWNS the post-state. Defer (preempted), and do NOT
+      // emit a task.no_changes audit for a retire that did not happen (mirrors the failNoCapacity path).
+      const acted = await deps.store.retireNoChanges(orgId, task.id, reason);
+      if (!acted) {
+        deps.logger?.info?.('coordination: no-changes retire skipped — task already moved (operator owns it)', {
+          taskId: task.id,
+        });
+        return { kind: 'preempted', taskId: task.id, agentId: winnerAgentId ?? '(unassigned)' };
+      }
+      await audit(deps, principalId, winnerAgentId ?? '(unassigned)', event, {
+        action: 'task.no_changes',
+        target: task.id,
+        payload: { reason },
+      });
+      return { kind: 'no_changes', taskId: task.id };
+    }
+
     // §6.14 — failure path (any phase): record the failure and transition in ONE
     // atomic UPDATE. At/over the threshold the task trips to needs_attention
     // (human-gated); below it the SAME row is reset to routable (claim cleared,

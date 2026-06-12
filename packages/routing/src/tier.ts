@@ -90,6 +90,12 @@ export interface EstimateTierOptions {
   classifier?: LlmClassifierPort;
   /** Skip the LLM call when the heuristic prior is at least this confident (cost control). */
   classifierConfidenceThreshold?: number;
+  /** Notified when the classifier was CALLED but did not contribute (threw, or returned malformed
+   *  output) and the estimate degraded to the heuristic. The degrade is intentional fail-soft, but it
+   *  must not be SILENT — a misconfigured classifier (e.g. a bad model id 404ing every call) otherwise
+   *  looks like everything is fine while the paid feature is fully broken + writes no usage. The caller
+   *  logs it; estimateTier stays pure (no logger). */
+  onClassifierError?: (err: unknown) => void;
 }
 
 /**
@@ -124,7 +130,14 @@ export async function estimateTier(
   let raw: unknown;
   try {
     raw = await opts.classifier.classify({ title: task.title, body: task.body, features: signals });
-  } catch {
+  } catch (err) {
+    // LOUD: a thrown classifier call (timeout/5xx/404/bad-key) is not silent. The callback is
+    // caller-supplied — guard it so a throwing logger can never break this function's fail-soft contract.
+    try {
+      opts.onClassifierError?.(err);
+    } catch {
+      /* best-effort observability; must not break the routing decision */
+    }
     return priorEstimate;
   }
 
@@ -132,6 +145,11 @@ export async function estimateTier(
   // trust boundary and reject/fallback on malformed output (scaffold §3).
   const parsed = ClassifierOutputSchema.safeParse(raw);
   if (!parsed.success) {
+    try {
+      opts.onClassifierError?.(new Error('classifier returned malformed output')); // LOUD: not silent
+    } catch {
+      /* best-effort observability; must not break the routing decision */
+    }
     return priorEstimate;
   }
   return { tier: parsed.data.tier, confidence: parsed.data.confidence, signals, classifierUsed: true };

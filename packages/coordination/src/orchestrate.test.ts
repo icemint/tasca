@@ -130,6 +130,19 @@ class FakeStore implements CoordinationStore {
     t.version += 1; // breaker/failure_count deliberately untouched
     return true;
   }
+  noChangesCalls: Array<{ taskId: string; reason: string }> = [];
+  /** Force retireNoChanges to no-op (simulating a concurrent operator cancel/reassign that already
+   *  moved the task out of executing/claimed). */
+  noChangesRetireActs = true;
+  async retireNoChanges(_orgId: string, taskId: string, reason: string): Promise<boolean> {
+    this.noChangesCalls.push({ taskId, reason });
+    const t = this.tasks.get(taskId);
+    if (!this.noChangesRetireActs || !t || (t.status !== 'executing' && t.status !== 'claimed')) return false;
+    t.status = 'needs_attention';
+    t.lastError = reason;
+    t.version += 1; // breaker/failure_count deliberately untouched
+    return true;
+  }
   async upsertGitHubInstallation() {}
   async getInstallationIdForOwner() {
     return null;
@@ -466,6 +479,31 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     expect(actions).toContain('task.claim');
     expect(actions).toContain('pr.create');
     expect(actions).toContain('status.post');
+  });
+
+  it('NO-CHANGES run → retired to needs_attention WITHOUT the breaker (no re-route, no retry-burn)', async () => {
+    const noChangeExec = new FakeExecution({ commitChanged: false }); // agent ran, committed nothing
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: noChangeExec, status, audit }));
+
+    expect(outcome.kind).toBe('no_changes');
+    if (outcome.kind !== 'no_changes') return;
+    const task = store.tasks.get(outcome.taskId)!;
+    expect(task.status).toBe('needs_attention'); // terminal, surfaced to a human
+    expect(task.failureCount).toBe(0); // breaker NOT driven — re-running is pointless
+    expect(store.noChangesCalls).toHaveLength(1); // went through the no-breaker terminal path
+    expect(noChangeExec.prCalls).toBe(0); // never opened an empty PR
+    // the failure/breaker path was NOT taken (it would have re-routed below threshold)
+    expect(audit.records.map((r) => r.action)).toContain('task.no_changes');
+  });
+
+  it('NO-CHANGES but an operator moved the task mid-run → preempted, NO spurious no_changes audit', async () => {
+    store.noChangesRetireActs = false; // the guarded retire no-ops (task already moved)
+    const noChangeExec = new FakeExecution({ commitChanged: false });
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: noChangeExec, status, audit }));
+
+    expect(outcome.kind).toBe('preempted'); // defer — the operator owns the task's post-state
+    expect(store.noChangesCalls).toHaveLength(1); // the retire WAS attempted...
+    expect(audit.records.map((r) => r.action)).not.toContain('task.no_changes'); // ...but no audit for a no-op retire
   });
 
   it('threads the event platform onto the status update (github)', async () => {
@@ -822,7 +860,7 @@ describe('orchestrateTaskAssigned — failure path → auto-recover → breaker 
     expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('routable');
   });
 
-  it('agent run with NO committed change → failed, and openPr is NOT called (no empty PR)', async () => {
+  it('agent run with NO committed change → no_changes (terminal, no breaker), and openPr is NOT called (no empty PR)', async () => {
     const store = new FakeStore();
     const exec = new FakeExecution({ spawnExitCode: 0, commitChanged: false });
     const outcome = await orchestrateTaskAssigned(
@@ -831,11 +869,13 @@ describe('orchestrateTaskAssigned — failure path → auto-recover → breaker 
     );
     expect(exec.spawnCalls).toBe(1);
     expect(exec.commitCalls).toBe(1);
-    // No diff → fail BEFORE openPr; no PR opened, no PR recorded.
+    // No diff → terminal no-changes BEFORE openPr; no PR opened, no PR recorded.
     expect(exec.prCalls).toBe(0);
-    expect(outcome.kind).toBe('failed');
+    expect(outcome.kind).toBe('no_changes');
     expect(store.pullRequests).toHaveLength(0);
-    expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('routable');
+    // Terminal needs_attention (NOT re-routed to routable) — a deterministic no-op shouldn't retry.
+    expect(store.tasks.get((outcome as { taskId: string }).taskId)!.status).toBe('needs_attention');
+    expect(store.tasks.get((outcome as { taskId: string }).taskId)!.failureCount).toBe(0); // breaker untouched
   });
 
   it('a PRE-claim failure (content fetch throws) also feeds the breaker — not just execution failures', async () => {
@@ -1322,9 +1362,9 @@ describe('orchestrateTaskAssigned — agent output observability', () => {
 
     const outcome = await orchestrateTaskAssigned(EVENT, deps);
 
-    expect(outcome.kind).toBe('failed'); // the no-changes guard fired
+    expect(outcome.kind).toBe('no_changes'); // the no-changes guard fired → terminal (no breaker)
     const runLog = lines.find((l) => l.message === 'coordination: agent run complete');
-    expect(runLog, 'the agent run output should be logged before the no-changes throw').toBeDefined();
+    expect(runLog, 'the agent run output should be logged before the no-changes retire').toBeDefined();
     expect(runLog!.context).toMatchObject({ exitCode: 0 });
     expect(String(runLog!.context!.outputTail)).toContain('no typo');
   });
