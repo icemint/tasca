@@ -660,6 +660,9 @@ export async function orchestrateTaskAssigned(
       branch: worktree.branch,
       headBranch: deterministicHeadBranch(event.externalStoryId),
       title: `Tasca: ${event.externalStoryId}`,
+      // PROJECTION model (roadmap D8): the agent's ONE state-affecting write is the PR's `Closes #N`
+      // link — GitHub's native PR-merge→issue-close does the transition; Tasca never writes issue state.
+      ...(closesReference(event) ? { body: closesReference(event)! } : {}),
       ...(prToken ? { token: prToken } : {}),
     });
     await deps.store.recordPullRequest(orgId, { taskId: task.id, url: pr.url });
@@ -753,6 +756,15 @@ export async function orchestrateTaskAssigned(
       );
     }
   }
+}
+
+/** The projection-model PR-body link (roadmap D8). For a GitHub issue (externalStoryId `owner/repo#N`)
+ *  the PR carries `Closes #N` so the native merge→issue-close transition fires — the agent's only
+ *  state-affecting write. Other platforms (Shortcut/Linear) project via their own mechanisms → null. */
+function closesReference(event: { platform: string; externalStoryId: string }): string | null {
+  if (event.platform !== 'github') return null;
+  const m = /#(\d+)$/.exec(event.externalStoryId);
+  return m ? `Closes #${m[1]}` : null;
 }
 
 /**
