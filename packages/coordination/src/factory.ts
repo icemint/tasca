@@ -10,7 +10,9 @@ import { PgClaimRepository, PgDispatchQueue } from '@tasca/db';
 import { PgIdentityRepository } from '@tasca/identity';
 import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
-import { DefaultPmProposer, type LlmClassifierPort, type DecomposerPort } from '@tasca/routing';
+import { DefaultPmProposer, type LlmClassifierPort } from '@tasca/routing';
+import { AnthropicChat, AnthropicClassifier } from '@tasca/llm';
+import { makeUsageSink } from './usage-context';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
@@ -40,13 +42,10 @@ export interface CreateCoordinationDeps {
   /** Optional auth handler (GET/POST /api/auth/*); absent → those paths 404. */
   authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   content: TaskContentSource;
-  /** The LLM tier classifier (slice: LLM wiring). Injected by the host when an LLM client is enabled;
-   *  used by BOTH the routing engine (estimateTier, budgeted/skip-on-high-confidence) AND the triage
-   *  proposer. Absent → the engine + triage use the heuristic prior (fail-soft, today's behavior). */
-  classifier?: LlmClassifierPort;
-  /** The LLM decomposer (slice: LLM wiring). Injected by the host when an LLM client is enabled; used
-   *  by the decomposition proposer ON DEMAND only. Absent → decomposition yields no suggestion. */
-  decomposer?: DecomposerPort;
+  /** Coordination LLM (BYOK, slice 3.5-A.2a). When `enabled` AND the vault master key is present, the
+   *  routing tier classifier resolves each org's OWN vault key per task and runs on it (no server key);
+   *  absent/disabled → heuristic routing. `model` defaults to the current Haiku id. */
+  coordinationLlm?: { enabled: boolean; model?: string };
   /** Optional repo provisioner (clone-on-dispatch); absent → repoRef used as-is. */
   provisioner?: RepoProvisioner;
   /** Enable split dispatch: enqueue jobs for an agent-runner (no in-process fallback —
@@ -171,6 +170,25 @@ export function createCoordination(
   // (sweep/finalize) so they operate on the same table wiring.
   const dispatchQueue = input.dispatchQueueEnabled ? new PgDispatchQueue(input.pool) : undefined;
 
+  // BYOK (slice 3.5-A): one shared resolver — decrypts an org's (= the instance's) vault key for the
+  // credential API (cache-bust) AND the per-org classifier below. Built only when the master key is set.
+  const vendorResolver = input.vendorCredential
+    ? new VendorKeyResolver(store, input.vendorCredential.masterKey)
+    : undefined;
+  // BYOK classifier (slice 3.5-A.2a): the tier classifier resolves the org's OWN vault key per task and
+  // runs on it — NO server key. No key → null → heuristic routing. Enabled by the coordination-LLM flag
+  // AND the presence of a resolver (master key). The usage sink meters each call (org-scoped, per-task).
+  const coordinationUsageSink = makeUsageSink(store, input.logger);
+  const coordinationModel = input.coordinationLlm?.model ?? 'claude-haiku-4-5-20251001';
+  const classifierFor =
+    input.coordinationLlm?.enabled && vendorResolver
+      ? async (orgId: string): Promise<LlmClassifierPort | null> => {
+          const key = await vendorResolver.resolve(orgId, 'anthropic');
+          if (!key) return null;
+          return new AnthropicClassifier(new AnthropicChat({ apiKey: key, model: coordinationModel }), coordinationUsageSink);
+        }
+      : undefined;
+
   const deps: CoordinationServerDeps = {
     store,
     claim,
@@ -212,7 +230,7 @@ export function createCoordination(
       ? {
           vendorCredentialApi: {
             store,
-            resolver: new VendorKeyResolver(store, input.vendorCredential.masterKey),
+            resolver: vendorResolver!,
             validator: input.vendorCredential.validator,
             masterKey: input.vendorCredential.masterKey,
             membership,
@@ -230,13 +248,10 @@ export function createCoordination(
       roster,
       directory,
       content: input.content,
-      // routing = deterministic match; triage = the tier engine, LLM-backed when a classifier is
-      // injected (the SAME classifier the routing pipeline uses), else heuristic-only; decomposition
-      // = the injected LLM decomposer (absent → no decomposition suggestion). All fail-soft.
-      proposer: new DefaultPmProposer({
-        ...(input.classifier ? { classifier: input.classifier } : {}),
-        ...(input.decomposer ? { decomposer: input.decomposer } : {}),
-      }),
+      // routing = deterministic match; triage = the tier engine (heuristic-only here); decomposition =
+      // no suggestion. Under BYOK (3.5-A.2a) the server holds no key, so the PM-assistant LLM proposers
+      // degrade to heuristic/no-suggestion until they are wired to the per-org vault key (follow-up).
+      proposer: new DefaultPmProposer({}),
       enabled: input.pmAssistantEnabled === true,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
@@ -261,7 +276,7 @@ export function createCoordination(
       ? { githubInstallationHandler: input.githubInstallationHandler }
       : {}),
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
-    ...(input.classifier !== undefined ? { classifier: input.classifier } : {}),
+    ...(classifierFor ? { classifierFor } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
     ...(dispatchQueue ? { dispatchQueue } : {}),
     ...(input.runnerWaitMs !== undefined ? { runnerWaitMs: input.runnerWaitMs } : {}),

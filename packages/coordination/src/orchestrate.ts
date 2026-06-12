@@ -138,7 +138,9 @@ export interface OrchestrationDeps {
   directory: AgentDirectory;
   audit: AuditSink;
   content: TaskContentSource;
-  classifier?: LlmClassifierPort;
+  /** Resolve the tier classifier for an org, on the org's OWN vault key (BYOK, slice 3.5-A.2a). Returns
+   *  null when the org has no key (→ heuristic routing). Absent → no LLM classifier at all (heuristic). */
+  classifierFor?: (orgId: string) => Promise<LlmClassifierPort | null>;
   /** Resolves a GitHub `owner/repo` slug to a local clone path before dispatch.
    *  Absent → repoRef is used as-is (Stage-1 single-checkout / test behavior). */
   provisioner?: RepoProvisioner;
@@ -348,12 +350,15 @@ export async function orchestrateTaskAssigned(
     const content: TaskInput = origin?.content ?? (await deps.content.fetch(event));
     // Attribute the classifier's LLM call (if any) to this task/org (slice W3-S4a). estimateTier may
     // call the classifier; the usage context tags its spend as source='classifier' for this task.
+    // BYOK (slice 3.5-A.2a): the classifier resolves THIS org's (= the instance's) own vault key per
+    // task and runs on it — no server key. No key configured → null → heuristic routing (fail-soft).
+    const classifier = deps.classifierFor ? await deps.classifierFor(orgId) : null;
     const estimate = await withUsageContext({ orgId, taskId: task.id, source: 'classifier' }, () =>
       estimateTier(
         content,
-        deps.classifier
+        classifier
           ? {
-              classifier: deps.classifier,
+              classifier,
               // The classifier degrades to heuristic on failure (fail-soft) — but LOUDLY: a misconfigured
               // classifier (bad model id, bad key, endpoint) otherwise silently disables the paid feature
               // AND writes no usage_event, looking healthy. Surfaced at error level so it can't hide.
