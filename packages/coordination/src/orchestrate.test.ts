@@ -401,7 +401,7 @@ function makeDeps(opts: {
   candidates?: MatchCandidate[];
   content?: TaskContentSource;
   names?: Record<string, string>;
-  classifier?: OrchestrationDeps['classifier'];
+  classifierFor?: OrchestrationDeps['classifierFor'];
 }): OrchestrationDeps {
   const candidates = opts.candidates ?? [{ profile: elvisProfile(), state: 'idle', activeCount: 0 }];
   return {
@@ -412,7 +412,7 @@ function makeDeps(opts: {
     directory: new FakeDirectory(candidates, opts.names),
     audit: opts.audit,
     content: opts.content ?? content,
-    ...(opts.classifier ? { classifier: opts.classifier } : {}),
+    ...(opts.classifierFor ? { classifierFor: opts.classifierFor } : {}),
   };
 }
 
@@ -747,11 +747,23 @@ describe('orchestrateTaskAssigned — usage context (W3-S4a)', () => {
         return { tier: 'medium' as const, confidence: 0.9 };
       },
     };
-    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, classifier }));
+    // BYOK (3.5-A.2a): the classifier is resolved per-org; the fake resolver returns it for any org.
+    const classifierFor = async () => classifier;
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, classifierFor }));
     expect(outcome.kind).toBe('dispatched');
     if (outcome.kind !== 'dispatched') return;
     // the classifier ran INSIDE the usage context → attributable to this task as source='classifier'
     expect(captured).toEqual({ orgId: 'org_default', taskId: outcome.taskId, source: 'classifier' });
+  });
+
+  it('BYOK: no org vault key → classifierFor returns null → heuristic routing (no classifier call)', async () => {
+    const store = new FakeStore();
+    // simulate "this org has no key": the resolver returns null, so no classifier is built
+    const classifierFor = async () => null;
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: new FakeExecution(), status: new FakeStatus(), audit: new FakeAudit(), classifierFor }));
+    expect(outcome.kind).toBe('dispatched'); // still routes (heuristic), agents can still be matched
+    const task = store.tasks.get((outcome as { taskId: string }).taskId)!;
+    expect(task.tierEstimate?.classifierUsed).toBe(false); // degraded to the heuristic prior, no LLM call
   });
 });
 

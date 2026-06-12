@@ -35,8 +35,6 @@ import { createExecution } from '@tasca/execution';
 import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
 import { serveAnthropicProxy, type AnthropicProxyHandle } from '@tasca/anthropic-proxy';
-import { AnthropicChat, AnthropicClassifier, AnthropicDecomposer } from '@tasca/llm';
-import { makeUsageSink } from './usage-context';
 import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent } from '@tasca/contracts';
@@ -388,28 +386,17 @@ async function main(): Promise<void> {
     }
   }
 
-  // The coordination-side LLM client (slice: LLM wiring). ONE Anthropic client fills three injected,
-  // fail-soft ports: the routing tier CLASSIFIER (estimateTier + the triage proposer) and the
-  // DECOMPOSER (the decomposition proposer). OFF BY DEFAULT — set TASCA_LLM=on (with ANTHROPIC_API_KEY)
-  // to enable. Gating matters because enabling makes the classifier run per-task on the routing hot
-  // path: real LLM spend (bounded — estimateTier SKIPS the call on a high-confidence heuristic prior,
-  // so only ambiguous tasks classify). Enable broadly only once per-task usage metering (W3-S4) tracks
-  // that spend. Absent → classifier/decomposer unwired → routing + triage use the heuristic, decomposition
-  // yields no suggestion (today's behavior). The proposer LLM calls stay ON-DEMAND (no new call sites).
-  let llmClassifier: AnthropicClassifier | undefined;
-  let llmDecomposer: AnthropicDecomposer | undefined;
-  if (process.env.TASCA_LLM === 'on' && anthropicKey) {
-    const model = process.env.TASCA_LLM_MODEL ?? 'claude-haiku-4-5-20251001';
-    const chat = new AnthropicChat({ apiKey: anthropicKey, model });
-    // Metering (slice W3-S4a): the sink attributes each LLM call to the ambient per-request context
-    // (org/task/source) and records it (org-scoped, CAS-idempotent). Fire-and-forget — never blocks
-    // the LLM call. Wiring it to BOTH ports HERE means every PRODUCTION coordination LLM call meters
-    // (the sink is optional on the ports — the dev smoke harness + tests construct them without it;
-    // production is the only caller that wires it, so production has no unmetered coordination call).
-    const usageSink = makeUsageSink(new PgCoordinationStore(pool), logger);
-    llmClassifier = new AnthropicClassifier(chat, usageSink);
-    llmDecomposer = new AnthropicDecomposer(chat, usageSink);
-    logger.info?.('coordination LLM client enabled (metered)', { model });
+  // Coordination LLM — BYOK (slice 3.5-A.2a). The routing tier CLASSIFIER now runs on EACH ORG'S OWN
+  // vault key (the instance's, single-tenant), resolved per task by the factory from the credential
+  // vault — there is NO server key. OFF BY DEFAULT: set TASCA_LLM=on to enable (also needs the vault
+  // master key TASCA_SECRET_STORE_KEY); the per-org classifier is then wired in the factory. Absent /
+  // disabled / no org key → heuristic routing (fail-soft). (The PM-assistant LLM proposers degrade to
+  // heuristic until wired to the per-org key — follow-up. The agent-execution key + tee is 3.5-A.2b.)
+  const coordinationLlmEnabled = process.env.TASCA_LLM === 'on';
+  if (coordinationLlmEnabled) {
+    logger.info?.('coordination LLM enabled (BYOK — per-org vault key)', {
+      model: process.env.TASCA_LLM_MODEL ?? 'claude-haiku-4-5-20251001',
+    });
   }
 
   // Human OAuth login (GitHub + Google). Feature flag OFF by default: only when
@@ -513,10 +500,11 @@ async function main(): Promise<void> {
     // PM-assistant (slice W3-S1): advisory proposals. OFF by default (off-state first, per the
     // design); set TASCA_PM_ASSISTANT=on to enable proposal generation.
     ...(process.env.TASCA_PM_ASSISTANT === 'on' ? { pmAssistantEnabled: true } : {}),
-    // LLM ports (slice: LLM wiring) — the SAME classifier wires the routing engine + the triage
-    // proposer; the decomposer wires the decomposition proposer. Absent → heuristic fallback.
-    ...(llmClassifier ? { classifier: llmClassifier } : {}),
-    ...(llmDecomposer ? { decomposer: llmDecomposer } : {}),
+    // Coordination LLM is BYOK (slice 3.5-A.2a): when enabled + the vault master key is present, the
+    // factory builds a PER-ORG tier classifier that resolves each org's OWN vault key per task (no
+    // server key). Disabled / no key → heuristic routing. (PM-assistant LLM proposers degrade to
+    // heuristic until wired to the per-org key — follow-up.)
+    coordinationLlm: { enabled: coordinationLlmEnabled, model: process.env.TASCA_LLM_MODEL ?? 'claude-haiku-4-5-20251001' },
     // BYOK vendor credentials (slice 3.5-A): the master key lives in the server env (NOT the DB);
     // absent → the write surface 503s. Live validate-on-input probes the vendor before storing.
     vendorCredential: { masterKey: loadMasterKey(), validator: liveVendorValidator() },
