@@ -1,13 +1,19 @@
-// Connections (read-only). Per-platform health + 24h webhook delivery counters
-// from GET /api/connections. Repair / manage controls render visible-but-disabled.
-// Counters are real (from the webhook ledger); a platform with no traffic shows
-// honest zeros and "—" for last-received.
+// Connections. Per-platform health + 24h webhook delivery counters from GET /api/connections.
+// Connect-a-workspace (slice W4-S3) is a live admin+ control that begins the GitHub App install
+// (GET /api/connect/github — a redirect-out, not an in-page write). Per-card Manage / Repair stay
+// gated (they need disconnect/re-auth backends — a follow-up). Counters are real (webhook ledger).
 
-import { getConnections } from '../api';
+import { getConnections, canManageActiveOrg, connectGitHub } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, PLATFORM_LABEL, esc, roControl, RO_GATE_SETUP } from '../ui';
+import { I, PLATFORM_LABEL, esc, roControl, RO_GATE_SETUP, RO_GATE_ADMIN_CONNECT } from '../ui';
 import type { ConnectionPlatform } from '../contract';
+
+/** The "Connect GitHub" control — live for admin+, otherwise disabled with the honest reason. */
+function connectControl(canManage: boolean): string {
+  if (!canManage) return roControl('Connect GitHub', { icon: I.plus, cls: 'btn-add', gate: RO_GATE_ADMIN_CONNECT });
+  return `<button class="btn-add conn-connect" type="button" data-act="connect-github" aria-label="Connect a GitHub workspace">${I.plus} Connect GitHub</button>`;
+}
 
 const HEALTH_CLASS: Record<ConnectionPlatform['health'], string> = {
   healthy: 'ok',
@@ -56,10 +62,10 @@ function card(c: ConnectionPlatform): string {
 }
 
 export async function loadConnections(): Promise<LoadResult> {
-  const res = await getConnections();
+  const [res, canManage] = await Promise.all([getConnections(), canManageActiveOrg()]);
   return fromResult(res, (data) => {
     const platforms = data.platforms ?? [];
-    const head = `<div class="roster-head"><div><h1>Connections</h1><div class="sub">Platform integrations and their delivery health</div></div></div>`;
+    const head = `<div class="roster-head"><div><h1>Connections</h1><div class="sub">Platform integrations and their delivery health</div></div>${connectControl(canManage)}</div>`;
 
     if (!platforms.length) {
       return {
@@ -68,7 +74,7 @@ export async function loadConnections(): Promise<LoadResult> {
           head +
           empty(
             'No connections yet',
-            'Connect Shortcut, GitHub or Linear to deploy your agents into the tools your team already uses.',
+            'Connect GitHub to deploy your agents into the tools your team already uses.',
             I.plug
           ),
       };
@@ -78,4 +84,18 @@ export async function loadConnections(): Promise<LoadResult> {
       html: `${head}<div class="conn-section"><div class="conngrid">${platforms.map(card).join('')}</div></div>`,
     };
   });
+}
+
+/** Wire the live connect control. Connect is a NAVIGATION (redirect to GitHub), not a reconciling
+ *  write — show a brief pending state, then leave the app; the Setup URL returns the user. */
+export function wireConnections(el: HTMLElement): void {
+  el.querySelectorAll<HTMLButtonElement>('[data-act="connect-github"]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      if (btn.dataset.busy === '1') return;
+      btn.dataset.busy = '1';
+      btn.disabled = true;
+      btn.textContent = 'Connecting…';
+      connectGitHub();
+    })
+  );
 }

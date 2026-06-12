@@ -172,3 +172,30 @@ export interface StandupSummary {
   queued: number;
   total: number;
 }
+
+// ── org roster + role (slice W4-S3: self-serve connect + hire) ─────────────────
+/** Org roles, ordered least→most privileged. manage-connections / manage-roster = admin+. */
+export type OrgRole = 'viewer' | 'member' | 'admin' | 'owner';
+
+/** One of the caller's orgs (GET /api/orgs) — carries the caller's role + which is active. */
+export interface OrgSummary {
+  id: string;
+  name: string;
+  role: OrgRole;
+  active: boolean;
+}
+
+export interface OrgsResponse {
+  orgs: OrgSummary[];
+}
+
+/** An agent hired into the active org (GET /api/orgs/agents). */
+export interface HiredAgent {
+  agentId: string;
+  name: string;
+  status: 'active' | 'paused' | 'retired';
+}
+
+export interface HiredAgentsResponse {
+  agents: HiredAgent[];
+}

@@ -141,6 +141,10 @@ export const RO_GATE_PROVISION = 'Agent provisioning is operator-run today';
 /** Connecting/repairing a platform involves an OAuth / App-install step run by an
  *  operator today; the in-app setup flow is not enabled yet. */
 export const RO_GATE_SETUP = 'Platform setup is operator-run today';
+/** Admin-gated self-serve controls (slice W4-S3): a non-admin sees the control disabled with the
+ *  honest reason (the server enforces the same gate — these are UX, not the security boundary). */
+export const RO_GATE_ADMIN_CONNECT = 'Admin role required to connect a workspace';
+export const RO_GATE_ADMIN_ROSTER = 'Admin role required to manage the roster';
 
 /** Render a mutating control in the read-only console: visible-but-disabled, with a
  *  consistent class hook (`.ro-ctl` + `data-ro`) and an honest reason surfaced to
