@@ -1,8 +1,8 @@
-# Tasca — Execution Roadmap v2 (BYOK + True Multi-Tenancy)
+# Tasca — Execution Roadmap v2 (BYOK + True Multi-Tenancy) — *HOSTED-TIER SPEC*
 
-> **Status:** decided 2026-06-12. The canonical **sequencing** source of truth for "100% PRD".
-> **Supersedes** the *ordering* in [`PRD-Completion-Gap-Analysis.md`](PRD-Completion-Gap-Analysis.md) (#259) — that doc remains the **engine definition-of-done** (section-by-section PRD + design coverage). This doc re-orders what's left around two locked architecture decisions and inserts a new milestone (**Wave 3.5**) *before* platform breadth.
-> **Build nothing from this doc until reviewed.** Each slice carries a definition-of-done, dependency order, and the standing org-scoped / role-gated / fail-closed requirements.
+> **⚠️ SUPERSEDED for sequencing by [`Execution-Roadmap-v3-OSS.md`](Execution-Roadmap-v3-OSS.md) (2026-06-12).** The product ships **single-tenant OSS first** (v3); the multi-tenant work in this doc is **deferred to the hosted / SaaS tier** and **quarantined**. **This doc is now the SPEC for that deferred multi-tenant tier** — read it for the multi-org / cross-tenant / vanity-URL / custodial-key / billing / sandbox-as-gate surface when the hosted tier is built. Do not build single-tenant OSS work from here; use v3.
+>
+> *(Original status, retained for context:)* decided 2026-06-12; re-ordered around the BYOK + true-multi-tenancy decisions; #259 remains the engine definition-of-done.
 
 ---
 
