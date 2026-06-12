@@ -30,7 +30,7 @@ The work to make an org self-sufficient (identity/roles → keys → agents → 
 
 | # | Decision | Detail |
 |---|----------|--------|
-| **D4** | **Org identity** = name + slug + path-based vanity URL. | `name` (display, editable) · `slug` (URL-safe, **derived** from name, **unique** org-wide) · vanity `app.tasca.dev/o/<slug>` via **path routing, NOT subdomain**. Slug collisions resolved deterministically (slugify + numeric suffix on conflict). |
+| **D4** | **Org identity** = name + slug + path-based vanity URL. | `name` (display, editable) · `slug` **auto-generated from the name at create, NON-editable** (no rename path — generation must be right first time) · vanity `app.tasca.dev/o/<slug>` via **path routing, NOT subdomain**. Slug is URL-routing, so generation owns **uniqueness** (disambiguator suffix on name collision) + **reserved-word avoidance** (`api`, `app`, `admin`, `www`, `o`, `auth`, …). |
 | **D5** | **Three roles** (capability matrix below). | First registrant = **owner-admin**. **Multiple owner-admins** allowed; any can delete the org or promote others to owner-admin. |
 | **D6** | **Agent creation scope** = name + vendor/model + tier/capability. | **No** system-prompt / persona authoring yet. The chosen model is **pinned at spawn** (config == runtime — folds in #3). Creatable by **User and above** (agents are work). |
 | **D7** | **Auth = OAuth-only** (GitHub/Google). **No** email/password, **no** magic-link. | Audience is developers (GitHub login is near-universal). Invites bridge the email↔OAuth-identity gap via a **signed single-use token** (possession of the link = authorization), **not** email matching — invited email and OAuth email need not match. Leave room for a future magic-link provider (non-dev members) but **do not build it now**. |
@@ -84,20 +84,20 @@ The work to make an org self-sufficient (identity/roles → keys → agents → 
 
 **Scope:** an **admin+** (per the matrix; Users **cannot**) inputs a vendor key (Anthropic first; vendor-parameterized for OpenAI). Stored **encrypted at rest, per-org**. Decrypted and **injected per-task** into three consumers: agent execution, the coordination classifier, the metering tee.
 
-**Encryption-at-rest:** **AES-256-GCM envelope.** Server-held master key (`TASCA_SECRET_STORE_KEY`, already in the deploy spec) is the KEK; each org vendor key is sealed (store IV + auth tag). Plaintext exists **only** transiently at injection — never persisted, never logged, never echoed. **Custodial BYOK, not zero-knowledge** (the server must decrypt to inject into runs); stores only ciphertext. New table `org_vendor_credential` (org-scoped, in `TENANT_TABLES`): `{org_id, vendor, ciphertext, iv, auth_tag, key_fingerprint, status, created_by, created_at, last_validated_at}`; the UI shows only the **fingerprint**.
+**Encryption-at-rest (locked):** **AEAD only — AES-256-GCM or libsodium secretbox — no homegrown crypto.** The master decryption key lives in **SERVER SECRET (env / KMS), NEVER in the DB** (`TASCA_SECRET_STORE_KEY`) — so a **DB-only breach cannot expose vendor keys** (the ciphertext is useless without the env-held master key). Each org vendor key is sealed (store IV/nonce + auth tag). Plaintext exists **only** transiently at injection — never persisted, never logged, never echoed, **never returned by any API** (write-only from the UI: set/replace/delete, never read back). **Custodial BYOK, not zero-knowledge** (the server must decrypt to inject into runs); stores only ciphertext. **Vendor-agnostic schema** (provider enum + credential table + a provider injection interface); **Anthropic-only live implementation** — OpenAI later = *implement a provider*, not migrate the schema. New table `org_vendor_credential` (org-scoped, in `TENANT_TABLES`): `{org_id, provider, ciphertext, nonce, auth_tag, key_fingerprint, status, created_by, created_at, last_validated_at}`; the UI shows only the **fingerprint**.
 
 **Validate-on-input:** a **cheap live vendor call** before save (authenticates + model access); reject with a clear, non-leaky message; scheduled re-validation stamps `last_validated_at` so a silent revoke surfaces.
 
 **Mid-task rotation / revocation:** **rotation** → in-flight runs finish on the key injected at spawn; new runs use the new key (no mid-run swap). **Revocation / a key failing mid-run** → the run fails-soft to `needs_attention` "vendor credential rejected" (NOT a breaker burn); the classifier degrades to heuristic + the loud `onClassifierError` log (shipped #276). **No key at dispatch** → fail closed: `needs_attention` "no vendor key configured" (no breaker, no crash) — and per the UX-honesty rule, surfaced in-app.
 
-**Architecture change forced:** the coordination LLM client becomes **per-org**, resolved per task from the org's decrypted key (small per-org client cache, bust on rotation). `estimateTier`'s classifier + PM proposers get the org-keyed client; absent a key → none (heuristic path).
+**Architecture change forced:** the coordination LLM client becomes **per-org**, resolved per task from the org's decrypted key. **Decrypted-key cache: ~60s TTL per org** (rotation takes effect within the TTL window — acceptable). `estimateTier`'s classifier + PM proposers get the org-keyed client; absent a key → none (heuristic path).
 
 **Definition of done:**
-- [ ] `org_vendor_credential` table (org-scoped, required-`orgId`, in `TENANT_TABLES`, CI org-scoping guard updated).
-- [ ] Admin+ create/replace/delete key endpoints, CSRF, **server-side role gate** (Users blocked).
-- [ ] AES-256-GCM envelope under `TASCA_SECRET_STORE_KEY`; plaintext never persisted/logged/echoed; fingerprint-only display.
-- [ ] Validate-on-input + scheduled re-validation.
-- [ ] Per-org LLM client (classifier + proposers) wired to the org key; **server key path deleted** (proxy master-key injection + boot-time classifier client removed).
+- [ ] `org_vendor_credential` table (org-scoped, required-`orgId`, in `TENANT_TABLES`, CI org-scoping guard updated); **vendor-agnostic** (provider enum + injection interface, Anthropic live).
+- [ ] Admin+ create/replace/delete key endpoints, CSRF, **server-side role gate** (Users blocked); **WRITE-ONLY — no endpoint ever returns the key** (set/replace/delete; reads return only status + fingerprint).
+- [ ] **AEAD** (AES-256-GCM / libsodium secretbox, **no homegrown crypto**); master key in **server env (`TASCA_SECRET_STORE_KEY`), never the DB** → a DB-only breach can't expose keys; plaintext never persisted/logged/echoed/returned; fingerprint-only display.
+- [ ] Validate-on-input (live provider probe) + scheduled re-validation.
+- [ ] Per-org LLM client (classifier + proposers) wired to the org key, **~60s decrypted-key cache**; **server key path deleted** (proxy master-key injection + boot-time classifier client removed).
 - [ ] Rotation/revocation/no-key policies implemented + **tested** (no-key → fail-closed; revoked-mid-run → reason, no breaker).
 - [ ] Settings → "Vendor keys" UI: input + status + fingerprint, admin-gated with honest non-admin disabled state.
 - [ ] Adversarial security panel: secret hygiene (no plaintext leak path), org isolation (A can never read/use B's key), fail-closed under every error.
@@ -111,8 +111,8 @@ Redefines org membership/RBAC from 5a/5b's owner/admin/member to the **owner-adm
 **Scope:** org **name** (editable) + **slug** (derived, unique, collision-suffixed) + **path-based** `/o/<slug>` routing (the app + worker resolve the org from the path, then **verify membership fail-closed with no existence leak**). The 3-role capability matrix, **multiple owner-admins**, promote/demote, last-owner-admin protection (an org can't be left with zero owner-admins). The **User-can-CRUD-agents** boundary wired into the agent + task endpoints' gates.
 
 **Definition of done:**
-- [ ] Role model migrated to owner-admin / admin / user; existing memberships mapped (owner→owner-admin, admin→admin, member→user) with the **new** capability split enforced server-side.
-- [ ] Org `slug` (unique, derived, collision-handled) + `name`; `/o/<slug>` path routing resolves the org and **verifies membership fail-closed (404 on non-member / unknown slug — no existence leak)**.
+- [ ] Role model migrated to owner-admin / admin / user; **a migration step maps existing memberships** (owner→owner-admin, admin→admin, **member→User** — which *gains* agent + task CRUD, a deliberate capability increase) with the **new** split enforced server-side.
+- [ ] Org `slug` **auto-generated from name at create, non-editable** (no rename path); generation owns **uniqueness** (disambiguator suffix) + **reserved-word avoidance** (`api`/`app`/`admin`/`www`/`o`/`auth`/…). `/o/<slug>` path routing resolves the org and **verifies membership fail-closed (404 on non-member / unknown slug — no existence leak)**.
 - [ ] Every mutating endpoint re-gated to the matrix (governance = admin+, work = user+); **gate on the endpoint, not the button**; CSRF.
 - [ ] Multiple owner-admins; promote/demote; **last-owner-admin guard** (cannot remove/demote the final owner-admin).
 - [ ] Settings → "Organization" UI (name/slug/vanity URL) + role management, with honest per-role disabled states.
@@ -168,7 +168,7 @@ Invite a human teammate **by email** → they join the org with a **role**, auth
 - [ ] Adversarial panel: token integrity (signature + single-use + expiry, no forge/replay), org isolation (invite only into your own org; no self-escalation; cross-tenant accept fail-closed), and the email-≠-OAuth trust choice is sound (link possession is the authorization).
 
 **NEW INFRA DEPENDENCY — transactional email (the one new external service):**
-- **Provider:** flag one of **Resend / Postmark / SES** (recommend at design time; Resend or Postmark for low-friction dev-grade transactional). This is the only new external service Wave 3.5 adds.
+- **Provider: Resend** (locked) for transactional invites. The only new external service Wave 3.5 adds.
 - **Key custody:** the email API key is **server-level platform infra**, **NOT** org BYOK — invites are **Tasca's** email, not the org's. It lives in the server secret store (deploy env / KMS), distinct from `org_vendor_credential`.
 - **Sending domain:** invites come from a `tasca.dev` address (e.g. `invites@tasca.dev`); the sending domain needs **SPF + DKIM** (and DMARC) configured so invites land, not in spam. Infra/DNS task, surfaced for the maintainer.
 - **Failure handling:** an email-send failure must not strand the invite — the token is persisted first, so a failed send is retryable / the link is re-issuable; surface "couldn't send — retry" honestly.
@@ -269,11 +269,13 @@ Engine DoD = [#259 gap analysis Part F](PRD-Completion-Gap-Analysis.md). This ro
 
 ---
 
-## 7. Open items to confirm before building 3.5
+## 7. Resolved decisions (locked 2026-06-12, post-review)
 
-1. **Custodial-BYOK threat model** — confirm "server can decrypt to inject, stores only ciphertext, never logs plaintext" is acceptable for the enterprise audience (vs zero-knowledge, which precludes server-side injection). Recommend **yes**, document in an ADR.
-2. **Slug policy** — derivation (slugify name), reserved slugs (`o`, `api`, `auth`, …), rename behavior (does changing the name change the slug? recommend: slug is set at create, editable separately, old slug 404s or 301s — confirm).
-3. **Role migration** — owner→owner-admin, admin→admin, member→user is the proposed mapping; confirm the **member→user gains agent + task CRUD** (a capability *increase* for existing members) is intended.
-4. **Per-org LLM client cache** eviction on rotation — recommend short TTL + explicit bust on key replace.
-5. **Vendor abstraction depth** — build 3.5-A vendor-parameterized (Anthropic now) so OpenAI is config, not a rewrite.
-6. **Transactional email provider + domain** (3.5-D) — pick **Resend / Postmark / SES**; confirm the sending address (`invites@tasca.dev`?) and that **SPF/DKIM/DMARC** on the sending domain are in scope (DNS task). The key is **server-level** infra, not org BYOK. Recommend Resend or Postmark for dev-grade transactional.
+1. **Custody** — custodial AEAD: **AES-256-GCM / libsodium secretbox, no homegrown crypto.** Master key in **server env, NEVER the DB** (a DB-only breach can't expose vendor keys). Keys are **write-only** from the API (set/replace/delete, never read back). → 3.5-A.
+2. **Vendor abstraction** — **vendor-agnostic schema** (provider enum + credential table + injection interface), **Anthropic-only live**; OpenAI later = *implement a provider*, not a schema migration. → 3.5-A.
+3. **Slug** — **auto-generated from name, non-editable** (no rename path; right first time). Generation owns uniqueness (disambiguator suffix) + reserved-word avoidance (`api`/`app`/`admin`/`www`/`o`/`auth`/…). → 3.5-B.
+4. **Role migration** — existing 5b **`member` → `User`** (gains agent-CRUD — a deliberate increase); a migration step maps all existing memberships. → 3.5-B.
+5. **Key cache** — per-org decrypted key cached **~60s TTL**; rotation takes effect within the window (acceptable). → 3.5-A.
+6. **Email** — **Resend** for transactional invites; **server-level key (platform infra, not org BYOK)**; sending from a `tasca.dev` address; **SPF/DKIM/DMARC** on the domain is an in-scope DNS task; token persisted before send, send-failure retryable. → 3.5-D.
+
+> **Build order confirmed:** ship this doc → **start 3.5-A** (BYOK credential mgmt, keystone). The 3.5-A security panel is mandatory and must prove: key never logged, never returned by any API (write-only), encrypted at rest under a server-held (not DB) master key, and the injection path doesn't leak the key into the agent subprocess env in a readable form.
