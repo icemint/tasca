@@ -307,12 +307,12 @@ describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () 
     return { port, envOf: () => captured };
   }
 
-  it('omits inherited worker secrets but keeps PATH; DIRECT mode (no proxy) passes the real Anthropic key', () => {
+  it('omits inherited worker secrets but keeps PATH; with NO proxy base url, NO server key is injected (BYOK — the server-key path is gone)', () => {
     setEnv('GITHUB_APP_PRIVATE_KEY', '-----BEGIN PRIVATE KEY-----');
     setEnv('DATABASE_URL', 'postgres://secret@db/app');
     setEnv('PATH', '/usr/bin:/bin');
-    setEnv('ANTHROPIC_API_KEY', 'sk-ant-xxx');
-    setEnv('ANTHROPIC_BASE_URL', undefined); // no proxy → direct mode (dev/no-queue)
+    setEnv('ANTHROPIC_API_KEY', 'sk-ant-SERVER-MUST-NOT-LEAK');
+    setEnv('ANTHROPIC_BASE_URL', undefined); // no proxy base url
 
     const { port, envOf } = captureEnv();
     port.spawnAgent({ id: 'a', cwd: '/wt', command: 'echo hi' });
@@ -321,7 +321,10 @@ describe('spawnAgent — env allowlist (no worker secrets reach the agent)', () 
     expect(env.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.PATH).toBe('/usr/bin:/bin'); // non-secret essentials still flow
-    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-xxx'); // direct mode: the real key passes (legacy)
+    // BYOK: the agent ALWAYS runs in proxy mode. With no base url overlaid there is no proxy, so NO
+    // key is injected — the server-key passthrough was deleted (there is no server Anthropic key).
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(JSON.stringify(env)).not.toContain('sk-ant-SERVER-MUST-NOT-LEAK');
   });
 
   it('PROXY mode: with ANTHROPIC_BASE_URL set, the agent gets a PLACEHOLDER key — the real key NEVER flows', () => {

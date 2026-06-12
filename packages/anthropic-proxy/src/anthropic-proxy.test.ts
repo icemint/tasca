@@ -75,6 +75,25 @@ async function startProxyWithSink(upstreamOrigin: string): Promise<{ socketPath:
   return { socketPath, records };
 }
 
+/** Start a TCP-listen proxy on an OS-assigned loopback port (slice 3.5-A.2b); returns the bound port +
+ *  the captured usage records (when a sink/usageContext is wired). */
+async function startTcpProxy(
+  upstreamOrigin: string,
+  opts?: { usageContext?: { orgId: string; taskId: string } }
+): Promise<{ port: number; records: Array<AgentCallUsage & { orgId: string; taskId: string }> }> {
+  const records: Array<AgentCallUsage & { orgId: string; taskId: string }> = [];
+  const handle = await serveAnthropicProxy({
+    tcpPort: 0,
+    tcpHost: '127.0.0.1',
+    apiKey: MASTER_KEY,
+    upstreamOrigin,
+    usageSink: { record: (e) => records.push(e) },
+    ...(opts?.usageContext ? { usageContext: opts.usageContext } : {}),
+  });
+  proxies.push(handle);
+  return { port: handle.address!.port, records };
+}
+
 const tick = (ms = 25): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Make an HTTP request to a unix socket (the proxy) — what the bridge pipes to. */
@@ -559,5 +578,63 @@ describe('agent-call metering (S4b) — attribution via the bridge + usage tee',
     expect(out.status).toBe(429); // the error is forwarded faithfully
     await tick();
     expect(records).toHaveLength(0); // …but a 4xx/5xx carries no usage → nothing recorded
+  });
+});
+
+// Slice 3.5-A.2b: TCP-listen mode + BAKED usage context — the in-process per-task proxy topology. The
+// worker starts an ephemeral proxy on a loopback port (port 0 → OS-assigned), baked with the org key +
+// {org,task}, and points THIS task's agent at it via ANTHROPIC_BASE_URL. No bridge, no wire headers.
+describe('TCP-listen mode + baked usage context (in-process per-task proxy)', () => {
+  it('exactly one of socketPath / tcpPort must be set — neither and both both throw', async () => {
+    await expect(serveAnthropicProxy({ apiKey: MASTER_KEY })).rejects.toThrow(/exactly one/);
+    await expect(serveAnthropicProxy({ apiKey: MASTER_KEY, socketPath: sockPath(), tcpPort: 0 })).rejects.toThrow(/exactly one/);
+  });
+
+  it('serves over a loopback TCP port, reports the bound port, injects the key, and strips the agents x-api-key', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const { port } = await startTcpProxy(up.origin);
+    expect(port).toBeGreaterThan(0); // the OS-assigned port was surfaced on the handle
+
+    const out = await reqViaTcp(port, {
+      headers: { 'x-api-key': 'AGENT-FORGED', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude' }),
+    });
+    expect(out.status).toBe(200);
+    expect(JSON.parse(out.body)).toEqual({ ok: true });
+    // The worker key won upstream; the agent's forged key was stripped.
+    expect(up.received[0]!.headers['x-api-key']).toBe(MASTER_KEY);
+    expect(JSON.parse(up.received[0]!.body)).toEqual({ model: 'claude' });
+  });
+
+  it('meters with the BAKED {org,task} even when NO x-tasca-* headers are present', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_BK', model: 'claude-haiku-4-5', usage: { input_tokens: 7, output_tokens: 13 } }));
+    });
+    const { port, records } = await startTcpProxy(up.origin, { usageContext: { orgId: 'org-BAKED', taskId: 'task-BAKED' } });
+
+    const out = await reqViaTcp(port, { body: '{}' }); // no attribution headers — the per-task proxy needs none
+    expect(out.status).toBe(200);
+    await tick();
+    expect(records).toEqual([
+      { orgId: 'org-BAKED', taskId: 'task-BAKED', model: 'claude-haiku-4-5', inputTokens: 7, outputTokens: 13, idempotencyKey: 'msg_BK' },
+    ]);
+  });
+
+  it('a baked context IGNORES forged x-tasca-* headers — attribution cannot be spoofed off the wire', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_BK2', model: 'm', usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+    const { port, records } = await startTcpProxy(up.origin, { usageContext: { orgId: 'org-REAL', taskId: 'task-REAL' } });
+
+    await reqViaTcp(port, { headers: { 'x-tasca-org-id': 'org-VICTIM', 'x-tasca-task-id': 'task-FORGED' }, body: '{}' });
+    await tick();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.orgId).toBe('org-REAL'); // the baked context, not the forged header
+    expect(records[0]!.taskId).toBe('task-REAL');
   });
 });

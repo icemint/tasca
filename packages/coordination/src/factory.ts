@@ -12,6 +12,7 @@ import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
 import { DefaultPmProposer, type LlmClassifierPort } from '@tasca/routing';
 import { AnthropicChat, AnthropicClassifier } from '@tasca/llm';
+import { serveAnthropicProxy, type AgentUsageSink } from '@tasca/anthropic-proxy';
 import { makeUsageSink } from './usage-context';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
@@ -189,6 +190,49 @@ export function createCoordination(
         }
       : undefined;
 
+  // BYOK agent execution (slice 3.5-A.2b): the in-process agent runs on the ORG'S OWN vault key — never a
+  // server key (there is none). The orchestration loop, before each spawn, resolves the org key (null →
+  // fail closed, no spawn) and starts an EPHEMERAL per-task proxy baked with that key + the {org,task} for
+  // metering; the agent reaches Anthropic only through that proxy (its ANTHROPIC_BASE_URL), so the real key
+  // never enters the prompt-injectable agent's env. Built only when the resolver (master key) is present.
+  //  - agentVendorResolver: resolve the org's Anthropic vault key (null → no key configured).
+  //  - agentUsageSink: write each agent call as usage_event{source:'agent'}. Same fire-and-forget +
+  //    error-log shape as the coordination usage sink (a meter failure never breaks/delays the agent's
+  //    stream); CAS-idempotent on the Anthropic response id in the store.
+  //  - startAgentProxy: start a per-task loopback proxy (port 0 → OS-assigned) and return its base url +
+  //    a close() the loop calls in finally. A PER-TASK instance, not the shared bridge, so concurrent
+  //    in-process dispatches never race a shared setContext.
+  const agentUsageSink: AgentUsageSink = {
+    record(e): void {
+      void store
+        .recordUsage(e.orgId, {
+          taskId: e.taskId,
+          source: 'agent',
+          model: e.model,
+          inputTokens: e.inputTokens,
+          outputTokens: e.outputTokens,
+          idempotencyKey: e.idempotencyKey,
+        })
+        .catch((err: unknown) => input.logger?.error?.('anthropic-proxy: agent usage record failed', { err: String(err) }));
+    },
+  };
+  const agentVendorResolver = vendorResolver
+    ? (orgId: string): Promise<string | null> => vendorResolver.resolve(orgId, 'anthropic')
+    : undefined;
+  const startAgentProxy = vendorResolver
+    ? async (opts: { apiKey: string; usageContext: { orgId: string; taskId: string } }): Promise<{ baseUrl: string; close: () => Promise<void> }> => {
+        const handle = await serveAnthropicProxy({
+          tcpPort: 0,
+          tcpHost: '127.0.0.1',
+          apiKey: opts.apiKey,
+          usageContext: opts.usageContext,
+          usageSink: agentUsageSink,
+          ...(input.logger !== undefined ? { logger: input.logger } : {}),
+        });
+        return { baseUrl: `http://127.0.0.1:${handle.address!.port}`, close: () => handle.close() };
+      }
+    : undefined;
+
   const deps: CoordinationServerDeps = {
     store,
     claim,
@@ -277,6 +321,8 @@ export function createCoordination(
       : {}),
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(classifierFor ? { classifierFor } : {}),
+    ...(agentVendorResolver ? { agentVendorResolver } : {}),
+    ...(startAgentProxy ? { startAgentProxy } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),
     ...(dispatchQueue ? { dispatchQueue } : {}),
     ...(input.runnerWaitMs !== undefined ? { runnerWaitMs: input.runnerWaitMs } : {}),

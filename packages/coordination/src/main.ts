@@ -34,7 +34,6 @@ import {
 import { createExecution } from '@tasca/execution';
 import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
 import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
-import { serveAnthropicProxy, type AnthropicProxyHandle } from '@tasca/anthropic-proxy';
 import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
 import { parseInstallationEvent } from '@tasca/contracts';
@@ -234,9 +233,6 @@ async function main(): Promise<void> {
   // The credential broker server (worker side) — serves per-task scoped tokens to the
   // agent-runner over a unix socket, keeping the App master key in this process.
   let brokerHandle: BrokerServerHandle | undefined;
-  // The Anthropic credential proxy (worker side) — forwards the agent's model calls to
-  // api.anthropic.com, injecting the master key here so it never crosses to the runner.
-  let anthropicProxyHandle: AnthropicProxyHandle | undefined;
   // Default content source derives a TaskInput from the event id; with the App
   // env present we fetch the REAL issue title/body for github events (so the
   // agent prompt is the actual story), delegating non-github to the default.
@@ -339,52 +335,9 @@ async function main(): Promise<void> {
     logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
   }
 
-  // Anthropic credential proxy (worker side) — independent of GitHub. Started only when
-  // BOTH the key and the socket path are present; the master key is captured in the proxy
-  // closure and injected on the upstream leg, so the runner/agent never receives it.
-  const anthropicSocket = process.env.TASCA_ANTHROPIC_PROXY_SOCKET;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  if (anthropicSocket && anthropicKey) {
-    try {
-      // 0o660 (group-shared runner connects, no world) — same boundary as the broker.
-      const socketMode = process.env.TASCA_ANTHROPIC_PROXY_SOCKET_MODE
-        ? parseInt(process.env.TASCA_ANTHROPIC_PROXY_SOCKET_MODE, 8)
-        : 0o660;
-      // Agent-call metering (slice W3-S4b): the proxy tees each agent response, extracts the usage, and
-      // reports it HERE with the {org,task} the runner's bridge stamped onto the request. Recorded as
-      // source='agent', CAS-idempotent on the Anthropic response id (same dedupe as the coordination
-      // path). Org/task are EXPLICIT in the call (from the verified header), not ambient — no ALS here.
-      // Fire-and-forget: a record failure is logged, never breaks or delays the agent's stream.
-      const agentUsageStore = new PgCoordinationStore(pool);
-      anthropicProxyHandle = await serveAnthropicProxy({
-        socketPath: anthropicSocket,
-        apiKey: anthropicKey,
-        logger,
-        socketMode,
-        usageSink: {
-          record(e): void {
-            void agentUsageStore
-              .recordUsage(e.orgId, {
-                taskId: e.taskId,
-                source: 'agent',
-                model: e.model,
-                inputTokens: e.inputTokens,
-                outputTokens: e.outputTokens,
-                idempotencyKey: e.idempotencyKey,
-              })
-              .catch((err: unknown) => logger.error('anthropic-proxy: agent usage record failed', { err: String(err) }));
-          },
-        },
-      });
-      logger.info?.('anthropic credential proxy serving', { socketPath: anthropicSocket });
-    } catch (err) {
-      // Loud but non-fatal: the runner's agent calls will fail to auth until fixed, but
-      // the rest of the worker keeps running.
-      logger.error('anthropic credential proxy failed to start — agent model calls will fail', {
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // Agent-call metering is now PER-TASK in orchestrate (BYOK, slice 3.5-A.2b): the in-process spawn
+  // resolves the org's vault key and starts an ephemeral per-task proxy for the run — there is no
+  // server-key boot proxy (the queue/runner topology that one served is not the prod path).
 
   // Coordination LLM — BYOK (slice 3.5-A.2a). The routing tier CLASSIFIER now runs on EACH ORG'S OWN
   // vault key (the instance's, single-tenant), resolved per task by the factory from the credential
@@ -465,16 +418,6 @@ async function main(): Promise<void> {
     });
   }
 
-  // Metering visibility (slice): in IN-PROCESS dispatch (not queue) the worker spawns the agent itself
-  // with the real ANTHROPIC_API_KEY — there is no metering proxy in this path, so agent model-call spend
-  // is UNMETERED. Warn loudly so direct-mode can't hide (it produced PRs while writing zero agent usage).
-  if (process.env.TASCA_DISPATCH_MODE !== 'queue' && anthropicKey) {
-    logger.error(
-      'agent model calls are UNMETERED — in-process dispatch runs the agent with the key directly; ' +
-        'the metering proxy is wired only in queue mode (TASCA_DISPATCH_MODE=queue + a runner) or via in-process proxy wiring'
-    );
-  }
-
   const coordination = createCoordination({
     pool,
     execution,
@@ -553,7 +496,7 @@ async function main(): Promise<void> {
         // finalize must not race a closing pool (use-after-close). Only then tear down
         // the pool + the rest.
         await (coordination.reaper?.stop() ?? Promise.resolve());
-        await Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve(), anthropicProxyHandle?.close() ?? Promise.resolve()]);
+        await Promise.allSettled([pool.end(), execution.close(), brokerHandle?.close() ?? Promise.resolve()]);
         process.exit(0);
       })();
     });
