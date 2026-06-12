@@ -55,6 +55,19 @@ async function main(): Promise<void> {
       console.error('agent-runner: anthropic bridge failed to start — agent model calls will fail', { err: String(err) });
     }
   }
+  // UNMETERED check on the ACTUAL state (not the else-branch): the agent runs direct whenever no
+  // bridge is up AND a real key is present — covering BOTH "no socket configured" AND "socket set but
+  // the bridge threw" (the catch above logs the error but never sets ANTHROPIC_BASE_URL, so the agent
+  // falls back to the key directly). Either way the metering tee is bypassed — warn loudly.
+  if (!anthropicBridge && process.env.ANTHROPIC_API_KEY) {
+    console.error(
+      'agent-runner: agent model calls are UNMETERED — ' +
+        (anthropicProxySocket
+          ? 'the proxy socket is set but the bridge failed to start'
+          : 'TASCA_ANTHROPIC_PROXY_SOCKET is not set') +
+        '; the agent uses ANTHROPIC_API_KEY directly (no metering proxy).'
+    );
+  }
 
   // The execution toolchain (PTY agent spawn, git, gh) — the SAME ExecutionPort the
   // worker uses, so spawnAgent's env scrub (#230) carries over to the runner.

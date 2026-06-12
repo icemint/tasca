@@ -281,6 +281,12 @@ export interface CoordinationStore {
    */
   failNoCapacity(orgId: string, taskId: string, reason: string): Promise<boolean>;
 
+  /** Retire a task to `needs_attention` because the agent ran but produced NO committed changes — a
+   *  DETERMINISTIC no-op (re-running yields the same), so it must NOT drive the breaker or re-route.
+   *  Same atomic guard as `failNoCapacity` (executing/claimed → needs_attention, reason in last_error,
+   *  failure_count untouched). Returns true if it transitioned. */
+  retireNoChanges(orgId: string, taskId: string, reason: string): Promise<boolean>;
+
   /**
    * Retire a still-`routable` task to `needs_attention` with a human-readable reason, WITHOUT
    * touching the breaker (slice 5d routing fail-close: "no agents hired" / "agent X not hired").
@@ -1162,6 +1168,19 @@ export class PgCoordinationStore implements CoordinationStore {
     // → needs_attention WITHOUT touching failure_count (infra-unavailability, not an agent
     // failure). Records the reason in last_error. Guarded to a still-dispatched status so a
     // concurrent operator cancel/reassign (which already moved the task) wins and this no-ops.
+    const res = await this.db.query(
+      `UPDATE task
+          SET status = 'needs_attention', last_error = $3, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status IN ('executing','claimed')`,
+      [orgId, taskId, reason]
+    );
+    return res.rowCount === 1;
+  }
+
+  async retireNoChanges(orgId: string, taskId: string, reason: string): Promise<boolean> {
+    // → needs_attention WITHOUT touching failure_count: a no-changes run is deterministic (the agent
+    // already decided there is nothing to do), so retrying via the breaker just burns identical runs.
+    // Guarded to a still-dispatched status so a concurrent operator cancel/reassign wins and this no-ops.
     const res = await this.db.query(
       `UPDATE task
           SET status = 'needs_attention', last_error = $3, version = version + 1, updated_at = now()
