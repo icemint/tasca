@@ -1,8 +1,36 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { getAgents, getSession } from './api';
+import { getAgents, getSession, redirectIfAuthenticated } from './api';
 import { stubFetch, stubFetchReject } from './test-support';
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('redirectIfAuthenticated — the login page must not loop an already-authenticated user', () => {
+  it('redirects into the app (location.replace to home) when the session is authenticated', async () => {
+    stubFetch({ '/api/auth/me': { body: { authenticated: true, user: { id: 'u1', email: 'a@b.com', displayName: 'A', avatarUrl: null, provider: 'github' } } } });
+    const replace = vi.fn();
+    vi.stubGlobal('location', { replace, assign: vi.fn(), search: '' });
+    const did = await redirectIfAuthenticated('/roster');
+    expect(did).toBe(true);
+    expect(replace).toHaveBeenCalledWith('/roster'); // replace, not assign — login is not left in history
+  });
+
+  it('does NOT redirect when unauthenticated (stays on the login page)', async () => {
+    stubFetch({ '/api/auth/me': { body: { authenticated: false } } });
+    const replace = vi.fn();
+    vi.stubGlobal('location', { replace, assign: vi.fn(), search: '' });
+    const did = await redirectIfAuthenticated('/roster');
+    expect(did).toBe(false);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('does NOT redirect on a transient /api/auth/me error (no false bounce)', async () => {
+    stubFetch({ '/api/auth/me': { status: 503, body: {} } });
+    const replace = vi.fn();
+    vi.stubGlobal('location', { replace, assign: vi.fn(), search: '' });
+    expect(await redirectIfAuthenticated('/roster')).toBe(false);
+    expect(replace).not.toHaveBeenCalled();
+  });
+});
 
 describe('read-API client — honest result classification', () => {
   it('returns ok + parsed data on 200', async () => {
