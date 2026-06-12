@@ -55,6 +55,30 @@ The work to make an org self-sufficient (identity/roles → keys → agents → 
 
 > **Deployment-posture gate (honest constraint):** Wave 3.5 makes Tasca *self-serve* multi-tenant (orgs onboard themselves). Running **multiple untrusted orgs' agents on shared infra** is only safe behind the **W4-S1 per-agent UID + namespace sandbox** (the security capstone). Until W4-S1 lands, the safe bar stays **trusted / limited-tenant**. Wave 3.5 ≠ "open the public doors"; W4-S1 is that gate.
 
+### 1.3 Issue/board state model — PROJECTION, not sync (locked 2026-06-12)
+
+| # | Decision | Detail |
+|---|----------|--------|
+| **D8** | **The platform owns issue state; Tasca's board is a READ-ONLY PROJECTION** of (issue + linked PR + agent claim). | The agent's **only** state-affecting write is the **PR**, linked via **`Closes #N`**; the platform's native PR-merge→issue-close does the transition. Humans act in the platform (merge/close/reopen); Tasca **reflects** it. **No bidirectional sync, no echo suppression, no conflict resolution** — because Tasca never writes issue state. The board is a **viewer, not a controller**. |
+
+**Board columns are DERIVED** (computed from platform reality), not stored-and-synced:
+
+| Column | Derivation |
+|--------|-----------|
+| **New** | issue open, no claim, no linked PR |
+| **In progress** | issue open, agent claimed / linked PR open |
+| **In review** | issue open, linked PR ready for review |
+| **Done** | issue **closed** (PR merged → platform auto-closed) |
+| **Needs attention** | Tasca-internal **operational** state (agent failure / no-changes) — does **NOT** touch platform state |
+
+Tasca's richer operational states (`needs_attention`, breaker, etc.) layer **on top of** the platform's open/closed; they are **not** synced back.
+
+**The one required agent write — `Closes #N`.** The agent already opens PRs; it must include the closing reference so a merge auto-closes the issue. **Current state (confirmed 2026-06-12):** `orchestrate.ts`'s `openPr` call passes **no body** (`open-pr.ts` writes `--body ''`), so there is **no `Closes #N` today** — this is a small required change: derive the issue number from `externalStoryId` (`owner/repo#N`) and set the PR body to `Closes #N`. Tracked as a prerequisite of the projection/board work + P1.
+
+**Generalizes to ALL platforms.** Shortcut/Linear adapters follow the same principle — **project** native state, link work via native PR/branch mechanisms, **never** maintain a parallel state machine. This is **why the F1 Shortcut write-back question is less blocking than feared**: projecting (not syncing) shrinks the write-back surface to *"link the PR,"* not *"mirror state."*
+
+**FUTURE (deferred, not now):** *board-as-controller* (close/reopen/reassign **from** Tasca) would need limited **outbound** writes — explicitly deferred; build the projection/viewer first.
+
 ---
 
 ## 2. NEW MILESTONE — Wave 3.5: Tenant Self-Sufficiency
@@ -209,9 +233,10 @@ Agent **and** classifier run on the **org key** → `usage_event` per org via th
 
 > Top-to-bottom = build order. Each carries the standing org-scoped / role-gated / fail-closed discipline + the architect → slice → adversarial-panel → merge flow.
 
-### Phase P1 — Platform breadth
-- [ ] **W3-S2 Shortcut** — intake now; **write-back deferred** on the F1 token model (`identity.credential_ref` absorbs the resolution).
-- [ ] **W3-S3 Linear** — full adapter, flag-off, against the documented contract.
+### Phase P1 — Platform breadth (all adapters follow the **projection model, §1.3**)
+- [ ] **`Closes #N` on the agent's PR** (prerequisite) — set the PR body to `Closes #<issue>` (derived from `externalStoryId`) so a merge auto-closes the issue. Small change to the `openPr` call (no body today). The single agent state-write the projection model requires.
+- [ ] **W3-S2 Shortcut** — intake now; **write-back is just "link the PR"** under the projection model (not state-mirroring), so the F1 token concern shrinks; `identity.credential_ref` absorbs the resolution.
+- [ ] **W3-S3 Linear** — full adapter, flag-off, against the documented contract; **project native state, no parallel state machine.**
 
 ### Phase P2 — Money (on BYOK metering, 3.5-E)
 - [ ] **W3-S5 cost ceilings + budget alerts** — enforce per-org against the `usage_event` ledger.
