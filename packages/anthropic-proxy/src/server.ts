@@ -34,8 +34,16 @@ export interface AnthropicProxyLogger {
 }
 
 export interface AnthropicProxyOptions {
-  /** Unix socket path the worker listens on (shared with the runner via a volume). */
-  socketPath: string;
+  /** Unix socket path the worker listens on (shared with the runner via a volume). Exactly one of
+   *  `socketPath` / `tcpPort` must be set. */
+  socketPath?: string;
+  /** TCP port to listen on (loopback). Set to 0 to let the OS assign a free port (read it back from
+   *  the handle's `address.port`). Used by the in-process per-task proxy (slice 3.5-A.2b): the worker
+   *  starts an ephemeral proxy on 127.0.0.1 and points THIS task's agent at it via ANTHROPIC_BASE_URL.
+   *  Exactly one of `socketPath` / `tcpPort` must be set. */
+  tcpPort?: number;
+  /** TCP bind host. Default '127.0.0.1' (loopback only — never exposed off-host). */
+  tcpHost?: string;
   /** The master Anthropic API key — captured in this closure, never sent downstream. */
   apiKey: string;
   /** Upstream origin to forward to. Default 'https://api.anthropic.com'. (http:// is
@@ -51,10 +59,17 @@ export interface AnthropicProxyOptions {
    *  (stamped by the runner's bridge), the proxy tees the response to extract usage and reports it here.
    *  Absent → no agent metering (the response still streams normally). */
   usageSink?: AgentUsageSink;
+  /** BAKED usage attribution (slice 3.5-A.2b). When set (alongside usageSink), the proxy meters every
+   *  call to THIS {orgId, taskId} and IGNORES the per-request x-tasca-* headers — the per-task proxy
+   *  is dedicated to one task, so its attribution is fixed at construction, not read off the wire. */
+  usageContext?: { orgId: string; taskId: string };
   logger?: AnthropicProxyLogger;
 }
 
 export interface AnthropicProxyHandle {
+  /** The bound TCP address — present only in TCP-listen mode. `port` is the OS-assigned port when
+   *  `tcpPort` was 0, so the caller can build the agent's ANTHROPIC_BASE_URL. */
+  address?: { port: number };
   close(): Promise<void>;
 }
 
@@ -96,15 +111,25 @@ const STRIP_RESPONSE_HEADERS = new Set([
   'upgrade',
 ]);
 
-/** Start the Anthropic proxy over a unix-domain socket. Resolves once listening. */
+/** Start the Anthropic proxy. Listens on EITHER a unix-domain socket (`socketPath`, the worker↔runner
+ *  shared-volume topology) OR a loopback TCP port (`tcpPort`, the in-process per-task topology). Resolves
+ *  once listening. */
 export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promise<AnthropicProxyHandle> {
+  // Exactly one listen mode — neither is unconfigured; both is ambiguous.
+  const useTcp = options.tcpPort !== undefined;
+  const useSocket = options.socketPath !== undefined;
+  if (useTcp === useSocket) {
+    throw new Error('serveAnthropicProxy: set exactly one of socketPath / tcpPort');
+  }
+  const tcpHost = options.tcpHost ?? '127.0.0.1';
+
   const upstream = new URL(options.upstreamOrigin ?? DEFAULT_UPSTREAM);
   const apiKey = options.apiKey; // closure capture — the ONLY place the key lives here
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
   const requestUpstream = upstream.protocol === 'http:' ? httpRequest : httpsRequest;
 
-  // Clear a stale socket from a prior crash so listen() doesn't EADDRINUSE.
-  await unlink(options.socketPath).catch(() => {});
+  // Clear a stale socket from a prior crash so listen() doesn't EADDRINUSE (unix mode only).
+  if (useSocket) await unlink(options.socketPath!).catch(() => {});
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     // Only origin-form paths ("/v1/messages") — reject absolute-form / CONNECT-style
@@ -115,11 +140,21 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
       return;
     }
 
-    // Read the attribution headers (slice W3-S4b) BEFORE the strip loop removes them. Both must be
-    // present (and a sink wired) to meter this call; otherwise the response just streams normally.
+    // Attribution for metering. With a BAKED usageContext (slice 3.5-A.2b, the per-task in-process
+    // proxy) the proxy is dedicated to one task, so its {org,task} is fixed at construction — use it and
+    // IGNORE the wire headers (a per-task proxy can't be spoofed off the request). Without a baked
+    // context, fall back to the header-stamped attribution (slice W3-S4b, the bridge topology): read the
+    // x-tasca-* headers BEFORE the strip loop removes them; BOTH must be present (and a sink wired) to
+    // meter, otherwise the response just streams normally.
     const taskId = firstHeader(req.headers['x-tasca-task-id']);
     const orgId = firstHeader(req.headers['x-tasca-org-id']);
-    const meter = options.usageSink && taskId && orgId ? { sink: options.usageSink, taskId, orgId } : null;
+    const meter = options.usageSink
+      ? options.usageContext
+        ? { sink: options.usageSink, taskId: options.usageContext.taskId, orgId: options.usageContext.orgId }
+        : taskId && orgId
+          ? { sink: options.usageSink, taskId, orgId }
+          : null
+      : null;
 
     const headers: Record<string, string | string[]> = {};
     for (const [name, value] of Object.entries(req.headers)) {
@@ -202,21 +237,43 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error): void => reject(err);
     server.once('error', onError);
-    server.listen(options.socketPath, () => {
+    const onListening = (): void => {
       server.removeListener('error', onError);
-      options.logger?.info?.('anthropic-proxy: listening', { socketPath: options.socketPath });
+      options.logger?.info?.('anthropic-proxy: listening', useTcp ? { tcpHost, tcpPort: options.tcpPort } : { socketPath: options.socketPath });
       resolve();
-    });
+    };
+    if (useTcp) {
+      server.listen(options.tcpPort, tcpHost, onListening);
+    } else {
+      server.listen(options.socketPath, onListening);
+    }
   });
 
-  if (options.socketMode !== undefined) {
-    await chmod(options.socketPath, options.socketMode);
+  // Unix mode only: chmod the bound socket (group-shared runner connects). TCP loopback has no
+  // filesystem perms to set.
+  if (useSocket && options.socketMode !== undefined) {
+    await chmod(options.socketPath!, options.socketMode);
+  }
+
+  // In TCP mode, surface the bound port (the OS-assigned one when tcpPort was 0).
+  let address: { port: number } | undefined;
+  if (useTcp) {
+    const addr = server.address();
+    if (addr && typeof addr === 'object') address = { port: addr.port };
   }
 
   return {
+    ...(address ? { address } : {}),
     async close(): Promise<void> {
+      // Force-close in-flight connections (incl. lingering keep-alive sockets) FIRST so close() can't
+      // hang on a live stream — the same liveness guard the bridge applies via its teardowns set. Node's
+      // server.close() otherwise drains keep-alive connections and never force-closes them, so a single
+      // lingering loopback socket would wedge a per-task proxy's close() and pin its key-bearing closure
+      // (slice 3.5-A.2b: per-task proxies would then accumulate without bound). Node ≥18.2; we target 22.
+      server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await unlink(options.socketPath).catch(() => {});
+      // Unix mode only: remove the socket file we created. TCP has nothing to unlink.
+      if (useSocket) await unlink(options.socketPath!).catch(() => {});
     },
   };
 }

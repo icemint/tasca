@@ -306,16 +306,14 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
       agentEnv.CLAUDE_CONFIG_DIR = path.join(agentHome, '.claude');
       // input.env still wins (a test/operator escape hatch); no production caller sets HOME.
       Object.assign(agentEnv, input.env ?? {});
-      // Anthropic credential, two modes (NEVER the real key to a proxied agent):
-      //  - PROXY mode (ANTHROPIC_BASE_URL set → the runner points the agent at the keyless
-      //    bridge): inject only a placeholder; the real key is supplied worker-side by the
-      //    proxy. The real ANTHROPIC_API_KEY is never read into the agent env here.
-      //  - DIRECT mode (no base url → dev/no-queue in-process): pass the real key through,
-      //    an explicit legacy passthrough (the allowlist no longer carries it).
+      // Anthropic credential — the agent ALWAYS runs in PROXY mode now (BYOK): the worker supplies a
+      // per-task proxy (ephemeral, baked with the org's vault key) and points the agent at it via the
+      // per-task ANTHROPIC_BASE_URL overlaid through input.env above. We inject only a placeholder so
+      // the vendor's client has SOMETHING in ANTHROPIC_API_KEY; the real key is supplied worker-side by
+      // the proxy on the upstream leg and NEVER enters the prompt-injectable agent's env. (The
+      // server-key passthrough is gone — there is no server Anthropic key under BYOK.)
       if (agentEnv.ANTHROPIC_BASE_URL && agentEnv.ANTHROPIC_API_KEY === undefined) {
         agentEnv.ANTHROPIC_API_KEY = ANTHROPIC_PROXY_PLACEHOLDER_KEY;
-      } else if (!agentEnv.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_API_KEY) {
-        agentEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
       }
       let homeRemoved = false;
       const cleanupHome = (): void => {

@@ -141,6 +141,16 @@ export interface OrchestrationDeps {
   /** Resolve the tier classifier for an org, on the org's OWN vault key (BYOK, slice 3.5-A.2a). Returns
    *  null when the org has no key (→ heuristic routing). Absent → no LLM classifier at all (heuristic). */
   classifierFor?: (orgId: string) => Promise<LlmClassifierPort | null>;
+  /** Resolve the org's OWN Anthropic vault key for an agent run (BYOK agent execution, slice 3.5-A.2b).
+   *  null → the org has NO key → the in-process spawn FAILS CLOSED (needs_attention, no agent). Present
+   *  ONLY with startAgentProxy (both come from the credential vault wiring); absent (tests / fakes) →
+   *  the agent spawns without a proxy and no key is injected. */
+  agentVendorResolver?: (orgId: string) => Promise<string | null>;
+  /** Start an EPHEMERAL per-task Anthropic proxy baked with the resolved org key + the {org,task} for
+   *  metering, returning its base url (the agent's ANTHROPIC_BASE_URL) + a close() torn down after the
+   *  run. A PER-TASK instance (no shared-context race under concurrent in-process dispatch). Present ONLY
+   *  with agentVendorResolver. */
+  startAgentProxy?: (opts: { apiKey: string; usageContext: { orgId: string; taskId: string } }) => Promise<{ baseUrl: string; close: () => Promise<void> }>;
   /** Resolves a GitHub `owner/repo` slug to a local clone path before dispatch.
    *  Absent → repoRef is used as-is (Stage-1 single-checkout / test behavior). */
   provisioner?: RepoProvisioner;
@@ -235,6 +245,12 @@ export type OrchestrationOutcome =
   // The org has hired NO agents (slice 5d) → the task is retired to needs_attention ("no agents
   // hired"). Fail-closed honesty, never a default agent.
   | { kind: 'no_roster'; taskId: string }
+  // The org has no Anthropic vault key (BYOK agent execution, slice 3.5-A.2b) → the agent CANNOT run
+  // on a server key (there is none), so the task is retired to needs_attention BEFORE any spawn.
+  | { kind: 'no_agent_key'; taskId: string }
+  // The vault key RESOLVE itself threw (a transient credential-store read fault, distinct from a clean
+  // "no key configured") → the task is retired to needs_attention with no breaker burn (slice 3.5-A.2b).
+  | { kind: 'key_unavailable'; taskId: string }
   // An `agent:<name>` label named an agent the org has NOT hired (slice 5d) → needs_attention. The
   // label is a preference within the hired set, not a bypass — so an unhired name fails closed.
   | { kind: 'agent_not_hired'; taskId: string };
@@ -609,15 +625,84 @@ export async function orchestrateTaskAssigned(
       });
     }
 
+    // BYOK agent execution (slice 3.5-A.2b): the in-process agent runs on the ORG'S OWN vault key — never
+    // a server key (there is none). When the vault wiring is present (prod), resolve the org's Anthropic
+    // key BEFORE the spawn. A null key FAILS CLOSED — retire to needs_attention with an actionable reason
+    // (no breaker, no spawn), mirroring retireNoChanges. With a key, start an EPHEMERAL per-task proxy
+    // baked with it + the {org,task} for metering, point the agent at it via a per-task ANTHROPIC_BASE_URL,
+    // and tear it down after the run (always, in finally). A per-task proxy instance avoids the shared
+    // bridge's setContext race under concurrent in-process dispatch. Without the wiring (tests / fakes),
+    // the agent spawns with no proxy and no key injected (the fake execution port ignores env).
+    let agentProxy: { baseUrl: string; close: () => Promise<void> } | undefined;
+    if (deps.agentVendorResolver && deps.startAgentProxy) {
+      let orgKey: string | null;
+      try {
+        orgKey = await deps.agentVendorResolver(orgId);
+      } catch (err) {
+        // A THROW here is a transient credential-store read fault (the vault reader's pg read is
+        // unguarded — only the decrypt itself fails closed to null), NOT a config issue and NOT an agent
+        // failure. Divert it to the SAME no-breaker terminal as the no-key branch: do NOT fall through to
+        // the outer catch, which would bump failure_count, re-drive the identical task, and surface a
+        // misleading 'task.failed'. The agent never ran (this precedes startAgentProxy + spawn), so
+        // fail-closed safety holds; the operator re-drives once the store is back.
+        const reason = 'credential service unavailable — retry when restored';
+        deps.logger?.error?.('coordination: vendor key resolve failed — agent fail-closed, task → needs_attention', {
+          taskId: task.id,
+          err: String(err),
+        });
+        const acted = await deps.store.retireNoChanges(orgId, task.id, reason);
+        if (!acted) {
+          return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
+        }
+        return { kind: 'key_unavailable', taskId: task.id };
+      }
+      if (orgKey === null) {
+        const reason = 'no API key configured — ask an admin';
+        deps.logger?.info?.('coordination: org has no Anthropic key — agent fail-closed, task → needs_attention', {
+          taskId: task.id,
+        });
+        const acted = await deps.store.retireNoChanges(orgId, task.id, reason);
+        if (!acted) {
+          deps.logger?.info?.('coordination: no-key retire skipped — task already moved (operator owns it)', {
+            taskId: task.id,
+          });
+          return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
+        }
+        return { kind: 'no_agent_key', taskId: task.id };
+      }
+      agentProxy = await deps.startAgentProxy({ apiKey: orgKey, usageContext: { orgId, taskId: task.id } });
+    }
+
     // §6.10 — spawn the agent over a PTY; await its exit before opening the PR. The
     // prompt was built above (shared with the enqueued payload). The body is
     // attacker-controlled; it reaches the shell only through the POSIX-quoted claude
-    // command the factory builds from `prompt`.
-    const agentRun = await runAgentToCompletion(
-      deps.execution,
-      { id: task.id, cwd: worktree.path, prompt },
-      agentTimeoutMs
-    );
+    // command the factory builds from `prompt`. When a per-task proxy is running, the
+    // agent reaches Anthropic ONLY through it (ANTHROPIC_BASE_URL) — the real key is
+    // injected proxy-side and never enters the agent env.
+    let agentRun;
+    try {
+      agentRun = await runAgentToCompletion(
+        deps.execution,
+        {
+          id: task.id,
+          cwd: worktree.path,
+          prompt,
+          ...(agentProxy ? { env: { ANTHROPIC_BASE_URL: agentProxy.baseUrl } } : {}),
+        },
+        agentTimeoutMs
+      );
+    } finally {
+      // Tear down the per-task proxy on EVERY path (success, throw, timeout) so it never lingers. Best-
+      // effort: a close failure is logged, never masks the agent's real outcome (or a thrown error).
+      if (agentProxy) {
+        await agentProxy.close().catch((err: unknown) =>
+          deps.logger?.error?.('coordination: per-task anthropic proxy close failed', {
+            taskId: task.id,
+            err: String(err),
+          })
+        );
+      }
+    }
     // Always surface what the agent did — its exit code + output tail — so a
     // no-diff run (below) is diagnosable: did it edit nothing, hit an auth error,
     // run in the wrong place, find no usable tools?
@@ -836,7 +921,7 @@ const AGENT_OUTPUT_TAIL_CHARS = 4000;
 
 function runAgentToCompletion(
   execution: ExecutionPort,
-  input: { id: string; cwd: string; prompt: string },
+  input: { id: string; cwd: string; prompt: string; env?: Record<string, string> },
   timeoutMs: number
 ): Promise<AgentRunResult> {
   return new Promise((resolve, reject) => {

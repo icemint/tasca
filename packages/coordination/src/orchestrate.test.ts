@@ -24,7 +24,7 @@ import {
 import type { DispatchJob, DispatchJobInput, DispatchQueue } from '@tasca/db';
 import { orchestrateTaskAssigned, type OrchestrationDeps } from './orchestrate';
 import { currentUsageContext } from './usage-context';
-import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin } from './store';
+import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin, UsageRecordInput } from './store';
 import type { StatusReporter, StatusUpdate } from './ports';
 import type { AgentDirectory, AuditSink, RepoProvisioner, TaskContentSource } from './orchestrate';
 import type { MatchCandidate } from '@tasca/routing';
@@ -191,7 +191,7 @@ class FakeStore implements CoordinationStore {
   async listTasks() { return []; }
   async getTaskStatusCounts() { return {}; }
   usageRecords: Array<{ orgId: string; source: string; idempotencyKey: string }> = [];
-  async recordUsage(orgId: string, e: { source: string; idempotencyKey: string }) {
+  async recordUsage(orgId: string, e: UsageRecordInput) {
     this.usageRecords.push({ orgId, source: e.source, idempotencyKey: e.idempotencyKey });
   }
   async getUsage() { return { inputTokens: 0, outputTokens: 0, bySource: {} }; }
@@ -402,6 +402,8 @@ function makeDeps(opts: {
   content?: TaskContentSource;
   names?: Record<string, string>;
   classifierFor?: OrchestrationDeps['classifierFor'];
+  agentVendorResolver?: OrchestrationDeps['agentVendorResolver'];
+  startAgentProxy?: OrchestrationDeps['startAgentProxy'];
 }): OrchestrationDeps {
   const candidates = opts.candidates ?? [{ profile: elvisProfile(), state: 'idle', activeCount: 0 }];
   return {
@@ -413,6 +415,8 @@ function makeDeps(opts: {
     audit: opts.audit,
     content: opts.content ?? content,
     ...(opts.classifierFor ? { classifierFor: opts.classifierFor } : {}),
+    ...(opts.agentVendorResolver ? { agentVendorResolver: opts.agentVendorResolver } : {}),
+    ...(opts.startAgentProxy ? { startAgentProxy: opts.startAgentProxy } : {}),
   };
 }
 
@@ -764,6 +768,132 @@ describe('orchestrateTaskAssigned — usage context (W3-S4a)', () => {
     expect(outcome.kind).toBe('dispatched'); // still routes (heuristic), agents can still be matched
     const task = store.tasks.get((outcome as { taskId: string }).taskId)!;
     expect(task.tierEstimate?.classifierUsed).toBe(false); // degraded to the heuristic prior, no LLM call
+  });
+});
+
+describe('orchestrateTaskAssigned — BYOK agent execution (3.5-A.2b)', () => {
+  it('no org vault key → fail closed: needs_attention, NO agent spawn, no PR', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    let proxyStarted = false;
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store,
+        execution,
+        status: new FakeStatus(),
+        audit: new FakeAudit(),
+        agentVendorResolver: async () => null, // this org has no Anthropic key
+        startAgentProxy: async () => {
+          proxyStarted = true;
+          return { baseUrl: 'http://127.0.0.1:1', close: async () => {} };
+        },
+      })
+    );
+    expect(outcome.kind).toBe('no_agent_key');
+    expect(proxyStarted).toBe(false); // never started a proxy for a keyless org
+    expect(execution.spawnCalls).toBe(0); // and never spawned the agent
+    expect(execution.prCalls).toBe(0);
+    const task = store.tasks.get((outcome as { taskId: string }).taskId)!;
+    expect(task.status).toBe('needs_attention');
+    expect(task.lastError).toBe('no API key configured — ask an admin');
+    expect(store.noChangesCalls).toHaveLength(1); // retired via the no-breaker terminal path
+  });
+
+  it('resolver THROWS (transient credential-store fault) → fail closed via the no-breaker terminal, NOT the breaker', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    let proxyStarted = false;
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store,
+        execution,
+        status: new FakeStatus(),
+        audit: new FakeAudit(),
+        agentVendorResolver: async () => {
+          throw new Error('pg read timeout'); // a transient vault/DB read fault, not a clean "no key"
+        },
+        startAgentProxy: async () => {
+          proxyStarted = true;
+          return { baseUrl: 'http://127.0.0.1:1', close: async () => {} };
+        },
+      })
+    );
+    expect(outcome.kind).toBe('key_unavailable'); // distinct from no_agent_key — the resolve itself failed
+    expect(proxyStarted).toBe(false); // never started a proxy
+    expect(execution.spawnCalls).toBe(0); // and never spawned the agent (fail-closed safety holds on a throw)
+    const task = store.tasks.get((outcome as { taskId: string }).taskId)!;
+    expect(task.status).toBe('needs_attention');
+    expect(task.lastError).toBe('credential service unavailable — retry when restored');
+    expect(store.noChangesCalls).toHaveLength(1); // routed to the no-breaker terminal...
+    expect(task.failureCount).toBe(0); // ...NOT the breaker (no failure_count burn, no misleading task.failed)
+  });
+
+  it('key present → starts a per-task proxy with {apiKey, usageContext}, spawns with env.ANTHROPIC_BASE_URL, closes after the run, and meters the agent path', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const proxyCalls: Array<{ apiKey: string; usageContext: { orgId: string; taskId: string } }> = [];
+    let closed = 0;
+    // The per-task proxy fake also drives a usage record (what the real proxy's tee does) so the test
+    // proves the agent path is metered through the baked {org,task} context.
+    const startAgentProxy: OrchestrationDeps['startAgentProxy'] = async (opts) => {
+      proxyCalls.push(opts);
+      await store.recordUsage(opts.usageContext.orgId, {
+        taskId: opts.usageContext.taskId,
+        source: 'agent',
+        model: 'claude-haiku-4-5',
+        inputTokens: 10,
+        outputTokens: 20,
+        idempotencyKey: `msg_${opts.usageContext.taskId}`,
+      });
+      return { baseUrl: 'http://127.0.0.1:54321', close: async () => { closed += 1; } };
+    };
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store,
+        execution,
+        status: new FakeStatus(),
+        audit: new FakeAudit(),
+        agentVendorResolver: async () => 'sk-ant-ORG-KEY',
+        startAgentProxy,
+      })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    // The proxy was started once, baked with the resolved org key + the {org,task}.
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]!.apiKey).toBe('sk-ant-ORG-KEY');
+    expect(proxyCalls[0]!.usageContext).toEqual({ orgId: 'org_default', taskId: outcome.taskId });
+    // The agent was spawned pointed at the per-task proxy (ANTHROPIC_BASE_URL overlaid via input.env).
+    expect(execution.spawnInputs).toHaveLength(1);
+    expect(execution.spawnInputs[0]!.env?.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:54321');
+    // The proxy was torn down after the run.
+    expect(closed).toBe(1);
+    // The agent call was metered: a usage_event with source='agent', scoped to the baked org.
+    const agentUsage = store.usageRecords.filter((r) => r.source === 'agent');
+    expect(agentUsage).toHaveLength(1);
+    expect(agentUsage[0]!.orgId).toBe('org_default');
+    expect(agentUsage[0]!.idempotencyKey).toBe(`msg_${outcome.taskId}`);
+  });
+
+  it('closes the per-task proxy even when the agent run throws (finally semantics)', async () => {
+    const store = new FakeStore();
+    const failingExec = new FakeExecution({ spawnError: new Error('pty boom') });
+    let closed = 0;
+    await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store,
+        execution: failingExec,
+        status: new FakeStatus(),
+        audit: new FakeAudit(),
+        agentVendorResolver: async () => 'sk-ant-ORG-KEY',
+        startAgentProxy: async () => ({ baseUrl: 'http://127.0.0.1:9', close: async () => { closed += 1; } }),
+      })
+    );
+    expect(closed).toBe(1); // the proxy is closed on the throw path, not leaked
   });
 });
 
