@@ -58,12 +58,13 @@ function fakeReq(url: string): IncomingMessage {
   return { method: 'GET', url, headers: {} } as unknown as IncomingMessage;
 }
 
-function fakeRes(): { captured: { statusCode: number; location: string | undefined }; res: ServerResponse } {
-  const captured = { statusCode: 0, location: undefined as string | undefined };
+function fakeRes(): { captured: { statusCode: number; location: string | undefined; cacheControl: string | undefined }; res: ServerResponse } {
+  const captured = { statusCode: 0, location: undefined as string | undefined, cacheControl: undefined as string | undefined };
   const res = {
     writeHead(code: number, headers?: Record<string, string>) {
       captured.statusCode = code;
       if (headers?.location) captured.location = headers.location;
+      if (headers?.['cache-control']) captured.cacheControl = headers['cache-control'];
       return res;
     },
     end() {
@@ -97,6 +98,7 @@ describe('GitHub connect — begin (GET /api/connect/github)', () => {
     const r = await run(deps({ installState }), '/api/connect/github');
     expect(r.statusCode).toBe(302);
     expect(r.location).toMatch(/^https:\/\/github\.com\/apps\/tasca-dev\/installations\/new\?state=state-0$/);
+    expect(r.cacheControl).toBe('no-store'); // the single-use nonce must never be cached/shared at an edge
     expect(installState.issued).toEqual([{ userId: 'u1', orgId: 'org-a', state: 'state-0' }]); // org captured AT BEGIN
   });
 

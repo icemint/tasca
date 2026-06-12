@@ -122,7 +122,10 @@ export interface GitHubConnectDeps {
 }
 
 function redirect(res: ServerResponse, location: string): void {
-  res.writeHead(302, { location }).end();
+  // no-store at the ORIGIN: the BEGIN 302 carries a SINGLE-USE nonce in `?state=`; if an edge/proxy
+  // cached it, every user would get the same stale nonce → the callback consumes it once and the rest
+  // fail `bad_state`. The callback 302 is per-request too. Never cache either (mirrors the auth fix).
+  res.writeHead(302, { location, 'cache-control': 'no-store' }).end();
 }
 
 /**
@@ -151,6 +154,9 @@ export async function githubConnectHandler(
       return true;
     }
     if (!session) {
+      // The session cookie did not arrive (or resolved to no session) — the connect flow can't bind
+      // an org without it. Logged so a silent 401 on the callback is debuggable (mirrors the auth fix).
+      deps.logger?.error('connect: unauthorized — no session on the request', { path });
       res.writeHead(401).end('unauthorized');
       return true;
     }
@@ -165,11 +171,13 @@ export async function githubConnectHandler(
       // BEGIN — admin+ in the active org may connect a workspace (5b: manage-connections = admin).
       const orgId = await deps.membership.getActiveOrg(userId);
       if (orgId === null) {
+        deps.logger?.error('connect: begin refused — user has no active org', { userId });
         res.writeHead(403).end('no organization membership');
         return true;
       }
       const role = await deps.membership.getRole(userId, orgId);
       if (role === null || !atLeast(role, 'admin')) {
+        deps.logger?.error('connect: begin refused — admin role required', { userId, orgId, role });
         res.writeHead(403).end('admin role required to connect a workspace');
         return true;
       }
@@ -183,13 +191,18 @@ export async function githubConnectHandler(
     // CALLBACK (Setup URL) — ?installation_id & state.
     const installationId = url.searchParams.get('installation_id');
     const state = url.searchParams.get('state');
+    deps.logger?.info?.('connect: callback received', { userId, hasInstallationId: !!installationId, hasState: !!state });
     if (!installationId || !state) {
+      deps.logger?.error('connect: callback missing installation_id/state', { hasInstallationId: !!installationId, hasState: !!state });
       redirect(res, '/?connect=error&reason=missing_params');
       return true;
     }
     // SIGNAL 1: consume the single-use nonce (replay/expiry/forgery → null).
     const consumed = await deps.installState.consume(state);
     if (!consumed) {
+      // Nonce not consumable: expired (TTL), already used (double callback), forged — or, before the
+      // no-store fix, a CACHED begin response served a stale shared nonce. Logged, not silent.
+      deps.logger?.error('connect: callback state not consumable (expired/replayed/forged)', { userId });
       redirect(res, '/?connect=error&reason=bad_state');
       return true;
     }
