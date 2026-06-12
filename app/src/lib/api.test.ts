@@ -1,8 +1,48 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { getAgents, getSession, redirectIfAuthenticated } from './api';
+import { getAgents, getSession, redirectIfAuthenticated, canManageActiveOrg, connectGitHub } from './api';
 import { stubFetch, stubFetchReject } from './test-support';
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('canManageActiveOrg — admin gate, fail-closed', () => {
+  const orgs = (o: unknown) => stubFetch({ '/api/orgs': { body: { orgs: o } } });
+  it('true when the ACTIVE org role is admin', async () => {
+    orgs([{ id: 'o1', name: 'A', role: 'admin', active: true }]);
+    expect(await canManageActiveOrg()).toBe(true);
+  });
+  it('true for owner', async () => {
+    orgs([{ id: 'o1', name: 'A', role: 'owner', active: true }]);
+    expect(await canManageActiveOrg()).toBe(true);
+  });
+  it('false for member / viewer', async () => {
+    orgs([{ id: 'o1', name: 'A', role: 'member', active: true }]);
+    expect(await canManageActiveOrg()).toBe(false);
+  });
+  it('reads the ACTIVE org, not another org the user owns', async () => {
+    orgs([
+      { id: 'o1', name: 'A', role: 'owner', active: false },
+      { id: 'o2', name: 'B', role: 'viewer', active: true },
+    ]);
+    expect(await canManageActiveOrg()).toBe(false); // active org = the viewer one
+  });
+  it('fail-closed: false when /api/orgs errors (never falsely enable)', async () => {
+    stubFetch({ '/api/orgs': { status: 503, body: {} } });
+    expect(await canManageActiveOrg()).toBe(false);
+  });
+  it('fail-closed: false when the user has no orgs', async () => {
+    orgs([]);
+    expect(await canManageActiveOrg()).toBe(false); // no active org → no manage rights
+  });
+});
+
+describe('connectGitHub — begins the install via a navigation', () => {
+  it('assigns location to /api/connect/github (redirect-out, not a write)', () => {
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, replace: vi.fn(), search: '' });
+    connectGitHub();
+    expect(assign).toHaveBeenCalledWith('/api/connect/github');
+  });
+});
 
 describe('redirectIfAuthenticated — the login page must not loop an already-authenticated user', () => {
   it('redirects into the app (location.replace to home) when the session is authenticated', async () => {

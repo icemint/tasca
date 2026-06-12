@@ -186,14 +186,61 @@ describe('connections', () => {
 });
 
 describe('onboarding read presentation', () => {
-  it('reflects real connection state and frames setup as a read-only preview', async () => {
+  it('reflects real connection state; Shortcut/Linear stay gated, Continue is a live nav', async () => {
+    // Only /api/connections stubbed → /api/orgs 404 → canManage=false (non-admin view).
     stubFetch({ '/api/connections': { body: CONNECTIONS_OK } });
     const r = await loadOnboarding();
     expect(r.kind).toBe('ok');
     expect(htmlOf(r)).toContain('Connected · roadhero'); // github already connected
-    expect(htmlOf(r)).toContain('read-only preview');
-    expect(htmlOf(r)).toContain('data-ro="gated"'); // Connect (shortcut/linear) + Continue
+    expect(htmlOf(r)).toContain('data-ro="gated"'); // Connect (shortcut/linear) still gated
+    expect(htmlOf(r)).toContain('data-act="continue"'); // Continue is a live navigation for everyone
     expect(htmlOf(r)).not.toContain('Coming soon');
+  });
+});
+
+describe('W4-S3 self-serve controls — admin-gated wiring (server stays the authority)', () => {
+  const ADMIN_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] };
+  const MEMBER_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] };
+
+  it('roster (admin): an un-hired agent shows a LIVE Hire control', async () => {
+    stubFetch({ '/api/agents': { body: [AGENT_ELVIS] }, '/api/orgs': { body: ADMIN_ORGS }, '/api/orgs/agents': { body: { agents: [] } } });
+    const r = await loadRoster();
+    expect(htmlOf(r)).toContain('data-act="hire"');
+    expect(htmlOf(r)).toContain('data-agent-id="agent-elvis"');
+  });
+
+  it('roster (admin): a hired agent shows Unhire', async () => {
+    stubFetch({
+      '/api/agents': { body: [AGENT_ELVIS] },
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/agents': { body: { agents: [{ agentId: 'agent-elvis', name: 'Elvis', status: 'active' }] } },
+    });
+    const r = await loadRoster();
+    expect(htmlOf(r)).toContain('data-act="unhire"');
+  });
+
+  it('roster (non-admin): the hire control is DISABLED with an honest reason, never a live button', async () => {
+    stubFetch({ '/api/agents': { body: [AGENT_ELVIS] }, '/api/orgs': { body: MEMBER_ORGS }, '/api/orgs/agents': { body: { agents: [] } } });
+    const r = await loadRoster();
+    expect(htmlOf(r)).not.toContain('data-act="hire"');
+    expect(htmlOf(r)).toContain('Admin role required to manage the roster');
+  });
+
+  it('connections (admin): a LIVE Connect GitHub control', async () => {
+    stubFetch({ '/api/connections': { body: CONNECTIONS_OK }, '/api/orgs': { body: ADMIN_ORGS } });
+    expect(htmlOf(await loadConnections())).toContain('data-act="connect-github"');
+  });
+
+  it('connections (non-admin): Connect is disabled with an honest reason', async () => {
+    stubFetch({ '/api/connections': { body: CONNECTIONS_OK }, '/api/orgs': { body: MEMBER_ORGS } });
+    const r = await loadConnections();
+    expect(htmlOf(r)).not.toContain('data-act="connect-github"');
+    expect(htmlOf(r)).toContain('Admin role required to connect a workspace');
+  });
+
+  it('onboarding (admin): GitHub Connect is live when github is not yet connected', async () => {
+    stubFetch({ '/api/connections': { body: { platforms: [] } }, '/api/orgs': { body: ADMIN_ORGS } });
+    expect(htmlOf(await loadOnboarding())).toContain('data-act="connect-github"');
   });
 });
 

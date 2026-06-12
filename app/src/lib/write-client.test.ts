@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { post, ensureCsrf, pauseAgent, _resetCsrfForTest } from './api';
+import { post, ensureCsrf, pauseAgent, hireAgent, unhireAgent, _resetCsrfForTest } from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -108,5 +108,34 @@ describe('agent write helpers', () => {
     await pauseAgent('elvis', 1);
     expect(m.posts[0]!.url).toBe('/api/agents/elvis/pause');
     expect(m.posts[0]!.body).toEqual({ version: 1 });
+  });
+});
+
+describe('roster writes (W4-S3) — hire/unhire send CSRF + classify honestly', () => {
+  it('hireAgent POSTs {agentId} to /api/orgs/agents with the CSRF header', async () => {
+    const m = mockWrites([{ status: 200, body: { ok: true } }]);
+    const r = await hireAgent('agent-elvis');
+    expect(r).toEqual({ kind: 'ok', data: { ok: true } });
+    expect(m.posts[0]!.url).toBe('/api/orgs/agents');
+    expect(m.posts[0]!.body).toEqual({ agentId: 'agent-elvis' });
+    expect(m.posts[0]!.headers['x-csrf-token']).toBe('tok-1');
+  });
+
+  it('hireAgent classifies a 409 already_hired as conflict (reconcile, not a lie)', async () => {
+    mockWrites([{ status: 409, body: { error: 'already hired', code: 'already_hired' } }]);
+    expect((await hireAgent('agent-elvis')).kind).toBe('conflict');
+  });
+
+  it('unhireAgent DELETEs /api/orgs/agents/:id with the CSRF header', async () => {
+    const m = mockWrites([{ status: 200, body: { ok: true } }]);
+    expect((await unhireAgent('agent-elvis')).kind).toBe('ok');
+    expect(m.posts[0]!.url).toBe('/api/orgs/agents/agent-elvis');
+    expect(m.posts[0]!.headers['x-csrf-token']).toBe('tok-1');
+  });
+
+  it('unhireAgent self-heals a stale CSRF (403 → refresh token → retry → ok)', async () => {
+    const m = mockWrites([{ status: 403 }, { status: 200, body: { ok: true } }]);
+    expect((await unhireAgent('agent-elvis')).kind).toBe('ok');
+    expect(m.csrfFetches()).toBe(2); // token was refreshed and the DELETE retried
   });
 });

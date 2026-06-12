@@ -18,6 +18,8 @@ import type {
   Agent,
   AgentDetail,
   ConnectionsResponse,
+  HiredAgentsResponse,
+  OrgsResponse,
   ProposalsResponse,
   ProposalSummary,
   StandupSummary,
@@ -272,3 +274,50 @@ export const acceptProposal = (id: string) =>
 /** Dismiss a proposal — marks the suggestion handled; no binding effect. */
 export const dismissProposal = (id: string) =>
   post<{ ok: true } | { error: string; code?: string }>(`/api/proposals/${encodeURIComponent(id)}/dismiss`, {});
+
+// ── org self-serve: connect a workspace + hire/unhire agents (slice W4-S3) ─────
+// Admin+ controls. The SERVER is the authority (5b gate); the UI uses `canManageActiveOrg`
+// only to render an honest disabled state instead of a button that 403s.
+
+/** DELETE a mutation with CSRF (mirrors `post`: self-heals a stale token once on a 403). */
+export async function del<T>(path: string): Promise<WriteResult<T>> {
+  let token = await ensureCsrf();
+  if (token === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const send = (t: string): Promise<Response> =>
+    fetch(path, { method: 'DELETE', headers: { 'x-csrf-token': t } });
+  let res: Response;
+  try {
+    res = await send(token);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  return classify<T>(res);
+}
+
+export const getOrgs = () => get<OrgsResponse>('/api/orgs');
+
+/** True when the caller is admin+ in their ACTIVE org. Fail-closed: any read failure → false
+ *  (render the control disabled rather than falsely enabled). The server still gates the write. */
+export async function canManageActiveOrg(): Promise<boolean> {
+  const res = await getOrgs();
+  if (res.kind !== 'ok') return false;
+  const active = res.data.orgs.find((o) => o.active) ?? res.data.orgs[0];
+  return !!active && (active.role === 'admin' || active.role === 'owner');
+}
+
+export const getHiredAgents = () => get<HiredAgentsResponse>('/api/orgs/agents');
+
+export const hireAgent = (agentId: string) =>
+  post<{ ok: true } | { error: string; code?: string }>('/api/orgs/agents', { agentId });
+export const unhireAgent = (agentId: string) =>
+  del<{ ok: true } | { error: string }>(`/api/orgs/agents/${encodeURIComponent(agentId)}`);
+
+/** Begin the GitHub App install/connect flow (slice 5c). A REDIRECT-OUT (session+admin gated
+ *  server-side), NOT an in-page write — the browser leaves to GitHub and returns via the Setup URL. */
+export function connectGitHub(): void {
+  if (typeof location !== 'undefined') location.assign('/api/connect/github');
+}
