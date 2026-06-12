@@ -91,11 +91,15 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
 
       // 4. Open the PR with the SCOPED token (env-auth push + gh GH_TOKEN; not in argv).
       //    The deterministic head makes a re-drive idempotent (no duplicate PR).
+      // PROJECTION model (roadmap D8): a github PR carries `Closes #N` so the native merge→issue-close
+      // does the transition — the agent's only state-affecting write. Non-github → no closing keyword.
+      const closes = payload.platform === 'github' ? /#(\d+)$/.exec(payload.externalStoryId) : null;
       const pr = await deps.execution.openPr({
         cwd: worktree.worktreePath,
         branch: worktree.branch,
         headBranch: payload.headBranch,
         title: `Tasca: ${payload.externalStoryId}`,
+        ...(closes ? { body: `Closes #${closes[1]}` } : {}),
         token: token.token,
       });
 

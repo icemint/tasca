@@ -520,6 +520,14 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     );
     expect(outcome.kind).toBe('dispatched');
     expect(status.updates[0]!.platform).toBe('github');
+    // PROJECTION model (D8): the github PR carries `Closes #42` so a merge auto-closes the issue.
+    expect(execution.lastOpenPrInput!.body).toBe('Closes #42');
+  });
+
+  it('a NON-github (shortcut) PR carries NO Closes reference (projection is platform-native)', async () => {
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit }));
+    expect(outcome.kind).toBe('dispatched');
+    expect(execution.lastOpenPrInput!.body).toBeUndefined(); // EVENT is platform:'shortcut', id 'sc-story-1'
   });
 
   it('FAIL-CLOSED: a github event for an UNCONNECTED workspace → unconnected, no task, no agent run', async () => {
