@@ -82,6 +82,9 @@ export interface CreateCoordinationDeps {
    *  GENERATION is allowed; default false (off-state first, per the design). Listing/accepting/
    *  dismissing existing proposals is unaffected by the flag. */
   pmAssistantEnabled?: boolean;
+  /** Single-tenant edition (slice 3.5-B.1): when true the org-multiplicity routes (list/create/switch
+   *  org) 404. Set from singleTenantEnabled() at the host; default false (multi-tenant). */
+  singleTenant?: boolean;
 }
 
 /**
@@ -264,6 +267,7 @@ export function createCoordination(
     orgApi: {
       membership,
       roster,
+      ...(input.singleTenant !== undefined ? { singleTenant: input.singleTenant } : {}),
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },

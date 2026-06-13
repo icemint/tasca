@@ -42,6 +42,7 @@ import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
 import { loadMasterKey, liveVendorValidator } from './vendor-credential';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
+import { singleTenantEnabled, resolveInstanceOrgId } from './instance';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
 import { ORG_AGENT_TABLE_DDL } from './roster';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
@@ -166,6 +167,17 @@ async function main(): Promise<void> {
   // worker that can't persist is worse than one that exits and lets Coolify retry.
   await applySchema(pool);
   logger.info?.('coordination schema applied');
+
+  // Tenancy mode (slice 3.5-B.1). Single-tenant (OSS): resolve the ONE instance org ONCE at boot —
+  // explicit (TASCA_INSTANCE_ORG_ID), else adopt the oldest existing org, else provision greenfield. The
+  // id is held for the onLogin enrollment hook + the org-api multiplicity gate. Multi-tenant (default):
+  // skip it entirely — every user gets a personal org on login (unchanged).
+  const singleTenant = singleTenantEnabled();
+  const instanceOrgId = singleTenant ? await resolveInstanceOrgId(pool, logger) : undefined;
+  logger.info?.(
+    singleTenant ? 'tenancy: single-tenant' : 'tenancy: multi-tenant',
+    singleTenant ? { instanceOrgId } : undefined
+  );
 
   // Boot-time roster snapshots (see shortcutVerifier doc for the reload caveat).
   const agentRows = await pool.query<{ id: string }>(
@@ -380,7 +392,13 @@ async function main(): Promise<void> {
       clientIds: { github: authEnv.GITHUB_OAUTH_CLIENT_ID, google: authEnv.GOOGLE_OAUTH_CLIENT_ID },
       clientSecrets: { github: authEnv.GITHUB_OAUTH_CLIENT_SECRET, google: authEnv.GOOGLE_OAUTH_CLIENT_SECRET },
       onLogin: async (userId) => {
-        await onboardingRepo.ensurePersonalOrg(userId);
+        // Single-tenant (slice 3.5-B.1): enroll into the ONE instance org (resolved at boot) instead of
+        // a per-user personal org. Multi-tenant: the original personal-org provisioning, unchanged.
+        if (singleTenant) {
+          await onboardingRepo.ensureInstanceMembership(userId, instanceOrgId!);
+        } else {
+          await onboardingRepo.ensurePersonalOrg(userId);
+        }
       },
       logger, // server-side OAuth callback diagnostics (the per-branch failure reason)
     });
@@ -443,6 +461,8 @@ async function main(): Promise<void> {
     // PM-assistant (slice W3-S1): advisory proposals. OFF by default (off-state first, per the
     // design); set TASCA_PM_ASSISTANT=on to enable proposal generation.
     ...(process.env.TASCA_PM_ASSISTANT === 'on' ? { pmAssistantEnabled: true } : {}),
+    // Single-tenant edition (slice 3.5-B.1): gate the org-multiplicity routes. Default off (multi-tenant).
+    ...(singleTenant ? { singleTenant: true } : {}),
     // Coordination LLM is BYOK (slice 3.5-A.2a): when enabled + the vault master key is present, the
     // factory builds a PER-ORG tier classifier that resolves each org's OWN vault key per task (no
     // server key). Disabled / no key → heuristic routing. (PM-assistant LLM proposers degrade to

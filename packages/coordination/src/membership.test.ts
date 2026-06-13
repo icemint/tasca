@@ -298,6 +298,76 @@ run('role matrix + member management (Postgres, slice 5b)', () => {
   });
 });
 
+run('single-tenant instance enrollment (Postgres, slice 3.5-B.1)', () => {
+  const SCHEMA = 'membership_single_tenant_test';
+  let pool: Pool;
+  let repo: PgOrgMembershipRepo;
+  const INSTANCE = 'org_instance';
+
+  beforeAll(async () => {
+    const bootstrap = new Pool({ connectionString: url });
+    await bootstrap.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await bootstrap.query(`CREATE SCHEMA ${SCHEMA}`);
+    await bootstrap.end();
+    pool = new Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
+    await pool.query(TASK_TABLE_DDL);
+    for (const ddl of AUTH_SCHEMA_DDL) await pool.query(ddl);
+    for (const ddl of COORDINATION_SCHEMA_DDL) await pool.query(ddl);
+    await pool.query(ORG_MEMBERSHIP_TABLE_DDL);
+    await pool.query(USER_ACTIVE_ORG_TABLE_DDL);
+    await pool.query(`INSERT INTO organization (id, name) VALUES ($1, 'Instance') ON CONFLICT (id) DO NOTHING`, [INSTANCE]);
+    repo = new PgOrgMembershipRepo(pool);
+  });
+  afterAll(async () => {
+    await pool?.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`).catch(() => {});
+    await pool?.end();
+  });
+
+  const addUser = (id: string) => pool.query(`INSERT INTO app_user (id, email) VALUES ($1, $2)`, [id, `${id}@x.test`]);
+
+  it('the FIRST user becomes owner of the instance org + it is their active org', async () => {
+    await addUser('first');
+    await repo.ensureInstanceMembership('first', INSTANCE);
+    expect(await repo.getRole('first', INSTANCE)).toBe('owner');
+    expect(await repo.getActiveOrg('first')).toBe(INSTANCE);
+    expect(await resolveOrg(repo, { userId: 'first' })).toBe(INSTANCE);
+  });
+
+  it('a SUBSEQUENT user joins as member (least-privilege), same instance org active', async () => {
+    await addUser('second');
+    await repo.ensureInstanceMembership('second', INSTANCE);
+    expect(await repo.getRole('second', INSTANCE)).toBe('member'); // not owner — only the first login is
+    expect(await repo.getActiveOrg('second')).toBe(INSTANCE);
+  });
+
+  it('a RETURNING user is a no-op: still one membership, role unchanged, no duplicate', async () => {
+    await repo.ensureInstanceMembership('first', INSTANCE); // first logs in again
+    const rows = await pool.query<{ c: number }>(`SELECT count(*)::int AS c FROM org_membership WHERE user_id = 'first'`);
+    expect(rows.rows[0]!.c).toBe(1); // exactly one membership
+    expect(await repo.getRole('first', INSTANCE)).toBe('owner'); // not downgraded
+  });
+
+  it('CONCURRENT first-enrollments of two different users converge to EXACTLY ONE owner', async () => {
+    // A fresh instance org with NO members yet; two brand-new users first-login at the same moment.
+    // The per-org advisory lock serializes the role decision, so exactly one wins 'owner'.
+    await pool.query(`INSERT INTO organization (id, name) VALUES ('org_inst2', 'Instance2') ON CONFLICT (id) DO NOTHING`);
+    await addUser('race_a');
+    await addUser('race_b');
+    await Promise.all([
+      repo.ensureInstanceMembership('race_a', 'org_inst2'),
+      repo.ensureInstanceMembership('race_b', 'org_inst2'),
+    ]);
+    const owners = await pool.query<{ n: string }>(
+      `SELECT count(*) AS n FROM org_membership WHERE org_id = 'org_inst2' AND role = 'owner'`
+    );
+    expect(Number(owners.rows[0]!.n)).toBe(1); // exactly one owner despite the race
+    const members = await pool.query<{ n: string }>(
+      `SELECT count(*) AS n FROM org_membership WHERE org_id = 'org_inst2'`
+    );
+    expect(Number(members.rows[0]!.n)).toBe(2); // both enrolled, one owner + one member
+  });
+});
+
 run('github connect: install-state nonce + connection store (Postgres, slice 5c)', () => {
   const SCHEMA = 'connect_slice5c_test';
   let pool: Pool;
