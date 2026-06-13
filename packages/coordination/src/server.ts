@@ -22,6 +22,7 @@ import { orchestrateTaskAssigned, workspaceForEvent, resolveWebhookOrg, type Orc
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
+import { agentApiHandler, type AgentApiDeps } from './agent-api';
 import { projectApiHandler, type ProjectApiDeps } from './project-api';
 import { vendorCredentialApiHandler, type VendorCredentialApiDeps } from './vendor-credential-api';
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
@@ -46,6 +47,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * POSTs CSRF-gated. Absent → those paths fall through to 404 (additive).
    */
   orgApi?: OrgApiDeps;
+  /**
+   * The create-agent API (slice Wizard-A: POST /api/agents). Session-gated; CSRF + member-gated; mints
+   * a named agent, derives its capability tier, and auto-hires it into the caller's active org —
+   * atomically. Absent → that path falls through to 404 (additive).
+   */
+  agentApi?: AgentApiDeps;
   /**
    * The project API (slice Project-A: GET /api/projects, POST /api/active-project). Session-gated;
    * the POST CSRF-gated + store-validated in-org. NOT single-tenant-gated (projects exist in every
@@ -340,6 +347,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Org-management API (only when wired). Handles GET/POST /api/orgs + POST /api/active-org —
     // before the read/write API, which don't claim those paths.
     if (deps.orgApi && (await orgApiHandler(req, res, deps.orgApi))) return;
+
+    // Create-agent API (only when wired). Owns POST /api/agents — before the generic read API, which
+    // owns GET /api/agents (the roster list). Only the POST is claimed here; a GET falls through.
+    if (deps.agentApi && (await agentApiHandler(req, res, deps.agentApi))) return;
 
     // Project API (only when wired). Handles GET /api/projects + POST /api/active-project before the
     // generic read API's /api/* claim.
