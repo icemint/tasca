@@ -33,18 +33,25 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Replace the raw token in an accept URL with `***` so the URL can be logged without exposing the
+ *  single-use credential. The full link lives only in the create response + the outbound email. */
+function redactToken(url: string): string {
+  return url.replace(/token=[^&]+/, 'token=***');
+}
+
 /**
  * Send the invite link. RESEND_API_KEY present → POST to Resend (best-effort: a non-2xx or a throw is
- * logged at error and swallowed, never re-thrown). Unset → log the link at info (operator shares it
- * manually) and return. The link is acceptable in an operator-only server log; the token is never logged
- * in an error that could ship externally.
+ * logged at error and swallowed, never re-thrown). Unset → log that the send was skipped and return.
+ * The RAW token (acceptUrl) is NEVER logged — not on the skip path, not on an error path — because logs
+ * ship to a broader/weaker-ACL surface than the hashed-at-rest DB; the admin gets the link from the
+ * create response. Only a token-REDACTED URL is ever logged.
  */
 export async function sendInviteEmail(e: InviteEmail, logger?: Logger): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    logger?.info?.('invite email skipped — RESEND_API_KEY unset; share the link manually', {
+    logger?.info?.('invite email skipped — RESEND_API_KEY unset; the accept link is in the create response', {
       to: e.to,
-      acceptUrl: e.acceptUrl,
+      acceptUrl: redactToken(e.acceptUrl),
     });
     return;
   }
@@ -58,6 +65,9 @@ export async function sendInviteEmail(e: InviteEmail, logger?: Logger): Promise<
         subject: `You're invited to ${e.orgName} on Tasca`,
         html: inviteHtml(e),
       }),
+      // Bound the call so a hung provider can't stall the awaited invite-create request. The abort
+      // throws into the catch below (best-effort → logged + swallowed, never re-thrown).
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
       // Best-effort: the invite is already created (the link is also in the create response), so a bad

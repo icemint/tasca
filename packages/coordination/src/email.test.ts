@@ -61,7 +61,12 @@ describe('sendInviteEmail — best-effort Resend, never throws', () => {
     await sendInviteEmail(EMAIL, logger);
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(infos.some(([m, c]) => m.includes('RESEND_API_KEY unset') && c?.acceptUrl === EMAIL.acceptUrl)).toBe(true);
+    // The skip is logged, but with the token REDACTED — the raw single-use token must never reach the log
+    // pipeline (that would defeat hash-at-rest; the admin gets the full link from the create response).
+    expect(
+      infos.some(([m, c]) => m.includes('RESEND_API_KEY unset') && c?.acceptUrl === 'https://app.tasca.test/invite?token=***')
+    ).toBe(true);
+    expect(JSON.stringify(infos)).not.toContain('SECRET-TOKEN');
   });
 
   it('a non-2xx response is logged at error and swallowed (never thrown); no token in the error context', async () => {
