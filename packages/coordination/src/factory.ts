@@ -19,6 +19,7 @@ import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
 import { VendorKeyResolver, type VendorValidator } from './vendor-credential';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
+import { PgAgentCreator } from './agent-creator';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { AgentDirectory, AuditSink, TaskContentSource, RepoProvisioner } from './orchestrate';
 import { createCoordinationServer, type CoordinationServerDeps } from './server';
@@ -271,6 +272,15 @@ export function createCoordination(
       membership,
       roster,
       ...(input.singleTenant !== undefined ? { singleTenant: input.singleTenant } : {}),
+      ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+      ...(input.logger !== undefined ? { logger: input.logger } : {}),
+    },
+    // The create-agent API (slice Wizard-A): the user-facing roster create flow. Mints a named agent +
+    // capability profile and auto-hires it into the caller's active org, ATOMICALLY (PgAgentCreator owns
+    // the tx). Member+ gated; CSRF on the POST. Same session posture as the org API.
+    agentApi: {
+      creator: new PgAgentCreator(input.pool),
+      membership,
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
