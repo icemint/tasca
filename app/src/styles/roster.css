@@ -41,10 +41,10 @@
 .roster-head .sub b { color: var(--fg-2); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .btn-add { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm);
-  padding: 9px 15px; border-radius: var(--radius-sm); background: var(--signal); color: #04101F; transition: background var(--dur) var(--ease), transform var(--dur) var(--ease); }
+  padding: 9px 15px; border-radius: var(--radius-sm); background: var(--signal); color: var(--ink-on-accent); transition: background var(--dur) var(--ease), transform var(--dur) var(--ease); }
 .btn-add:hover { background: var(--signal-2); transform: translateY(-1px); }
 .btn-add svg { width: 15px; height: 15px; }
-:root[data-theme="light"] .btn-add, [data-theme="light"] .btn-add { color: #fff; }
+:root[data-theme="light"] .btn-add, [data-theme="light"] .btn-add { color: var(--on-accent); }
 
 /* ── Team-health strip ──────────────────────────────────────────────────── */
 .health-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; margin-top: 22px;

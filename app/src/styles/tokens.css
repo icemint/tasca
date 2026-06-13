@@ -24,6 +24,9 @@
   --p-slate-200: #C4CDDA;
   --p-slate-300: #94A3B8;
   --p-slate-400: #8B97A8;
+  --p-slate-440: #828C9C;   /* AA muted band (dark fg-4): 5.34 on --surface, 4.98 on --surface-2 */
+  --p-slate-450: #7E8898;   /* AA muted band (dark fg-faint): 5.06 on --surface, 4.72 on --surface-2 */
+  --p-slate-480: #606B7D;   /* AA muted band (light fg-faint): 5.39 on white, 4.98 on --surface-2 */
   --p-slate-500: #5C6779;
   --p-slate-600: #475569;
   --p-slate-700: #334155;
@@ -162,8 +165,8 @@
   --fg:        var(--p-slate-50);
   --fg-2:      var(--p-slate-200);
   --fg-3:      var(--p-slate-400);
-  --fg-4:      var(--p-slate-500);
-  --fg-faint:  #424C5C;
+  --fg-4:      var(--p-slate-440);   /* AA-muted: ~5.4 on --surface (was slate-500, sub-AA) */
+  --fg-faint:  var(--p-slate-450);   /* AA-muted: ~4.6 on --surface (was #424C5C, sub-AA) */
 
   --signal:     var(--p-blue-400);
   --signal-2:   var(--p-blue-300);
@@ -179,6 +182,17 @@
   --red:    var(--p-red-400);
   --purple: var(--p-purple-400);
   --violet: var(--p-violet-400);
+
+  /* ink/white that sits ON a saturated accent fill (signal/amber/green buttons,
+     avatars, badges) — fixed across themes because the backdrop is the accent,
+     not the surface. --ink-on-accent = near-black for bright fills (dark theme
+     accents); --on-accent = white for the darkened light-theme accents. */
+  --ink-on-accent: #04101F;
+  --ink-on-amber:  #1A1303;
+  --on-accent:     #FFFFFF;
+
+  /* translucent header backdrop (themed) */
+  --header-bg: rgba(9,13,20,0.78);
 
   /* elevation — borders are primary; shadow reserved for floating layers */
   --shadow-sm:  0 1px 2px rgba(0,0,0,0.4);
@@ -284,13 +298,19 @@
   --fg:        var(--p-slate-900);
   --fg-2:      var(--p-slate-800);
   --fg-3:      var(--p-slate-600);
-  --fg-4:      var(--p-slate-500);
-  --fg-faint:  var(--p-slate-300);
+  --fg-4:      var(--p-slate-500);   /* 5.72 on white — already AA */
+  --fg-faint:  var(--p-slate-480);   /* AA-muted: ~4.8 on white (was slate-300, sub-AA) */
 
   --signal:     var(--p-blue-700);
   --signal-2:   var(--p-blue-800);
   --signal-3:   var(--p-blue-700);
   --signal-glow:var(--p-blue-glow-l);
+
+  /* amber-as-text on white: bright dark-theme amber fails AA, so override to the
+     darkened amber-700 (5.02:1 on white). Accent/border amber usages unaffected. */
+  --amber:  var(--p-amber-700);
+
+  --header-bg: rgba(255,255,255,0.78);
 
   --green:  var(--p-green-700);
   --red:    var(--p-red-600);
