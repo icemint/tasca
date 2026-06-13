@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { createServer as createHttpServer, request as httpRequest, type Server, type IncomingMessage } from 'node:http';
 import { connect } from 'node:net';
 import { serveAnthropicProxy, serveAnthropicBridge, type AnthropicProxyHandle, type AnthropicBridgeHandle, type AgentCallUsage } from './index';
@@ -670,6 +671,31 @@ describe('TCP-listen mode + baked usage context (in-process per-task proxy)', ()
     // and the tee (which parses bytes as UTF-8 SSE/JSON) silently extracts NO usage.
     await reqViaTcp(port, { headers: { 'accept-encoding': 'gzip, deflate, br' }, body: '{}' });
     expect(up.received[0]!.headers['accept-encoding']).toBeUndefined(); // stripped → upstream won't compress
+  });
+
+  it('REPRO: an upstream that gzips IFF asked still gets metered — the proxy strips accept-encoding so the body arrives identity and the tee records usage', async () => {
+    const sse =
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_GZ","model":"claude-haiku-4-5","usage":{"input_tokens":11,"output_tokens":1}}}\n\n' +
+      'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":42}}\n\n';
+    // Mimic Anthropic: compress ONLY if the client asked. The real pre-fix bug was the proxy forwarding
+    // the agent's accept-encoding: gzip — so if the strip ever regresses, this upstream gzips, the tee
+    // reads gzip bytes as UTF-8, extracts nothing, and `records` is empty → this test fails.
+    const up = await fakeUpstream((req, _body, res) => {
+      if (String(req.headers['accept-encoding'] ?? '').includes('gzip')) {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'content-encoding': 'gzip' });
+        res.end(gzipSync(Buffer.from(sse)));
+      } else {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(sse);
+      }
+    });
+    const { port, records } = await startTcpProxy(up.origin, { usageContext: { orgId: 'org-GZ', taskId: 'task-GZ' } });
+    await reqViaTcp(port, { headers: { 'accept-encoding': 'gzip, deflate, br' }, body: '{}' }); // the agent asks for gzip
+    await tick();
+    expect(up.received[0]!.headers['accept-encoding']).toBeUndefined(); // …but the proxy stripped it
+    expect(records).toEqual([
+      { orgId: 'org-GZ', taskId: 'task-GZ', model: 'claude-haiku-4-5', inputTokens: 11, outputTokens: 42, idempotencyKey: 'msg_GZ' },
+    ]); // identity body parsed → the agent call IS metered
   });
 
   it('a metered 2xx that yields NO usage logs a WARNING (loud — never a silent unmetered agent run)', async () => {
