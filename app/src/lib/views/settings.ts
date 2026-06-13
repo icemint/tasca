@@ -380,7 +380,7 @@ function invitesSection(invitesRes: ApiResult<InvitesResponse>, callerRole: OrgR
         <button class="btn-add" type="submit" data-act="inv-send">Send invite</button>
       </div>
       <p class="inv-err" data-inv-err hidden role="alert"></p>
-      <div class="inv-result" data-inv-result hidden>
+      <div class="inv-result" data-inv-result hidden role="status">
         <label class="inv-result-label" for="inv-link">Invite link</label>
         <div class="inv-result-row">
           <input id="inv-link" class="inv-link mono" type="text" readonly aria-label="Single-use invite link" data-inv-link />

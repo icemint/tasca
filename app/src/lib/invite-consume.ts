@@ -38,8 +38,9 @@ export async function consumePendingInvite(): Promise<void> {
   try {
     const res = await acceptInvite(token);
     if (res.kind === 'ok') {
-      const org = (res.data as { orgId?: string }).orgId;
-      showNotice(org ? `You’ve joined ${org}.` : 'You’ve joined the workspace.', 'ok');
+      // The accept response carries orgId (a raw internal id like `org_u_…`), not a display name —
+      // show generic copy rather than leak an internal id into the UI.
+      showNotice('You’ve joined the workspace.', 'ok');
     } else {
       // A used/invalid token, or any other failure — a quiet notice. Don't trap the user; they're
       // already logged in and on /roster.
