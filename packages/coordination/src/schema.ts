@@ -448,6 +448,84 @@ CREATE TABLE IF NOT EXISTS org_invite (
 );
 CREATE INDEX IF NOT EXISTS org_invite_org_status_idx ON org_invite (org_id, status, created_at DESC);`;
 
+/**
+ * Project abstraction (slice Project-A): a project = a named codebase + its task source(s) — one
+ * repo + N trackers, finer than but WITHIN the org boundary (org_id stays the tenant scope; a
+ * project is a filter, not a new tenant). A task carries its tracker origin (platform +
+ * external_story_id) and executes against its project's single repo.
+ *
+ * Resolution + invariants are enforced by two PARTIAL unique indexes, not a plain composite UNIQUE:
+ *   - one project per (org, repo) for repo-backed projects — the resolution key getOrCreateProject
+ *     conflicts on (so re-ingesting the same repo maps to the same project);
+ *   - exactly one Unassigned (NULL-repo) project per org — the home for tasks with no repo.
+ * Name is a display LABEL (the repo's last path segment, or 'Unassigned') — deliberately NOT unique;
+ * resolution is by repo_ref. Org-scoped tenant data → in the org-scoping CI guard's TENANT_TABLES.
+ */
+export const PROJECT_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS project (
+  id          text PRIMARY KEY,
+  org_id      text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  repo_ref    text,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS project_org_repo_idx       ON project (org_id, repo_ref) WHERE repo_ref IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS project_org_unassigned_idx ON project (org_id)           WHERE repo_ref IS NULL;`;
+
+/**
+ * Promote `task.repo_ref` (a free-form `owner/repo` string) into a structured `task.project_id`
+ * via an EXPAND/CONTRACT migration (mirrors ORG_SCOPING_DDL's discipline). Applied AFTER
+ * ORG_SCOPING_DDL (task.org_id must already be NOT NULL), fully idempotent + safe to re-run on a
+ * populated DB at boot:
+ *   1. add `project_id` NULLABLE so the ALTER never fails on existing rows;
+ *   2. materialize the projects from the EXISTING tasks — one per distinct (org_id, repo_ref) with a
+ *      non-null repo, plus one Unassigned per org that has any null-repo task. Ids are DETERMINISTIC
+ *      (`proj_` || md5(org_id || repo_ref-or-sentinel)) so a re-run maps to the SAME id, and the
+ *      partial unique indexes + ON CONFLICT DO NOTHING make the inserts idempotent + collision-free;
+ *   3. backfill EXHAUSTIVELY — every task gets its per-repo project, or its org's Unassigned;
+ *   4. CONTRACT (only once the backfill is provably exhaustive): SET NOT NULL + the FK to project.
+ *      SET NOT NULL is the SAFETY NET — if step 3 left any task null it fails the boot, so the
+ *      backfill is built to cover 100% of tasks first. The FK add is guarded (duplicate_object) so a
+ *      re-run is a no-op.
+ *
+ * The `∅` sentinel in the id seed disambiguates a null repo from an empty-string repo so they don't
+ * collapse to the same project id.
+ */
+export const PROJECT_BACKFILL_DDL = `
+-- 1. project_id NULLABLE on task.
+ALTER TABLE task ADD COLUMN IF NOT EXISTS project_id text;
+
+-- 2. materialize projects from existing tasks (deterministic ids; idempotent via the partial uniques).
+--    The id seed is org_id, a space, then the repo_ref (or the '∅' sentinel) — IDENTICAL to the store's
+--    getOrCreateProject, so the boot backfill and a runtime get-or-create of the same repo converge on
+--    the SAME project id.
+--    Repo-backed: one per distinct (org_id, repo_ref); name = the repo's last path segment.
+INSERT INTO project (id, org_id, name, repo_ref)
+  SELECT DISTINCT 'proj_' || md5(t.org_id || ' ' || t.repo_ref),
+         t.org_id, substring(t.repo_ref from '[^/]+$'), t.repo_ref
+    FROM task t
+   WHERE t.repo_ref IS NOT NULL
+ON CONFLICT DO NOTHING;
+--    Unassigned: one per org that has any null-repo task.
+INSERT INTO project (id, org_id, name, repo_ref)
+  SELECT DISTINCT 'proj_' || md5(t.org_id || ' ' || '∅'), t.org_id, 'Unassigned', NULL
+    FROM task t
+   WHERE t.repo_ref IS NULL
+ON CONFLICT DO NOTHING;
+
+-- 3. backfill EXHAUSTIVELY — every task → its per-repo project (or its org's Unassigned). Idempotent
+--    (only NULLs). Matching is org-scoped, so no task ever crosses into another org's project.
+UPDATE task t SET project_id = p.id
+  FROM project p
+ WHERE t.project_id IS NULL
+   AND p.org_id = t.org_id
+   AND (p.repo_ref = t.repo_ref OR (p.repo_ref IS NULL AND t.repo_ref IS NULL));
+
+-- 4. CONTRACT — NOT NULL (the safety net: a non-exhaustive backfill fails the boot here) + the FK.
+ALTER TABLE task ALTER COLUMN project_id SET NOT NULL;
+DO $$ BEGIN ALTER TABLE task ADD CONSTRAINT task_project_fk FOREIGN KEY (project_id) REFERENCES project(id); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS task_project_idx ON task (project_id);`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -462,4 +540,6 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
   GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
   ORG_INVITE_TABLE_DDL, // slice 3.5-B.3.1: single-use, hashed-at-rest, expiring org-join invites
+  PROJECT_TABLE_DDL, // slice Project-A: the project entity (after organization exists)
+  PROJECT_BACKFILL_DDL, // slice Project-A: task.project_id expand/contract (after ORG_SCOPING_DDL → task.org_id NOT NULL)
 ];

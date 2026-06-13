@@ -115,6 +115,14 @@ const VALID_PREDECESSORS: Record<TaskStatus, TaskStatus[]> = (() => {
 // (task / routing_decision / pull_request) — no aggregate columns the schema
 // doesn't carry (throughput, cost-burn, success-over-time) are invented here.
 
+/** A project as the project list / switcher needs it (slice Project-A). repoRef is the single repo
+ *  tasks execute against; null = the org's Unassigned project. */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  repoRef: string | null;
+}
+
 /** A task as the roster / monitoring lists need it (no per-attempt detail). */
 export interface TaskSummary {
   id: string;
@@ -231,6 +239,28 @@ export interface CoordinationStore {
    * lets a re-assigned story re-drive the same task and accumulate failures.
    */
   getOrCreateTask(orgId: string, input: CreateTaskInput): Promise<Task>;
+
+  /**
+   * Get-or-create the project for `(orgId, repoRef)` (slice Project-A): the per-repo project, or
+   * the org's single Unassigned project for a null repo. Idempotent — concurrent get-or-creates of
+   * the same (org, repo) converge to ONE project via the partial unique indexes + ON CONFLICT.
+   * Returns the project id. Name is the repo's last path segment (or 'Unassigned').
+   */
+  getOrCreateProject(orgId: string, repoRef: string | null): Promise<string>;
+
+  /** The org's projects (slice Project-A), name-ordered. Org-scoped — never another org's projects. */
+  listProjects(orgId: string): Promise<ProjectSummary[]>;
+
+  /** The user's active project (slice Project-A) — the finer task-view filter WITHIN their active
+   *  org — VALIDATED against that org at read time, or null (= the cross-project "all projects" view).
+   *  A stale active project whose org is no longer the user's active org resolves to null, never a
+   *  foreign tenant's project. */
+  getActiveProject(userId: string): Promise<string | null>;
+
+  /** Set the user's active project (slice Project-A). VALIDATES the project exists IN the user's active
+   *  org — a foreign-org id and a nonexistent id both return `not_found` (no cross-tenant existence
+   *  oracle), and a foreign-org project is never activated. `ok` on success. */
+  setActiveProject(userId: string, projectId: string): Promise<'ok' | 'not_found'>;
 
   getTask(orgId: string, taskId: string): Promise<Task | null>;
 
@@ -479,8 +509,12 @@ export interface CoordinationStore {
 
   // ── Read-side (the read-only API serves these; query-only, no writes) ───────
 
-  /** List task summaries, newest first; optionally filtered by status, capped by limit. */
-  listTasks(orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]>;
+  /** List task summaries, newest first; optionally filtered by status and/or project, capped by
+   *  limit. An absent `projectId` is the cross-project view (all of the org's projects). */
+  listTasks(
+    orgId: string,
+    filter?: { status?: TaskStatus; projectId?: string; limit?: number }
+  ): Promise<TaskSummary[]>;
 
   /** Aggregate count of the org's tasks by status (slice W3-S1d) — the standup's data source. Counts
    *  EVERY task (no pagination/cap, so a large org is never under-counted). Org-scoped. */
@@ -794,9 +828,13 @@ export class PgCoordinationStore implements CoordinationStore, VendorCredentialS
    *  content/parent_task_id are set only on first insert (decomposition children); a normal task
    *  passes neither. The conflict target is the org-prefixed unique (ORG_CONTRACT_DDL). */
   private async getOrCreateTaskOn(db: Queryable, orgId: string, input: CreateTaskInput): Promise<Task> {
+    // Resolve (or create) the structured project for this task's repo BEFORE the insert, on the SAME
+    // Queryable so a task created inside the accept-decomposition tx shares its project resolution.
+    // repo_ref stays on the task (the provisioner reads it); project_id is the structured link.
+    const projectId = await this.getOrCreateProjectOn(db, orgId, input.repoRef ?? null);
     const res = await db.query<TaskRow>(
-      `INSERT INTO task (id, org_id, external_story_id, platform, status, version, failure_count, repo_ref, content, parent_task_id)
-       VALUES ($1,$2,$3,$4,'routable',0,0,$5,$6::jsonb,$7)
+      `INSERT INTO task (id, org_id, external_story_id, platform, status, version, failure_count, repo_ref, project_id, content, parent_task_id)
+       VALUES ($1,$2,$3,$4,'routable',0,0,$5,$6,$7::jsonb,$8)
        ON CONFLICT (org_id, platform, external_story_id)
          DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
        RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id`,
@@ -806,11 +844,102 @@ export class PgCoordinationStore implements CoordinationStore, VendorCredentialS
         input.externalStoryId,
         input.platform,
         input.repoRef ?? null,
+        projectId,
         input.content ? JSON.stringify(input.content) : null,
         input.parentTaskId ?? null,
       ]
     );
     return mapTask(res.rows[0]!);
+  }
+
+  async getOrCreateProject(orgId: string, repoRef: string | null): Promise<string> {
+    return this.getOrCreateProjectOn(this.db, orgId, repoRef);
+  }
+
+  /** Resolve the `(orgId, repoRef)` project against a given Queryable (so it can run inside the task-
+   *  create tx). Deterministic id + last-segment name MATCH the migration's PROJECT_BACKFILL_DDL, so
+   *  the boot-time backfill and a runtime get-or-create of the same repo converge on the SAME project.
+   *  Idempotent: the partial unique indexes + ON CONFLICT DO NOTHING collapse a concurrent create to
+   *  one row; the SELECT then reads back the (now-guaranteed) project. */
+  private async getOrCreateProjectOn(db: Queryable, orgId: string, repoRef: string | null): Promise<string> {
+    // '∅' sentinel disambiguates a null repo (the Unassigned bucket) from an empty-string repo, so
+    // they never collapse to the same id — same seed the migration uses.
+    const seed = repoRef ?? '∅';
+    const name = repoRef === null ? 'Unassigned' : repoRef.slice(repoRef.lastIndexOf('/') + 1);
+    const res = await db.query<{ id: string }>(
+      `WITH ins AS (
+         INSERT INTO project (id, org_id, name, repo_ref)
+           VALUES ('proj_' || md5($1 || ' ' || $2), $1, $3, $4)
+         ON CONFLICT DO NOTHING
+         RETURNING id
+       )
+       SELECT id FROM ins
+       UNION ALL
+       SELECT id FROM project
+        WHERE org_id = $1 AND repo_ref IS NOT DISTINCT FROM $4
+       LIMIT 1`,
+      [orgId, seed, name, repoRef]
+    );
+    return res.rows[0]!.id;
+  }
+
+  async listProjects(orgId: string): Promise<ProjectSummary[]> {
+    // ORG-SCOPED — never another org's projects. Name-ordered, with the Unassigned bucket (if any).
+    const res = await this.db.query<{ id: string; name: string; repo_ref: string | null }>(
+      `SELECT id, name, repo_ref FROM project WHERE org_id = $1 ORDER BY name, id`,
+      [orgId]
+    );
+    return res.rows.map((r) => ({ id: r.id, name: r.name, repoRef: r.repo_ref }));
+  }
+
+  async getActiveProject(userId: string): Promise<string | null> {
+    // The user's active project IF it is still in their CURRENT active org, else null (= the cross-
+    // project "all projects" view — never a foreign tenant's project). The JOIN to the resolved active
+    // org is what stops a stale active project (its org no longer active, or its membership revoked)
+    // from leaking another org's tasks. A user with no membership / no selection resolves to null.
+    const res = await this.db.query<{ project_id: string }>(
+      `SELECT ap.project_id
+         FROM user_active_project ap
+         JOIN project p ON p.id = ap.project_id
+        WHERE ap.user_id = $1
+          AND p.org_id = COALESCE(
+            (SELECT a.org_id FROM user_active_org a
+               JOIN org_membership m ON m.user_id = a.user_id AND m.org_id = a.org_id
+              WHERE a.user_id = $1),
+            (SELECT org_id FROM org_membership WHERE user_id = $1 ORDER BY created_at, org_id LIMIT 1)
+          )`,
+      [userId]
+    );
+    return res.rows[0]?.project_id ?? null;
+  }
+
+  async setActiveProject(userId: string, projectId: string): Promise<'ok' | 'not_found'> {
+    // ONE org-scoped existence probe (in the upsert's tx): the project must exist AND belong to the
+    // user's CURRENT active org. A foreign-org id and a nonexistent id are INDISTINGUISHABLE — both
+    // 'not_found' — so there is no cross-tenant existence oracle. (Project ids are deterministic
+    // 'proj_'||md5(org_id||' '||repo_ref), so a separate 403-for-foreign would let a member enumerate
+    // another org's repos by id.) A foreign-org project is therefore never activated. Mirrors
+    // setActiveOrg's isMember discipline (one outcome for unknown/foreign).
+    return this.withTaskTx(async (db) => {
+      const found = await db.query(
+        `SELECT 1 FROM project
+          WHERE id = $2
+            AND org_id = COALESCE(
+              (SELECT a.org_id FROM user_active_org a
+                 JOIN org_membership m ON m.user_id = a.user_id AND m.org_id = a.org_id
+                WHERE a.user_id = $1),
+              (SELECT org_id FROM org_membership WHERE user_id = $1 ORDER BY created_at, org_id LIMIT 1)
+            )`,
+        [userId, projectId]
+      );
+      if (!found.rowCount) return 'not_found';
+      await db.query(
+        `INSERT INTO user_active_project (user_id, project_id) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET project_id = EXCLUDED.project_id, updated_at = now()`,
+        [userId, projectId]
+      );
+      return 'ok';
+    });
   }
 
   async getTaskOrigin(orgId: string, taskId: string): Promise<TaskOrigin | null> {
@@ -1486,15 +1615,24 @@ export class PgCoordinationStore implements CoordinationStore, VendorCredentialS
 
   // ── Read-side queries ───────────────────────────────────────────────────────
 
-  async listTasks(orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
-    // Newest-first by created_at, scoped to org; status filter is optional. The limit is
-    // clamped to a sane ceiling so a hostile/oversized ?limit can't ask for the whole table.
+  async listTasks(
+    orgId: string,
+    filter?: { status?: TaskStatus; projectId?: string; limit?: number }
+  ): Promise<TaskSummary[]> {
+    // Newest-first by created_at, scoped to org; status + project filters are optional. org_id stays
+    // the tenant boundary; project_id (when present) is a FINER filter WITHIN it — an absent projectId
+    // is the cross-project view (all of the org's projects). The limit is clamped to a sane ceiling so
+    // a hostile/oversized ?limit can't ask for the whole table.
     const limit = clampLimit(filter?.limit, 50, 200);
     const params: unknown[] = [orgId];
     let where = `WHERE org_id = $1`;
     if (filter?.status) {
       params.push(filter.status);
       where += ` AND status = $${params.length}`;
+    }
+    if (filter?.projectId) {
+      params.push(filter.projectId);
+      where += ` AND project_id = $${params.length}`;
     }
     params.push(limit);
     const res = await this.db.query<TaskRow>(

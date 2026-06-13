@@ -661,12 +661,15 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     });
 
     it('getTaskStatusCounts counts EVERY task by status and is ORG-SCOPED (no cross-tenant count)', async () => {
-      // org_default: 2 routable + 1 done; org_other: 5 routable (must NOT be counted for org_default)
-      await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status) VALUES
-        ('c1','org_default','s1','shortcut','routable'),('c2','org_default','s2','shortcut','routable'),
-        ('c3','org_default','s3','shortcut','done')`);
+      // org_default: 2 routable + 1 done; org_other: 5 routable (must NOT be counted for org_default).
+      // task.project_id is NOT NULL (Project-A) — resolve each org's Unassigned project for these raw inserts.
+      const pDft = await store.getOrCreateProject('org_default', null);
+      const pOth = await store.getOrCreateProject('org_other', null);
+      await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status, project_id) VALUES
+        ('c1','org_default','s1','shortcut','routable',$1),('c2','org_default','s2','shortcut','routable',$1),
+        ('c3','org_default','s3','shortcut','done',$1)`, [pDft]);
       for (let i = 0; i < 5; i++) {
-        await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status) VALUES ($1,'org_other',$2,'shortcut','routable')`, [`o${i}`, `os${i}`]);
+        await pool.query(`INSERT INTO task (id, org_id, external_story_id, platform, status, project_id) VALUES ($1,'org_other',$2,'shortcut','routable',$3)`, [`o${i}`, `os${i}`, pOth]);
       }
       const counts = await store.getTaskStatusCounts(ORG);
       expect(counts.routable).toBe(2); // org_default only — org_other's 5 are NOT counted

@@ -274,6 +274,14 @@ export function createCoordination(
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
+    // The project API (slice Project-A): list the active org's projects + switch the active project
+    // (store-validated in-org). Same session posture as the org API; NOT single-tenant-gated.
+    projectApi: {
+      store,
+      membership,
+      ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+      ...(input.logger !== undefined ? { logger: input.logger } : {}),
+    },
     // BYOK vendor-credential API (slice 3.5-A) — wired only when the vendor-credential bits (master key
     // presence + validator) are supplied. The resolver (org-key injection seam + ~60s cache) is built
     // over the same store; consumers (per-org classifier) wire to it in the next sub-slice.

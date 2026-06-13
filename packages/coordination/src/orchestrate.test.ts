@@ -80,6 +80,10 @@ class FakeStore implements CoordinationStore {
     this.tasks.set(task.id, task);
     return task;
   }
+  async getOrCreateProject() { return 'proj_x'; }
+  async listProjects() { return []; }
+  async getActiveProject() { return null; }
+  async setActiveProject(): Promise<'ok' | 'not_found'> { return 'ok'; }
   async getTask(_orgId: string, taskId: string) {
     return this.tasks.get(taskId) ?? null;
   }
