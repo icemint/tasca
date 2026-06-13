@@ -96,7 +96,7 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE org_vendor_credential, usage_event, proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
+    await pool.query('TRUNCATE governance_audit_event, org_vendor_credential, usage_event, proposal, pull_request, routing_decision, webhook_event, platform_connection, task CASCADE');
     await pool.query('TRUNCATE audit_event, identity_binding, delegation, capability_profile, service_user, agent, rbac_role CASCADE');
     await pool.query(`INSERT INTO organization (id, name) VALUES ('org_other','Other') ON CONFLICT (id) DO NOTHING`);
     const created = await identity.createAgent({ name: 'Elvis', model: 'claude-sonnet', vendor: 'claude' });
@@ -704,6 +704,43 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(await store.deleteVendorCredential(ORG, 'anthropic')).toBe(true);
       expect(await store.getVendorCredentialStatuses(ORG)).toEqual([]);
       expect(await store.deleteVendorCredential(ORG, 'anthropic')).toBe(false);
+    });
+  });
+
+  describe('governance audit trail — append-only, org-scoped (slice 3.5-A.2c.1)', () => {
+    it('list returns only the org, newest-first', async () => {
+      await store.recordGovernanceAudit(ORG, { actorUserId: 'u1', action: 'credential.set', target: 'anthropic', payload: { fingerprint: 'fp1', status: 'active' } });
+      await store.recordGovernanceAudit(ORG, { actorUserId: 'u1', action: 'credential.delete', target: 'anthropic', payload: {} });
+      await store.recordGovernanceAudit('org_other', { actorUserId: 'u9', action: 'credential.set', target: 'anthropic', payload: { fingerprint: 'fpX', status: 'active' } });
+
+      const events = await store.listGovernanceAudit(ORG);
+      expect(events).toHaveLength(2); // org_other's row is NOT included
+      expect(events.map((e) => e.action)).toEqual(['credential.delete', 'credential.set']); // newest-first
+      expect(events[0]).toMatchObject({ actorUserId: 'u1', action: 'credential.delete', target: 'anthropic', payload: {} });
+      expect(events[1]).toMatchObject({ action: 'credential.set', payload: { fingerprint: 'fp1', status: 'active' } });
+      expect(await store.listGovernanceAudit('org_other')).toHaveLength(1);
+    });
+
+    it('APPEND-ONLY: a raw UPDATE / DELETE is a no-op (the trail cannot be rewritten or erased)', async () => {
+      await store.recordGovernanceAudit(ORG, { actorUserId: 'u1', action: 'credential.set', target: 'anthropic', payload: { fingerprint: 'fp1', status: 'active' } });
+      const [before] = await store.listGovernanceAudit(ORG);
+
+      // The UPDATE/DELETE rules turn these into silent no-ops.
+      await pool.query(`UPDATE governance_audit_event SET action = 'tampered', actor_user_id = 'attacker' WHERE org_id = $1`, [ORG]);
+      await pool.query(`DELETE FROM governance_audit_event WHERE org_id = $1`, [ORG]);
+
+      const after = await store.listGovernanceAudit(ORG);
+      expect(after).toHaveLength(1); // still present (DELETE was a no-op)
+      expect(after[0]).toMatchObject({ id: before!.id, action: 'credential.set', actorUserId: 'u1' }); // unchanged (UPDATE was a no-op)
+    });
+
+    it('list clamps an oversized limit and defaults to 50', async () => {
+      for (let i = 0; i < 60; i++) {
+        await store.recordGovernanceAudit(ORG, { actorUserId: 'u1', action: 'credential.set', target: 'anthropic', payload: { fingerprint: `fp${i}`, status: 'active' } });
+      }
+      expect(await store.listGovernanceAudit(ORG)).toHaveLength(50); // default limit
+      expect((await store.listGovernanceAudit(ORG, { limit: 10 })).length).toBe(10);
+      expect((await store.listGovernanceAudit(ORG, { limit: 9999 })).length).toBe(60); // clamped to ≤200, capped by row count
     });
   });
 });

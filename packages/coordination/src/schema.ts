@@ -385,6 +385,37 @@ CREATE TABLE IF NOT EXISTS org_vendor_credential (
   PRIMARY KEY (org_id, provider)
 );`;
 
+/**
+ * Governance audit trail (slice 3.5-A.2c.1): an append-only, org-scoped ledger of credential
+ * management actions (set / delete). A credential mutation is a HUMAN-ADMIN, ORG-SCOPED governance
+ * action with no agent, so it does NOT reuse @tasca/identity's agent-centric `audit_event` (agent_id
+ * NOT NULL, principal_id attribution, no org_id) — this table records the honest `actor_user_id` +
+ * `org_id` instead.
+ *
+ * Append-only is ENFORCED (mirrors audit_event): the UPDATE/DELETE rules turn any UPDATE or DELETE
+ * into a silent no-op, so the trail can only be appended to — never rewritten or erased (TRUNCATE
+ * bypasses rules, so test cleanup still works).
+ *
+ * `payload` carries `{fingerprint, status}` for a set (and `{}` for a delete) — it MUST NEVER contain
+ * the raw key. The key is sealed+stored in org_vendor_credential and never echoed here.
+ *
+ * org-scoped: org_id NOT NULL FK; in the org-scoping CI guard's TENANT_TABLES; every store method that
+ * touches it is required-orgId (the read filters by org_id, never cross-tenant).
+ */
+export const GOVERNANCE_AUDIT_EVENT_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS governance_audit_event (
+  id            text PRIMARY KEY,
+  org_id        text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  actor_user_id text NOT NULL,
+  action        text NOT NULL,
+  target        text,
+  payload       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  at            timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS governance_audit_event_org_at_idx ON governance_audit_event (org_id, at DESC, id);
+CREATE OR REPLACE RULE governance_audit_event_no_update AS ON UPDATE TO governance_audit_event DO INSTEAD NOTHING;
+CREATE OR REPLACE RULE governance_audit_event_no_delete AS ON DELETE TO governance_audit_event DO INSTEAD NOTHING;`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -397,4 +428,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
   USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
   VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
+  GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
 ];

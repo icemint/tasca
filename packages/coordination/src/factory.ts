@@ -278,6 +278,8 @@ export function createCoordination(
             validator: input.vendorCredential.validator,
             masterKey: input.vendorCredential.masterKey,
             membership,
+            // Governance audit trail (slice 3.5-A.2c.1): the same store implements GovernanceAuditSink.
+            audit: store,
             ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
             ...(input.logger !== undefined ? { logger: input.logger } : {}),
           },
