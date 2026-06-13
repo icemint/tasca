@@ -63,10 +63,28 @@ SELECT id, '${DEFAULT_ORG_ID}', 'owner' FROM app_user
  WHERE NOT EXISTS (SELECT 1 FROM org_membership)
 ON CONFLICT (user_id, org_id) DO NOTHING;`;
 
-/** Membership DDL in apply order (tables, then the guarded one-time backfill). */
+/**
+ * The user's ACTIVE project (slice Project-A) — which project (a finer filter WITHIN their active
+ * org) their task views are scoped to. One row per user. Like user_active_org, the row carries NO
+ * validity guarantee beyond the FK: getActiveProject re-validates it against the user's CURRENT
+ * active org at read time, so a stale active project (its org no longer the active one, or its
+ * membership revoked) can't leak a foreign tenant's tasks. ON DELETE CASCADE on project: dropping a
+ * project clears anyone parked on it. RESOLVES the project scope — NOT a tenant table (mirrors
+ * user_active_org), so it is not under the org-scoping CI guard.
+ */
+export const USER_ACTIVE_PROJECT_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS user_active_project (
+  user_id    text PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);`;
+
+/** Membership DDL in apply order (tables, then the guarded one-time backfill). user_active_project
+ *  FKs project (created in COORDINATION_SCHEMA_DDL, applied before this) + app_user. */
 export const ORG_MEMBERSHIP_DDL: readonly string[] = [
   ORG_MEMBERSHIP_TABLE_DDL,
   USER_ACTIVE_ORG_TABLE_DDL,
+  USER_ACTIVE_PROJECT_TABLE_DDL,
   ORG_MEMBERSHIP_BACKFILL_DDL,
 ];
 

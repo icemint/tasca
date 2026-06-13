@@ -32,6 +32,7 @@ import type {
 } from './store';
 import type { Logger } from './ports';
 import { resolveOrg, type OrgMembershipReader } from './resolve-org';
+import { resolveProject } from './resolve-project';
 
 // ── Read-side seams (narrow; the factory injects the concrete @tasca/identity repo) ─
 import type { AgentRecord, AgentWithProfile } from '@tasca/identity';
@@ -57,6 +58,7 @@ export interface ReadApiDeps {
     | 'listRoutingDecisions'
     | 'listPullRequestsForTask'
     | 'listConnections'
+    | 'getActiveProject'
   >;
   identity: IdentityReader;
   /** Resolves a verified session's user to their org (slice 4 RBAC). A user with no membership
@@ -249,8 +251,13 @@ export async function readApiHandler(
     return true;
   }
 
+  // The active project is a FINER filter WITHIN the resolved org (org_id stays the tenant boundary).
+  // null = the "all projects" default (no filter). The store validates the active selection against
+  // the user's current org, so this never narrows to a foreign tenant's project.
+  const activeProjectId = await resolveProject(deps.store, session);
+
   try {
-    await dispatch(matched, url, res, deps, orgId);
+    await dispatch(matched, url, res, deps, orgId, activeProjectId);
   } catch (err) {
     deps.logger?.error('read-api: handler failed', { path, err: String(err) });
     sendJson(res, 500, { error: 'internal error' });
@@ -283,7 +290,8 @@ async function dispatch(
   url: URL,
   res: ServerResponse,
   deps: ReadApiDeps,
-  orgId: string
+  orgId: string,
+  activeProjectId: string | null
 ): Promise<void> {
   switch (route.kind) {
     case 'agents': {
@@ -324,8 +332,14 @@ async function dispatch(
       const statusParam = url.searchParams.get('status') ?? undefined;
       const limitParam = url.searchParams.get('limit');
       const limit = limitParam ? Number(limitParam) : undefined;
+      // Project filter: an explicit ?project=<id> overrides the user's active project; absent both,
+      // the active project (if any) applies; absent that too, all of the org's projects (no filter).
+      // The store query is org-scoped, so a ?project for a foreign org simply matches no rows.
+      const projectParam = url.searchParams.get('project');
+      const projectId = projectParam ?? activeProjectId ?? undefined;
       const tasks = await deps.store.listTasks(orgId, {
         ...(statusParam ? { status: statusParam as TaskSummary['status'] } : {}),
+        ...(projectId !== undefined ? { projectId } : {}),
         ...(limit !== undefined ? { limit } : {}),
       });
       sendJson(res, 200, tasks.map(taskSummaryJson));

@@ -72,6 +72,10 @@ class CountingStore implements CoordinationStore {
     this.tasksByStory.set(key, task);
     return task;
   }
+  async getOrCreateProject() { return 'proj_x'; }
+  async listProjects() { return []; }
+  async getActiveProject() { return null; }
+  async setActiveProject(): Promise<'ok' | 'not_found'> { return 'ok'; }
   async getTask() { return null; }
   async getTaskOrigin(): Promise<TaskOrigin | null> { return null; }
   async setTierEstimate(_org: string, _id: string, _e: TierEstimate) {}

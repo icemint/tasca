@@ -55,12 +55,23 @@ class FakeStore {
   decisions: RoutingDecisionRecord[] = [];
   prs: PullRequestRecord[] = [];
   connections: ConnectionSummary[] = [];
+  // The user's active project (slice Project-A). null = the "all projects" default. The per-task
+  // project tag drives the project-filter assertions.
+  activeProject: string | null = null;
+  taskProject: Record<string, string> = {};
 
-  async listTasks(_orgId: string, filter?: { status?: TaskStatus; limit?: number }): Promise<TaskSummary[]> {
+  async listTasks(
+    _orgId: string,
+    filter?: { status?: TaskStatus; projectId?: string; limit?: number }
+  ): Promise<TaskSummary[]> {
     let rows = this.tasks.slice();
     if (filter?.status) rows = rows.filter((t) => t.status === filter.status);
+    if (filter?.projectId) rows = rows.filter((t) => this.taskProject[t.id] === filter.projectId);
     if (filter?.limit !== undefined) rows = rows.slice(0, filter.limit);
     return rows.map(summary);
+  }
+  async getActiveProject(): Promise<string | null> {
+    return this.activeProject;
   }
   async getTask(_orgId: string, id: string): Promise<Task | null> {
     return this.tasks.find((t) => t.id === id) ?? null;
@@ -249,6 +260,44 @@ describe('read-api handler', () => {
     expect(body).toHaveLength(1);
     expect(body[0].id).toBe('t1');
     expect(body[0].tierEstimate).toBe('hard');
+  });
+
+  // The active-project filter is keyed on the SESSION user, so these run with a session wired
+  // (the default deps() is unauthenticated → resolveProject returns null = all projects).
+  const sessioned = { verifySession: () => ({ userId: 'u1' }) };
+
+  it('GET /api/tasks with NO active project → ALL of the org’s tasks (no project filter)', async () => {
+    const store = new FakeStore();
+    store.tasks = [task('t1'), task('t2')];
+    store.taskProject = { t1: 'proj_a', t2: 'proj_b' };
+    store.activeProject = null; // the default
+    const id = new FakeIdentity();
+    const r = fakeRes();
+    await readApiHandler(fakeReq('GET', '/api/tasks'), r.res, deps(store, id, sessioned));
+    expect(r.statusCode).toBe(200);
+    expect(json(r).map((t: { id: string }) => t.id)).toEqual(['t1', 't2']); // cross-project view
+  });
+
+  it('GET /api/tasks filters by the user’s ACTIVE project', async () => {
+    const store = new FakeStore();
+    store.tasks = [task('t1'), task('t2')];
+    store.taskProject = { t1: 'proj_a', t2: 'proj_b' };
+    store.activeProject = 'proj_a';
+    const id = new FakeIdentity();
+    const r = fakeRes();
+    await readApiHandler(fakeReq('GET', '/api/tasks'), r.res, deps(store, id, sessioned));
+    expect(json(r).map((t: { id: string }) => t.id)).toEqual(['t1']); // only the active project's task
+  });
+
+  it('GET /api/tasks?project=<id> OVERRIDES the active project', async () => {
+    const store = new FakeStore();
+    store.tasks = [task('t1'), task('t2')];
+    store.taskProject = { t1: 'proj_a', t2: 'proj_b' };
+    store.activeProject = 'proj_a'; // active is A, but the explicit param wins
+    const id = new FakeIdentity();
+    const r = fakeRes();
+    await readApiHandler(fakeReq('GET', '/api/tasks?project=proj_b'), r.res, deps(store, id, sessioned));
+    expect(json(r).map((t: { id: string }) => t.id)).toEqual(['t2']); // the ?project override
   });
 
   it('GET /api/tasks/:id → folds routing decision + PRs', async () => {

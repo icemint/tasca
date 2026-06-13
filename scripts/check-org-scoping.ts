@@ -30,6 +30,7 @@ export const TENANT_TABLES = [
   'org_vendor_credential',
   'governance_audit_event',
   'org_invite',
+  'project',
 ] as const;
 
 /**
