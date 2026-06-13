@@ -46,6 +46,27 @@
 .btn-add svg { width: 15px; height: 15px; }
 :root[data-theme="light"] .btn-add, [data-theme="light"] .btn-add { color: var(--on-accent); }
 
+/* ── Create-agent form (slice Wizard-B) — reveal-on-demand; tokens only, both themes.
+   Mirrors the Settings reveal-form treatment (.vk-form / .ws-name-form): bordered surface,
+   token inputs, an inline role=alert error. ──────────────────────────────── */
+.ca-form { margin-top: 18px; padding: 18px; border-radius: var(--radius-md); border: 1px solid var(--line-2); background: var(--surface-2); display: flex; flex-direction: column; gap: 14px; }
+.ca-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.ca-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ca-field-wide { grid-column: 1 / -1; }
+.ca-label { font-size: var(--fs-xs); font-weight: 600; color: var(--fg-2); }
+.ca-opt { font-weight: 500; color: var(--fg-faint); }
+.ca-req { font-weight: 500; color: var(--fg-faint); }
+.ca-input { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-size: var(--fs-sm); transition: border-color var(--dur) var(--ease); }
+.ca-input::placeholder { color: var(--fg-faint); }
+.ca-input:focus { outline: none; border-color: color-mix(in srgb, var(--signal) 55%, transparent); box-shadow: var(--focus-ring-soft); }
+.ca-hint { font-size: var(--fs-2xs); color: var(--fg-faint); margin: 0; }
+.ca-actions { display: flex; align-items: center; gap: 8px; }
+/* The role=alert region is always in the DOM for reliable SR announcement; collapse it when empty. */
+.ca-err { font-size: var(--fs-xs); color: var(--red); margin: 0; }
+.ca-err:empty { display: none; }
+.ca-err:focus { outline: none; }
+@media (max-width: 560px) { .ca-grid { grid-template-columns: 1fr; } }
+
 /* ── Team-health strip ──────────────────────────────────────────────────── */
 .health-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; margin-top: 22px;
   background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }

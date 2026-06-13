@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { loadRoster } from './roster';
+import { loadRoster, defaultTierForModel } from './roster';
 import { loadMonitoring } from './monitoring';
 import { loadTask, describeTaskOutcome } from './task';
 import { loadAgent } from './agent';
@@ -38,14 +38,16 @@ function withId(id: string): void {
 }
 
 describe('roster', () => {
-  it('renders real agents and a read-only (gated) Add agent control — no stray "Coming soon"', async () => {
+  it('renders real agents and a LIVE Create agent control (member+, not gated) — no stray "Coming soon"', async () => {
     stubFetch({ '/api/agents': { body: [AGENT_ELVIS] } });
     const r = await loadRoster();
     expect(r.kind).toBe('ok');
     expect(htmlOf(r)).toContain('Elvis');
     expect(htmlOf(r)).toContain('Your team');
-    expect(htmlOf(r)).toContain('data-ro="gated"'); // Add agent = provisioning, gated
-    expect(htmlOf(r)).toContain('Agent provisioning is operator-run today');
+    // Create agent is a LIVE member+ control — never the read-only provisioning gate.
+    expect(htmlOf(r)).toContain('data-act="ca-open"');
+    expect(htmlOf(r)).toContain('Create agent');
+    expect(htmlOf(r)).not.toContain('Agent provisioning is operator-run today');
     expect(htmlOf(r)).not.toContain('Coming soon');
   });
 
@@ -59,6 +61,68 @@ describe('roster', () => {
   it('propagates unauth from a 401', async () => {
     stubFetch({ '/api/agents': { status: 401, body: {} } });
     expect((await loadRoster()).kind).toBe('unauth');
+  });
+
+  it('the create form carries all fields, real labels, and a role=alert error slot', async () => {
+    stubFetch({ '/api/agents': { body: [AGENT_ELVIS] } });
+    const html = htmlOf(await loadRoster());
+    expect(html).toContain('data-ca-form');
+    // every field has a real <label for> + native control
+    expect(html).toContain('<label class="ca-label" for="ca-name">');
+    expect(html).toContain('id="ca-name"');
+    expect(html).toContain('<label class="ca-label" for="ca-vendor">');
+    expect(html).toContain('<select id="ca-vendor"');
+    expect(html).toContain('<label class="ca-label" for="ca-model">');
+    expect(html).toContain('id="ca-model"');
+    expect(html).toContain('<label class="ca-label" for="ca-tier">');
+    expect(html).toContain('<select id="ca-tier"');
+    expect(html).toContain('type="url"'); // optional avatar
+    // vendor options (Claude default first)
+    expect(html).toContain('<option value="claude">Claude</option>');
+    expect(html).toContain('<option value="openai">OpenAI</option>');
+    expect(html).toContain('<option value="local">Local</option>');
+    // the inline error is announced
+    expect(html).toContain('data-ca-err');
+    expect(html).toContain('role="alert"');
+    // the default model (claude-opus-4-8) pre-selects ULTRA in the tier <select>
+    expect(html).toContain('<option value="ultra" selected>ULTRA</option>');
+  });
+
+  it('the Create agent control is member+ — a NON-ADMIN member still sees the live form', async () => {
+    stubFetch({
+      '/api/agents': { body: [AGENT_ELVIS] },
+      '/api/orgs': { body: { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] } },
+      '/api/orgs/agents': { body: { agents: [] } },
+    });
+    const html = htmlOf(await loadRoster());
+    // create is live for a non-admin member (the per-card Hire stays admin-gated — unaffected)
+    expect(html).toContain('data-act="ca-open"');
+    expect(html).toContain('data-ca-form');
+    expect(html).not.toContain('data-act="hire"'); // hire is still admin-gated
+    expect(html).toContain('Admin role required to manage the roster');
+  });
+});
+
+describe('defaultTierForModel — client mirror of the backend model→tier table', () => {
+  it('maps the known model families', () => {
+    expect(defaultTierForModel('claude', 'claude-opus-4-8')).toBe('ultra');
+    expect(defaultTierForModel('claude', 'claude-sonnet-4')).toBe('hard');
+    expect(defaultTierForModel('claude', 'claude-3-5-haiku')).toBe('low');
+    expect(defaultTierForModel('openai', 'gpt-4o')).toBe('hard');
+    expect(defaultTierForModel('openai', 'o1-preview')).toBe('hard');
+    expect(defaultTierForModel('openai', 'gpt-4o-mini')).toBe('low');
+    expect(defaultTierForModel('openai', 'gpt-3.5-turbo')).toBe('low');
+    expect(defaultTierForModel('local', 'qwen2.5-coder')).toBe('medium'); // the fallback
+  });
+
+  it('is VENDOR-GATED (no cross-vendor substring drift) — matches the backend', () => {
+    // A local/openai model that merely CONTAINS a Claude/GPT keyword must NOT inherit that tier — the
+    // backend gates on vendor, so the client must too (else a confidently-wrong recommended cap ships).
+    expect(defaultTierForModel('local', 'gpt-4-coder')).toBe('medium'); // not 'hard'
+    expect(defaultTierForModel('local', 'my-opus-clone')).toBe('medium'); // not 'ultra'
+    expect(defaultTierForModel('openai', 'opus-mini')).toBe('medium'); // not 'ultra' (opus only under claude)
+    expect(defaultTierForModel('claude', 'gpt-4-something')).toBe('medium'); // gpt-4 only under openai
+    expect(defaultTierForModel('local', 'sonnet-q4')).toBe('medium'); // not 'hard'
   });
 });
 

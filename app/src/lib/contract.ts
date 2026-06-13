@@ -249,6 +249,27 @@ export interface HiredAgentsResponse {
   agents: HiredAgent[];
 }
 
+// ── create agent (slice Wizard-B: the create-agent wizard) ─────────────────────
+// POST /api/agents — member+ (any org member). On success the agent is created AND
+// auto-hired into the caller's active org. `maxTier` is optional on the wire (the
+// backend derives it from the model when omitted), but the UI always sends one.
+export interface NewAgentInput {
+  name: string;
+  vendor: string;
+  model: string;
+  avatarUrl?: string;
+  maxTier?: string;
+}
+
+/** The POST /api/agents 200 body — the created agent's identity + resolved tier. */
+export interface NewAgentResponse {
+  id: string;
+  name: string;
+  vendor: string;
+  model: string;
+  maxTier: string;
+}
+
 // ── per-org vendor credentials (slice 3.5-A.2c.2: Settings "Vendor keys") ───────
 // The stored key is WRITE-ONLY — the read shape NEVER carries it, only a status +
 // a non-reversible fingerprint. `status` is 'active' when a key is sealed for the
