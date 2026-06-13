@@ -24,6 +24,8 @@ import {
   ORG_INFO_OWNER,
   ORG_INFO_MEMBER,
   MEMBERS_OK,
+  INVITES_OK,
+  INVITES_EMPTY,
   SESSION_OK,
   htmlOf,
 } from '../test-support';
@@ -420,6 +422,88 @@ describe('settings — Workspace panel (slice 3.5-B.2: name + members/roles)', (
     expect(r.kind).toBe('ok');
     const html = htmlOf(r);
     expect(html).toContain('Could not load the workspace');
+    expect(html).toContain('Vendor keys'); // the rest of settings unaffected
+  });
+});
+
+describe('settings — Invites section (slice 3.5-B.3.2: invite by email + role)', () => {
+  const ADMIN_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] };
+  const MEMBER_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] };
+  const VENDOR = {
+    '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+    '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
+  };
+
+  it('owner: the invite form + pending list render; the role <select> offers all 3 roles (≤ owner)', async () => {
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: ORG_INFO_OWNER },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/invites': { body: INVITES_OK },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('Invites'); // the section heading
+    expect(html).toContain('data-inv-form'); // the invite form
+    expect(html).toContain('type="email"'); // email input
+    expect(html).toContain('data-act="inv-send"');
+    // owner (rank 4) sees Owner/Admin/Member — exactly the three managed roles
+    expect(html).toContain('<option value="owner">Owner</option>');
+    expect(html).toContain('<option value="admin">Admin</option>');
+    expect(html).toContain('<option value="member">Member</option>');
+    // the pending list renders each invited email + a revoke control
+    expect(html).toContain('newbie@tasca.dev');
+    expect(html).toContain('lead@tasca.dev');
+    expect(html).toContain('data-act="inv-revoke"');
+    expect(html).toContain('expires in'); // honest expiry label
+  });
+
+  it('admin (not owner): the role <select> offers only Admin/Member (≤ admin, NOT Owner)', async () => {
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: { id: 'org_default', name: 'Roadhero', role: 'admin' } },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/invites': { body: INVITES_EMPTY },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('data-inv-form');
+    expect(html).toContain('<option value="admin">Admin</option>');
+    expect(html).toContain('<option value="member">Member</option>');
+    expect(html).not.toContain('<option value="owner">Owner</option>'); // can't invite above own role
+    expect(html).toContain('No pending invites'); // empty state
+  });
+
+  it('non-admin (member): NO invite section, NO invites fetch', async () => {
+    stubFetch({
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: ORG_INFO_MEMBER },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: MEMBER_ORGS },
+      '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+      // deliberately NO /api/invites route → a member fetch would 404 here / 403 in prod
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).not.toContain('data-inv-form'); // the section is admin-gated
+    expect(html).not.toContain('data-act="inv-send"');
+    expect(html).not.toContain('>Invites<'); // no heading for a non-admin
+  });
+
+  it('an invites read error renders an honest inline error; the rest of settings still renders', async () => {
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: ORG_INFO_OWNER },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/invites': { status: 500, body: {} },
+    });
+    const r = await loadSettings();
+    expect(r.kind).toBe('ok'); // the page still renders
+    const html = htmlOf(r);
+    expect(html).toContain('Could not load invites');
     expect(html).toContain('Vendor keys'); // the rest of settings unaffected
   });
 });

@@ -16,6 +16,9 @@ import {
   renameOrg,
   setMemberRole,
   removeMember,
+  getInvites,
+  createInvite,
+  revokeInvite,
   getSession,
   canManageActiveOrg,
   redirectToLogin,
@@ -28,10 +31,12 @@ import { I, esc, roControl, RO_GATE_VENDOR_KEYS, RO_GATE_WORKSPACE } from '../ui
 import type { ApiResult } from '../api';
 import type {
   CredentialAuditEvent,
+  InvitesResponse,
   MembersResponse,
   OrgInfo,
   OrgMember,
   OrgRole,
+  PendingInvite,
   VendorCredentialStatus,
   VendorCredentialsResponse,
 } from '../contract';
@@ -280,6 +285,7 @@ function nameBlock(info: OrgInfo, canManage: boolean): string {
 function workspacePanel(
   infoRes: ApiResult<OrgInfo>,
   membersRes: ApiResult<MembersResponse>,
+  invitesRes: ApiResult<InvitesResponse> | null,
   canManage: boolean,
   selfUserId: string | null
 ): string {
@@ -306,25 +312,110 @@ function workspacePanel(
       .join('')}</div>`;
   }
 
+  // The Invites section is admin+ only — a non-admin never fetches it (invitesRes is null) and
+  // never sees it. The role <select> caps at the caller's own role (server-enforced regardless).
+  const invites = canManage && invitesRes ? invitesSection(invitesRes, info.role) : '';
+
   return `<div class="pcard ws-panel">
       <div class="pc-h">Workspace</div>
       <div class="pc-sub">Your workspace name, members and their roles.</div>
       ${nameBlock(info, canManage)}
       <div class="ws-members-head">Members</div>
       ${membersBody}
+      ${invites}
     </div>`;
+}
+
+// ── Invites section (slice 3.5-B.3.2: invite a teammate by email + role) ───────
+// Admin+ only — a non-admin never fetches or sees it. The role <select> offers only roles ≤ the
+// caller's own (owner → Owner/Admin/Member; admin → Admin/Member): a UX cap, NOT the security
+// boundary (the server refuses an invite above your role with a 403). The accept link returned on
+// create is revealed with a Copy control so an invite works even without email configured.
+
+/** Privilege rank (higher = more privileged) — bounds the invite role options to ≤ the caller's. */
+const ROLE_RANK: Record<OrgRole, number> = { viewer: 1, member: 2, admin: 3, owner: 4 };
+
+/** Days until an ISO timestamp, floored at 0 (an honest "expires in N days"). */
+function daysUntil(iso: string): number {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return 0;
+  return Math.max(0, Math.ceil((then - Date.now()) / 86_400_000));
+}
+
+function expiresLabel(iso: string): string {
+  const d = daysUntil(iso);
+  if (d <= 0) return 'expires today';
+  return `expires in ${d} day${d === 1 ? '' : 's'}`;
+}
+
+/** The invite role <select> — offers only roles at or below the caller's own privilege. */
+function inviteRoleSelect(callerRole: OrgRole): string {
+  const cap = ROLE_RANK[callerRole];
+  const opts = MANAGED_ROLES.filter((r) => ROLE_RANK[r] <= cap)
+    .map((r) => `<option value="${r}">${esc(ROLE_LABEL[r])}</option>`)
+    .join('');
+  return `<select class="inv-role-select" name="role" aria-label="Role for the invited teammate">${opts}</select>`;
+}
+
+/** One pending-invite row: email, role badge, "expires in N days", and a Revoke control. */
+function inviteRow(inv: PendingInvite): string {
+  return `<div class="inv-row">
+      <div class="inv-id">
+        <div class="inv-email">${esc(inv.email)}</div>
+        <div class="inv-when">${esc(expiresLabel(inv.expiresAt))}</div>
+      </div>
+      <div class="inv-role">${roleBadge(inv.role)}</div>
+      <button class="ictl vk-danger" type="button" data-act="inv-revoke" data-invite-id="${esc(inv.id)}" aria-label="Revoke the invite for ${esc(inv.email)}">Revoke</button>
+    </div>`;
+}
+
+/** The Invites section — admin+ only. On a list-read failure it renders an honest inline error;
+ *  the rest of the Workspace panel still renders. `callerRole` bounds the role <select>. */
+function invitesSection(invitesRes: ApiResult<InvitesResponse>, callerRole: OrgRole): string {
+  const form = `<form class="inv-form" data-inv-form>
+      <div class="inv-form-fields">
+        <input class="inv-input" type="email" name="email" required autocomplete="off" spellcheck="false"
+          placeholder="teammate@company.com" aria-label="Email of the teammate to invite" />
+        ${inviteRoleSelect(callerRole)}
+        <button class="btn-add" type="submit" data-act="inv-send">Send invite</button>
+      </div>
+      <p class="inv-err" data-inv-err hidden role="alert"></p>
+      <div class="inv-result" data-inv-result hidden role="status">
+        <label class="inv-result-label" for="inv-link">Invite link</label>
+        <div class="inv-result-row">
+          <input id="inv-link" class="inv-link mono" type="text" readonly aria-label="Single-use invite link" data-inv-link />
+          <button class="ictl" type="button" data-act="inv-copy" aria-label="Copy the invite link">${I.copy} Copy link</button>
+        </div>
+        <p class="inv-note">We also emailed it if email is configured.</p>
+      </div>
+    </form>`;
+
+  let list: string;
+  if (invitesRes.kind !== 'ok') {
+    const msg = invitesRes.kind === 'error' ? invitesRes.message : 'Sign in again to view invites.';
+    list = error('Could not load invites. ' + msg);
+  } else if (invitesRes.data.invites.length === 0) {
+    list = empty('No pending invites', 'Invite a teammate by email above; pending invites appear here.', I.mail);
+  } else {
+    list = `<div class="inv-list">${invitesRes.data.invites.map(inviteRow).join('')}</div>`;
+  }
+
+  return `<div class="ws-members-head">Invites</div>
+    ${form}
+    ${list}`;
 }
 
 export async function loadSettings(): Promise<LoadResult> {
   const canManage = await canManageActiveOrg();
   // Workspace name + members are member+ (always fetched); the vendor read is member+ (always);
-  // the audit read is admin+ (only fetched for an admin — a member fetch would 403). All run
-  // concurrently. The session resolves the caller's own id (the `(you)` marker).
-  const [orgRes, membersRes, credRes, auditRes, sessionRes] = await Promise.all([
+  // the audit read + invites list are admin+ (only fetched for an admin — a member fetch would 403).
+  // All run concurrently. The session resolves the caller's own id (the `(you)` marker).
+  const [orgRes, membersRes, credRes, auditRes, invitesRes, sessionRes] = await Promise.all([
     getOrgInfo(),
     getMembers(),
     getVendorCredentials(),
     canManage ? getCredentialAudit() : Promise.resolve(null),
+    canManage ? getInvites() : Promise.resolve(null),
     getSession(),
   ]);
 
@@ -340,7 +431,7 @@ export async function loadSettings(): Promise<LoadResult> {
 
   const html = `<div class="roster-head"><div><h1>Settings</h1><div class="sub">Workspace configuration</div></div></div>
     <div class="settings-stack">
-      ${workspacePanel(orgRes, membersRes, canManage, selfUserId)}
+      ${workspacePanel(orgRes, membersRes, invitesRes, canManage, selfUserId)}
       ${vendorPanel(credRes, canManage)}
       ${auditHtml}
       <div class="pcard">
@@ -570,6 +661,125 @@ function wireWorkspace(el: HTMLElement, rerun: () => Promise<void>): void {
         rerun,
         write: (): Promise<WriteResult<unknown>> => removeMember(userId),
         describe: describeMemberFailure,
+      });
+    });
+  });
+
+  wireInvites(el, rerun);
+}
+
+/** Honest failure copy for invite writes. The privilege cap (inviting above your role) arrives as a
+ *  403 forbidden — surfaced as its own message, never swallowed; a bad email/role is a generic 400. */
+function describeInviteFailure(r: WriteResult<unknown>): string {
+  switch (r.kind) {
+    case 'forbidden':
+      return 'You can’t invite above your own role, or your session token expired.';
+    case 'notfound':
+      return 'That invite is no longer available.';
+    case 'error':
+      return `Couldn’t send the invite (${r.message}). Check the email and retry.`;
+    default:
+      return 'Couldn’t send the invite. Check the email and retry.';
+  }
+}
+
+/** Wire the admin+ Invites section: send (reveal the copyable accept link on ok), copy-link, and
+ *  per-row revoke. A non-admin never renders these controls (the server is the authority either
+ *  way). On a successful send the view re-runs so the new invite joins the pending list. */
+function wireInvites(el: HTMLElement, rerun: () => Promise<void>): void {
+  const form = el.querySelector<HTMLFormElement>('[data-inv-form]');
+  const emailInput = form?.querySelector<HTMLInputElement>('input[name="email"]') ?? null;
+  const roleSel = form?.querySelector<HTMLSelectElement>('select[name="role"]') ?? null;
+  const errBox = el.querySelector<HTMLElement>('[data-inv-err]');
+  const linkInput = el.querySelector<HTMLInputElement>('[data-inv-link]');
+
+  const showErr = (msg: string): void => {
+    if (!errBox) return;
+    errBox.textContent = msg;
+    errBox.hidden = false;
+  };
+
+  // Send: validate the email is present, then POST. On ok, reveal the returned accept link (so the
+  // invite works without email configured) and re-run so the new invite appears in the pending list.
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!emailInput || !roleSel) return;
+    const email = emailInput.value.trim();
+    if (!email) {
+      showErr('Enter an email address to invite.');
+      return;
+    }
+    const role = roleSel.value as OrgRole;
+    const sendBtn = form.querySelector<HTMLButtonElement>('[data-act="inv-send"]');
+    if (!sendBtn || sendBtn.dataset.busy === '1') return;
+    if (errBox) errBox.hidden = true;
+    sendBtn.dataset.busy = '1';
+    sendBtn.disabled = true;
+    sendBtn.setAttribute('aria-busy', 'true');
+    const original = sendBtn.textContent;
+    sendBtn.textContent = 'Sending…';
+    void (async () => {
+      let res: Awaited<ReturnType<typeof createInvite>>;
+      try {
+        res = await createInvite(email, role);
+      } catch {
+        res = { kind: 'error', message: 'Unexpected error' };
+      }
+      if (res.kind === 'unauth') {
+        redirectToLogin();
+        return;
+      }
+      if (res.kind === 'ok') {
+        const url = (res.data as { acceptUrl?: string }).acceptUrl ?? '';
+        // Re-run FIRST so the new invite joins the pending list (this re-renders the section); then
+        // reveal the returned accept link in the freshly-rendered DOM. The acceptUrl lives only in
+        // this POST response — the GET list never carries a token — so it must be re-applied after.
+        await rerun();
+        const freshResult = el.querySelector<HTMLElement>('[data-inv-result]');
+        const freshLink = el.querySelector<HTMLInputElement>('[data-inv-link]');
+        if (freshLink) freshLink.value = url;
+        if (freshResult) freshResult.hidden = false;
+        return;
+      }
+      // Restore the button and surface an inline error (403 cap / 400 bad email) — the form stays so
+      // the user can correct and retry; nothing is re-run on failure.
+      sendBtn.dataset.busy = '';
+      sendBtn.disabled = false;
+      sendBtn.removeAttribute('aria-busy');
+      sendBtn.textContent = original;
+      showErr(describeInviteFailure(res));
+    })();
+  });
+
+  // Copy the accept link to the clipboard (best-effort — falls back to selecting the field).
+  el.querySelector<HTMLButtonElement>('[data-act="inv-copy"]')?.addEventListener('click', () => {
+    if (!linkInput || !linkInput.value) return;
+    const copyBtn = el.querySelector<HTMLButtonElement>('[data-act="inv-copy"]');
+    const done = (): void => {
+      if (!copyBtn) return;
+      copyBtn.innerHTML = `${I.check} Copied`;
+    };
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(linkInput.value).then(done, () => {
+        linkInput.select();
+      });
+    } else {
+      linkInput.select();
+    }
+  });
+
+  // Per-row revoke — re-runs so the revoked invite drops out of the pending list.
+  el.querySelectorAll<HTMLButtonElement>('[data-act="inv-revoke"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const inviteId = btn.dataset.inviteId;
+      if (!inviteId) return;
+      void liveAction({
+        button: btn,
+        pendingLabel: 'Revoking…',
+        view: el,
+        rerun,
+        write: (): Promise<WriteResult<unknown>> => revokeInvite(inviteId),
+        describe: describeInviteFailure,
       });
     });
   });
