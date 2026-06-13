@@ -28,7 +28,9 @@ class FakeStore implements AgentCredentialStore {
   key(org: string, agent: string, p: AgentCredentialProvider) {
     return `${org}:${agent}:${p}`;
   }
+  shouldThrow = false;
   async setAgentCredential(org: string, agent: string, p: AgentCredentialProvider, sealed: SealedCredential, fp: string, by: string | null) {
+    if (this.shouldThrow) throw new Error('credential write failed');
     this.rows.set(this.key(org, agent, p), { sealed, fingerprint: fp, createdBy: by });
   }
   async getSealedAgentCredential(org: string, agent: string, p: AgentCredentialProvider) {
@@ -228,6 +230,31 @@ describe('agent-identity API — write-only, admin-gated, fail-closed (slice SC-
     const r = await run(d, fakeReq('POST', PATH, { headers: csrf(), body: goodBody }));
     expect(r.statusCode).toBe(200);
     expect((d.store as FakeStore).rows.size).toBe(1); // the durable write landed
+  });
+
+  it('ORDER (binding before credential): if the credential write fails AFTER the binding lands, the binding survives (agent still receives tickets); the error propagates (→ 500 at the server boundary)', async () => {
+    const store = new FakeStore();
+    store.shouldThrow = true; // the SECOND write fails
+    const identity = new FakeIdentity();
+    const d = deps({ store, identity });
+    await expect(run(d, fakeReq('POST', PATH, { headers: csrf(), body: goodBody }))).rejects.toThrow(
+      'credential write failed'
+    );
+    // the binding (the intake-load-bearing half) DID land; write-back no-ops until a re-set adds the token
+    expect(identity.bindings).toHaveLength(1);
+    expect(store.rows.size).toBe(0); // no token stored
+  });
+
+  it('ORDER (binding first): if the binding write fails, NOTHING is stored — clean failure, no half-state', async () => {
+    const store = new FakeStore();
+    const identity = new FakeIdentity();
+    identity.shouldThrow = true; // the FIRST write fails
+    const d = deps({ store, identity });
+    await expect(run(d, fakeReq('POST', PATH, { headers: csrf(), body: goodBody }))).rejects.toThrow(
+      'binding write failed'
+    );
+    expect(store.rows.size).toBe(0); // credential write never reached
+    expect(identity.bindings).toHaveLength(0);
   });
 
   it('does not claim non-matching routes (returns false → falls through)', async () => {

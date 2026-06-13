@@ -160,6 +160,24 @@ export async function agentIdentityApiHandler(
   // Seal the token (never persist plaintext) + a non-reversible fingerprint for display/dedup.
   const sealed = sealVendorKey(trimmedToken, deps.masterKey);
   const fingerprint = fingerprintAgentKey('shortcut', trimmedToken);
+
+  // Two writes land in separate repositories (identity_binding, org_agent_credential) with no shared
+  // transaction, so order them so a partial failure degrades safely. BINDING FIRST: its external_id is
+  // what intake matches a Shortcut assignee against (main.ts builds registeredShortcutIds from
+  // identity_binding WHERE state='active'), so the binding is the load-bearing half — without it the
+  // agent silently never receives tickets. CREDENTIAL SECOND: if the token write throws after the
+  // binding landed, the agent still receives + works tickets and write-back simply no-ops (the reporter
+  // resolves no token → skip+warn) until a re-set lands the token — visible + recoverable, not a silent
+  // wedge. If the binding write throws first, nothing else ran — a clean 500 with no half-state. Both
+  // writes are idempotent (ON CONFLICT DO UPDATE), so a re-set fully heals either partial outcome.
+  await deps.identity.upsertBinding({
+    agentId: route.agentId,
+    platform: 'shortcut',
+    externalId: trimmedMemberId,
+    ...(handle !== undefined ? { externalHandle: handle } : {}),
+    credentialRef: `org_agent_cred:${orgId}:${route.agentId}:shortcut`,
+    state: 'active',
+  });
   await deps.store.setAgentCredential(
     orgId,
     route.agentId,
@@ -169,19 +187,6 @@ export async function agentIdentityApiHandler(
     userId === '(dev)' ? null : userId
   );
   deps.resolver.invalidate(orgId, route.agentId, 'shortcut'); // a re-set takes effect immediately on this node
-
-  // Upsert the identity_binding row (the projection of the agent's native Shortcut identity). The
-  // credential_ref is a STRUCTURED POINTER into the per-agent vault — never the token. The credential is
-  // already sealed+stored above; if the binding write throws it surfaces as a 500 (the projection the
-  // caller expects didn't land) — better than a silent half-write.
-  await deps.identity.upsertBinding({
-    agentId: route.agentId,
-    platform: 'shortcut',
-    externalId: trimmedMemberId,
-    ...(handle !== undefined ? { externalHandle: handle } : {}),
-    credentialRef: `org_agent_cred:${orgId}:${route.agentId}:shortcut`,
-    state: 'active',
-  });
 
   // Governance trail: record the set with the fingerprint — NEVER the token. Best-effort (the
   // credential + binding already landed, so a failed audit write must not turn this into a 500).
