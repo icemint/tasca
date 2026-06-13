@@ -41,7 +41,10 @@ jobs:
 
       - name: Compute image tag
         id: vars
-        run: echo "sha_tag=sha-$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        run: |
+          short="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "sha_tag=sha-${short}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short}" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v6
         with:
@@ -62,6 +65,11 @@ jobs:
 
       - name: Build static app shell
         working-directory: app
+        # PUBLIC_GIT_SHA bakes the short commit SHA into dist/version.txt (src/pages/version.txt.ts via
+        # import.meta.env) so the deploy step can verify the LIVE app is THIS build — not a silently
+        # re-served old image (#5318). PUBLIC_-prefixed so Vite/Astro exposes it to import.meta.env.
+        env:
+          PUBLIC_GIT_SHA: ${{ steps.vars.outputs.short_sha }}
         run: pnpm run build
 
       - name: Set up Docker Buildx
@@ -109,4 +117,9 @@ jobs:
         env:
           IMAGE: ${{ env.IMAGE }}
           SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
+          # Opt in to live-SHA verification (same gate the worker got in #288): after Coolify reports a
+          # finished rollout, poll the app's public /version.txt until it equals EXPECT_SHA, else fail —
+          # so a Coolify redeploy that re-served the old image can't pass green. "Merged = live" for the app.
+          VERIFY_SHA_URL: https://app.tasca.dev/version.txt
+          EXPECT_SHA: ${{ steps.vars.outputs.short_sha }}
         run: bash scripts/coolify-deploy.sh
