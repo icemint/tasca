@@ -22,6 +22,8 @@ import type {
   HiredAgentsResponse,
   InvitesResponse,
   MembersResponse,
+  NewAgentInput,
+  NewAgentResponse,
   OrgInfo,
   OrgRole,
   OrgsResponse,
@@ -353,6 +355,42 @@ export const acceptInvite = (token: string) =>
   post<{ ok: true; orgId: string; role: OrgRole } | { error: string }>('/api/invites/accept', { token });
 
 export const getHiredAgents = () => get<HiredAgentsResponse>('/api/orgs/agents');
+
+// ── create an agent (slice Wizard-B) — member+ (any org member). On ok the agent is
+// created AND auto-hired into the caller's active org, so it joins the roster at once.
+// A validation failure is a 400 → the shared `classify` collapses it to an opaque
+// 'error'; this helper lifts a parseable 400 into the `conflict` channel so the view
+// can surface the server's specific message (mirrors `setVendorCredential`).
+export async function createAgent(input: NewAgentInput): Promise<WriteResult<NewAgentResponse>> {
+  let token = await ensureCsrf();
+  if (token === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const send = (t: string): Promise<Response> =>
+    fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify(input),
+    });
+  let res: Response;
+  try {
+    res = await send(token);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  // A validation failure (400, parseable) surfaces via the conflict channel so the view can read
+  // the server's `error`. An unparseable 400 stays an honest 'error' (never a fabricated conflict).
+  if (res.status === 400) {
+    try {
+      return { kind: 'conflict', data: (await res.json()) as NewAgentResponse };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  return classify<NewAgentResponse>(res);
+}
 
 export const hireAgent = (agentId: string) =>
   post<{ ok: true } | { error: string; code?: string }>('/api/orgs/agents', { agentId });
