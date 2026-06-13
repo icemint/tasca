@@ -30,6 +30,7 @@ export interface AgentUsageSink {
 
 export interface AnthropicProxyLogger {
   info?(message: string, ctx?: Record<string, unknown>): void;
+  warn?(message: string, ctx?: Record<string, unknown>): void;
   error?(message: string, ctx?: Record<string, unknown>): void;
 }
 
@@ -93,6 +94,14 @@ const STRIP_REQUEST_HEADERS = new Set([
   'proxy-connection',
   'content-length',
   'transfer-encoding',
+  // STRIP accept-encoding so Anthropic returns an IDENTITY (uncompressed) body. The Claude CLI sends
+  // `accept-encoding: gzip` by default; forwarding it makes the upstream gzip the response, and the
+  // usage tee — which reads the byte stream as UTF-8 SSE/JSON — then silently extracts NO usage from
+  // the compressed bytes (the agent still decompresses + runs fine, so the miss is invisible). The
+  // node http client does not re-add accept-encoding, so stripping it here guarantees a parseable body.
+  // (slice 3.5-A.2b follow-up: this is why agent calls ran unmetered — usage_event{source:'agent'} was
+  // never written despite the call traversing the proxy.) The agent's stream is unaffected, just larger.
+  'accept-encoding',
   // Tasca-internal attribution headers (slice W3-S4b): read worker-side for metering, then STRIPPED —
   // never forwarded to Anthropic (an internal task/org id is not Anthropic's business).
   'x-tasca-task-id',
@@ -192,14 +201,37 @@ export async function serveAnthropicProxy(options: AnthropicProxyOptions): Promi
       // an error body). The tee can never corrupt/stall the stream (it pushes each chunk as-is).
       const status = upRes.statusCode ?? 502;
       if (meter && status >= 200 && status < 300) {
+        let recorded = false;
         const tee = usageTee(firstHeader(upRes.headers['content-type']), (u) => {
+          recorded = true;
           try {
             meter.sink.record({ ...u, orgId: meter.orgId, taskId: meter.taskId });
+            options.logger?.info?.('anthropic-proxy: agent call metered', {
+              orgId: meter.orgId,
+              taskId: meter.taskId,
+              model: u.model,
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens,
+            });
           } catch (err) {
             options.logger?.error?.('anthropic-proxy: usage sink threw', { err: String(err) });
           }
         });
         tee.on('error', () => res.destroy());
+        // LOUD on a silent-metering miss: a 2xx we INTENDED to meter that produced no usage means the
+        // tee couldn't extract it (an unexpected body shape, or compression we failed to strip). Warn so
+        // an agent never runs unmetered in silence — the exact failure that hid the missing source='agent'
+        // rows. Fires on normal completion (after flush); an aborted stream isn't a clean meter anyway.
+        tee.on('end', () => {
+          if (!recorded) {
+            options.logger?.warn?.('anthropic-proxy: metered 2xx produced NO usage (agent ran UNMETERED)', {
+              orgId: meter.orgId,
+              taskId: meter.taskId,
+              contentType: firstHeader(upRes.headers['content-type']),
+              contentEncoding: firstHeader(upRes.headers['content-encoding']),
+            });
+          }
+        });
         upRes.pipe(tee).pipe(res);
       } else {
         upRes.pipe(res);

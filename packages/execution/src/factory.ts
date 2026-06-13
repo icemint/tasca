@@ -127,8 +127,8 @@ const AGENT_ENV_ALLOWLIST = [
   'TZ',
   'TMPDIR',
   // ANTHROPIC_API_KEY is DELIBERATELY NOT allowlisted — the real key must never flow to
-  // the prompt-injected agent. It is supplied per-mode below (proxy → placeholder; direct
-  // dev/no-queue → the real key, an explicit legacy passthrough).
+  // the prompt-injected agent. The agent ALWAYS runs in proxy mode (slice 3.5-A.2b): it gets only a
+  // placeholder + a per-task ANTHROPIC_BASE_URL; the real org key is injected proxy-side, never here.
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CONFIG_DIR',
 ];
