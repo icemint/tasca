@@ -210,6 +210,20 @@ export interface MembersResponse {
   members: OrgMember[];
 }
 
+// ── invites (slice 3.5-B.3: invite a teammate by email + role) ─────────────────
+/** A pending invite (GET /api/invites) — admin+. The list NEVER carries the token. */
+export interface PendingInvite {
+  id: string;
+  email: string;
+  role: OrgRole;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface InvitesResponse {
+  invites: PendingInvite[];
+}
+
 /** An agent hired into the active org (GET /api/orgs/agents). */
 export interface HiredAgent {
   agentId: string;

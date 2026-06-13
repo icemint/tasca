@@ -20,6 +20,7 @@ import type {
   ConnectionsResponse,
   CredentialAuditResponse,
   HiredAgentsResponse,
+  InvitesResponse,
   MembersResponse,
   OrgInfo,
   OrgRole,
@@ -331,6 +332,24 @@ export const setMemberRole = (userId: string, role: OrgRole) =>
 /** Remove a member (owner-only; server-gated). A last-owner refusal is a 409 `code:'last_owner'`. */
 export const removeMember = (userId: string) =>
   del<{ ok: true } | { error: string; code?: string }>(`/api/orgs/members/${encodeURIComponent(userId)}`);
+
+// ── invites (slice 3.5-B.3.2: invite a teammate by email + role) ───────────────
+// Create / list / revoke are admin+ (the server gates; the UI cap on the role <select> is a
+// UX nicety, never the boundary). Accept is POSSESSION-based: any logged-in identity may accept
+// — the invite email need NOT match. A 403 (inviting above your role) / 400 (bad email/role) ride
+// the existing forbidden/error channels; a used/invalid accept token is a 409 conflict.
+
+/** Invite a teammate. On ok the response carries the copyable single-use accept link (so it works
+ *  even without email configured). 403 = inviting above your own role; 400 = a bad email/role. */
+export const createInvite = (email: string, role: OrgRole) =>
+  post<{ ok: true; email: string; role: OrgRole; acceptUrl: string } | { error: string }>('/api/invites', { email, role });
+/** The org's pending invites (admin+) — never carries a token. */
+export const getInvites = () => get<InvitesResponse>('/api/invites');
+/** Revoke a pending invite (admin+; 404 if already gone). */
+export const revokeInvite = (id: string) => del<{ ok: true } | { error: string }>('/api/invites/' + encodeURIComponent(id));
+/** Accept an invite by its single-use token (any logged-in identity). 409 = invalid/already used. */
+export const acceptInvite = (token: string) =>
+  post<{ ok: true; orgId: string; role: OrgRole } | { error: string }>('/api/invites/accept', { token });
 
 export const getHiredAgents = () => get<HiredAgentsResponse>('/api/orgs/agents');
 

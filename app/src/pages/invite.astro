@@ -1,0 +1,144 @@
+---
+// Standalone invite-accept page (slice 3.5-B.3.2) — NOT inside AppShell (like index.astro). On load
+// a client script reads ?token=, resolves the session, and runs the accept flow: an authenticated
+// visitor's invite is accepted in place (then a redirect into the app); a logged-out visitor stores
+// the token and is shown a sign-in card that triggers the SAME OAuth flow the login page uses. The
+// raw token is never rendered into the DOM — it lives only in the URL + sessionStorage transiently.
+import '../styles/tasca.css';
+import '../styles/tokens.css';
+import '../styles/onboarding.css';
+import '../styles/invite.css';
+import '../styles/a11y.css';
+import { MARK, GITHUB, GOOGLE } from '../lib/icons';
+---
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Accept invite · Tasca</title>
+  <meta name="description" content="Accept your invitation to join a Tasca workspace." />
+  <meta name="robots" content="noindex" />
+  <script is:inline>
+    (function () { try { document.documentElement.setAttribute('data-theme', localStorage.getItem('tasca-theme') || 'dark'); } catch (e) {} })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="theme-color" content="#090D14" />
+</head>
+<body>
+  <div class="onb-stage">
+    <div class="onb-topbar">
+      <a class="onb-brand" href="https://tasca.dev" aria-label="Tasca home">
+        <span class="onb-mark" set:html={MARK} /><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
+      </a>
+      <span class="theme-seg onb-theme" role="group" aria-label="Theme">
+        <button data-t="dark" type="button" aria-label="Dark theme" aria-pressed="true">Dark</button>
+        <button data-t="light" type="button" aria-label="Light theme" aria-pressed="false">Light</button>
+      </span>
+    </div>
+    <div class="onb-content">
+      <div class="onb-auth-col">
+        <div class="onb-card auth" id="invite-card" aria-live="polite">
+          <div class="auth-mark" set:html={MARK} />
+          <!-- The loading card is the default; the client script swaps in the real state. -->
+          <h1 id="invite-title">Checking your invite…</h1>
+          <p class="auth-sub" id="invite-sub">One moment while we look up your invitation.</p>
+
+          <!-- Sign-in actions: shown for a logged-out invitee (the same OAuth triggers index.astro uses). -->
+          <div class="oauth-col" id="invite-signin" hidden>
+            <a class="oauth-btn" href="/api/auth/github"><span set:html={GITHUB} /><span>Continue with GitHub</span></a>
+            <a class="oauth-btn" href="/api/auth/google"><span set:html={GOOGLE} /><span>Continue with Google</span></a>
+          </div>
+
+          <!-- A link back / retry: shown for invalid / failed states. -->
+          <div class="invite-actions" id="invite-actions" hidden>
+            <a class="oauth-btn" id="invite-link" href="/">Back to Tasca</a>
+          </div>
+        </div>
+        <div class="auth-legal mono">Accepting an invite joins your signed-in account to the workspace.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    import { getSession, acceptInvite, APP_HOME } from '../lib/api';
+    import { runAcceptFlow, PENDING_INVITE_KEY } from '../lib/invite-accept';
+
+    const title = document.getElementById('invite-title');
+    const sub = document.getElementById('invite-sub');
+    const signin = document.getElementById('invite-signin');
+    const actions = document.getElementById('invite-actions');
+    const backLink = document.getElementById('invite-link');
+
+    function render(t: string, s: string): void {
+      if (title) title.textContent = t;
+      if (sub) sub.textContent = s;
+    }
+
+    const token = new URLSearchParams(window.location.search).get('token');
+
+    void runAcceptFlow({
+      token,
+      getSession,
+      acceptInvite,
+      storePendingToken: (tk) => {
+        try { sessionStorage.setItem(PENDING_INVITE_KEY, tk); } catch (e) {}
+      },
+      redirectHome: () => {
+        // Brief success, then into the app.
+        window.setTimeout(() => window.location.assign(APP_HOME), 900);
+      },
+    }).then((outcome) => {
+      if (outcome === 'signin') {
+        render('You’ve been invited to Tasca', 'Sign in to accept your invitation and join the workspace.');
+        if (signin) signin.hidden = false;
+        return;
+      }
+      if (outcome === 'accepted') {
+        render('You’ve joined the workspace', 'Taking you into Tasca…');
+        return;
+      }
+      if (outcome === 'failed') {
+        render('Something went wrong', 'We couldn’t accept this invite just now. Try the link again.');
+        if (actions) actions.hidden = false;
+        if (backLink) { backLink.textContent = 'Try again'; backLink.setAttribute('href', window.location.href); }
+        return;
+      }
+      // 'invalid' — no token, or a used/invalid token.
+      render('This invite link is invalid.', 'It may have already been used or expired. Ask a workspace admin for a fresh invite.');
+      if (actions) actions.hidden = false;
+      if (backLink) {
+        // An authenticated visitor with a dead token goes to the app; a logged-out one to sign in.
+        backLink.textContent = 'Back to Tasca';
+        backLink.setAttribute('href', '/');
+      }
+    });
+  </script>
+
+  <script>
+    function syncTheme(t: string) {
+      document.documentElement.setAttribute('data-theme', t);
+      document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) => {
+        const on = b.dataset.t === t;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
+    }
+    let t = 'dark';
+    try { t = localStorage.getItem('tasca-theme') || 'dark'; } catch (e) {}
+    syncTheme(t);
+    document.querySelectorAll<HTMLButtonElement>('.theme-seg button').forEach((b) =>
+      b.addEventListener('click', () => {
+        const v = b.dataset.t!;
+        try { localStorage.setItem('tasca-theme', v); } catch (e) {}
+        syncTheme(v);
+      })
+    );
+  </script>
+</body>
+</html>

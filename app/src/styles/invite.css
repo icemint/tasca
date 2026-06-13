@@ -1,0 +1,32 @@
+/* ============================================================================
+   TASCA · Invite accept page + post-login consume notice (slice 3.5-B.3.2).
+   Builds on onboarding.css (.onb-card.auth / .oauth-btn / .auth-sub). Tokens
+   only, both themes — no raw hex/rgb here.
+   ============================================================================ */
+
+/* The back / retry action block on the invalid + failed accept states. */
+.invite-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+
+/* The post-login consume notice (shown on /roster after an invitee signs in). Non-blocking: it
+   sits at the top of the main scroll region and is dismissible. */
+.invite-notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 0 16px; padding: 11px 14px; border-radius: var(--radius-md);
+  font-size: var(--fs-sm); line-height: 1.4;
+}
+.invite-notice.ok {
+  border: 1px solid color-mix(in srgb, var(--green) 38%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: var(--green);
+}
+.invite-notice.quiet {
+  border: 1px solid var(--line-2);
+  background: var(--bg-sub);
+  color: var(--fg-2);
+}
+.invite-notice .in-x {
+  flex: none; border: none; background: transparent; color: inherit; cursor: pointer;
+  font-size: var(--fs-sm); line-height: 1; padding: 2px 4px; border-radius: var(--radius-sm); opacity: 0.7;
+}
+.invite-notice .in-x:hover { opacity: 1; }
+.invite-notice .in-x:focus-visible { outline: none; box-shadow: var(--focus-ring-soft); }

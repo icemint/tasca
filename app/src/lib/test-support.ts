@@ -9,6 +9,7 @@ import type {
   AgentDetail,
   ConnectionsResponse,
   CredentialAuditResponse,
+  InvitesResponse,
   MembersResponse,
   OrgInfo,
   SessionResponse,
@@ -182,3 +183,15 @@ export const MEMBERS_OK: MembersResponse = {
     { userId: 'u3', email: 'qwen@tasca.dev', displayName: null, role: 'member' },
   ],
 };
+
+// ── invites (slice 3.5-B.3.2) — the list NEVER carries a token. Far-future expiries so the
+// "expires in N days" label is deterministic-positive regardless of when the suite runs. ──
+const ONE_WEEK_OUT = new Date(Date.now() + 7 * 86_400_000).toISOString();
+export const INVITES_OK: InvitesResponse = {
+  invites: [
+    { id: 'inv1', email: 'newbie@tasca.dev', role: 'member', createdAt: '2026-06-12T00:00:00Z', expiresAt: ONE_WEEK_OUT },
+    { id: 'inv2', email: 'lead@tasca.dev', role: 'admin', createdAt: '2026-06-12T00:00:00Z', expiresAt: ONE_WEEK_OUT },
+  ],
+};
+
+export const INVITES_EMPTY: InvitesResponse = { invites: [] };
