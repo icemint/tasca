@@ -47,7 +47,7 @@ import { singleTenantEnabled, resolveInstanceOrgId } from './instance';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
 import { ORG_AGENT_TABLE_DDL } from './roster';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
-import { COORDINATION_SCHEMA_DDL } from './schema';
+import { COORDINATION_SCHEMA_DDL, AGENT_CREDENTIAL_TABLE_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { RepoProvisioner, TaskContentSource } from './orchestrate';
 import { GitAppRepoProvisioner } from './repo-provisioner';
@@ -103,6 +103,7 @@ async function applySchema(pool: Pool): Promise<void> {
     GITHUB_INSTALL_STATE_TABLE_DDL, // slice 5c connect nonce (FKs app_user + organization)
     GITHUB_CONNECTION_UNIQUE_DDL, // slice 5c: one github account → one connection (DB-enforced re-bind guard)
     ORG_AGENT_TABLE_DDL, // slice 5d: org↔agent roster join (FKs organization + agent)
+    AGENT_CREDENTIAL_TABLE_DDL, // slice SC-3: per-agent platform tokens (FKs organization + agent → after both)
   ];
   for (const ddl of statements) {
     await pool.query(ddl);

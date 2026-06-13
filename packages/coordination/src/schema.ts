@@ -560,7 +560,10 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
   USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
   VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
-  AGENT_CREDENTIAL_TABLE_DDL, // slice SC-3: per-agent platform tokens (sealed) — Shortcut native identity
+  // NOTE: AGENT_CREDENTIAL_TABLE_DDL is intentionally NOT in this bundle — it FKs agent (the identity
+  // schema), which coordination does not own; applying it here breaks any setup that applies the
+  // coordination schema without identity. It is applied in main.ts after BOTH identity + coordination,
+  // next to ORG_AGENT_TABLE_DDL (same cross-module org+agent FK shape).
   GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
   ORG_INVITE_TABLE_DDL, // slice 3.5-B.3.1: single-use, hashed-at-rest, expiring org-join invites
   PROJECT_TABLE_DDL, // slice Project-A: the project entity (after organization exists)
