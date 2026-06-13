@@ -9,11 +9,18 @@
 ARG TASCA_BASE_IMAGE=tasca-base:latest
 FROM ${TASCA_BASE_IMAGE}
 
+# The build SHA (the CD workflow passes the short commit SHA; 'dev' for local builds).
+# Exposed at GET /version so the deploy script can verify the LIVE container is THIS
+# build — not a silently re-served old image (Coolify mutable-tag #5318). Declared
+# after FROM so it is in-stage for the ENV below.
+ARG GIT_SHA=dev
+
 # Runtime config. HOME=/data so the secret-store dir + git/gh config land on the
 # mounted volume alongside the execution SQLite and the git worktrees.
 ENV NODE_ENV=production \
     HOME=/data \
     PORT=8080 \
+    TASCA_GIT_SHA=${GIT_SHA} \
     EMDASH_DB_FILE=/data/execution.sqlite \
     TASCA_WORKTREE_ROOT=/data/worktrees
 RUN mkdir -p /data/worktrees
