@@ -46,7 +46,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Lint (package boundaries)
+      - name: Lint (boundaries, org-scoping, AA-contrast, hardcoded-color)
         run: pnpm lint
       - name: Typecheck
         run: pnpm -r typecheck
