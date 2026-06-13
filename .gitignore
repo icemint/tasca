@@ -6,3 +6,12 @@ dist/
 
 # tsc -b incremental build cache
 *.tsbuildinfo
+
+# Secrets — never commit. Local config goes in .env (use .env.example as the template).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.p12

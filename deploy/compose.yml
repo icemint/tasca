@@ -1,6 +1,6 @@
 # Platform-agnostic reference topology for the coordination|execution split. It encodes
 # the SECURITY BOUNDARY the deploy must preserve; the Coolify resources mirror it (see
-# docs/decisions/2026-06-08-coordination-execution-split.md for the mapping).
+# docs/decisions/2026-06-09-coordination-execution-split.md for the mapping).
 #
 # The thesis: the agent-runner executes a PROMPT-INJECTED agent, so it is the lowest-trust
 # process. Two controls contain it:

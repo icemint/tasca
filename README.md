@@ -88,7 +88,7 @@ irreversibly mis-assign work.
 |---|---|---|
 | **Routing engine** | Tier estimation, capability matching, atomic single-claim, concurrency limits, escalation/mis-tier recovery | Built in-house — the crown jewel. Heuristics + a lightweight LLM tier classifier, kept off the hot path. |
 | **Agent identity** | A service user per agent: own credential, RBAC role, capability profile, delegation/attribution | Modeled on Devin's service-user RBAC; maps onto each platform's native identity. |
-| **Execution** | Worktree isolation + pooling, PTY-spawned CLI agents, remote SSH execution, PR/CI loop | Fork of [Emdash](https://github.com/) (Apache-2.0) into a headless module — not a rebuild. |
+| **Execution** | Worktree isolation + pooling, PTY-spawned CLI agents, remote SSH execution, PR/CI loop | Fork of [Emdash](https://github.com/generalaction/emdash) (Apache-2.0) into a headless module — not a rebuild. |
 | **Coordination** | 24/7 scheduling, health monitoring, crash restart, cross-project assignment | The cloud control plane. |
 | **PM-assistant** | Triage, decomposition, routing suggestions, standups | Advisory only (Claude-run). The engine remains authoritative. |
 
@@ -186,12 +186,37 @@ These hold across product, design, and code — non-negotiable:
 
 ---
 
+## Self-hosting
+
+Run your own instance with Docker Compose:
+
+```sh
+git clone --recursive https://github.com/icemint/tasca.git
+cd tasca
+cp .env.example .env     # fill in Tier 1 (Anthropic key, vault key, OAuth)
+make up                  # builds the base image, then builds + starts the stack
+```
+
+Then open **http://localhost:3000**. Full walkthrough — config surface, GitHub App setup,
+external Postgres — in [SELF_HOST.md](SELF_HOST.md).
+
+---
+
 ## Documentation
 
 - [Product Requirements (PRD v1.0)](docs/Tasca-PRD-v1.0-FINAL.md) — the product, the
   wedges, the adapters, the stages, the open questions.
 - [Design Brief (v1.0)](docs/Tasca-Design-Brief-v1.0.md) — brand, visual language, every
   app surface and marketing page, accessibility and acceptance criteria.
+- [Self-hosting guide](SELF_HOST.md) — Docker Compose, configuration, GitHub App setup.
+
+---
+
+## License
+
+Tasca is licensed under the [GNU AGPL-3.0](LICENSE) for community use. A **commercial
+license** is available for organizations that cannot operate under the AGPL — contact
+Icemint Labs.
 
 ---
 

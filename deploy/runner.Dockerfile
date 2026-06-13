@@ -3,9 +3,11 @@
 # token, runs the agent, and revokes the token. It shares the heavy toolchain with the
 # worker via the published base image (no second native rebuild).
 #
-# It carries NO worker secret: only DATABASE_URL (the queue), TASCA_BROKER_SOCKET (the
-# broker socket path on the shared volume), and ANTHROPIC_API_KEY (the agent model).
-# The master GitHub App key stays in the worker, behind the broker.
+# It carries NO worker secret and NO Anthropic key: only DATABASE_URL (the queue),
+# TASCA_BROKER_SOCKET (the broker socket path on the shared volume), and
+# TASCA_ANTHROPIC_PROXY_SOCKET (the keyless bridge to the worker's credential proxy — the
+# worker injects the Anthropic key on the upstream HTTPS leg, so it never reaches this
+# process). The master GitHub App key stays in the worker, behind the broker.
 #
 # SECURITY (hardened in the deploy slice): this container runs as a dedicated NON-ROOT
 # user on a separate, egress-restricted network (Anthropic + GitHub only) so a
