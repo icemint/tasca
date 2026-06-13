@@ -21,6 +21,10 @@ import {
   VENDOR_CREDS_EMPTY,
   CREDENTIAL_AUDIT_OK,
   CREDENTIAL_AUDIT_EMPTY,
+  ORG_INFO_OWNER,
+  ORG_INFO_MEMBER,
+  MEMBERS_OK,
+  SESSION_OK,
   htmlOf,
 } from '../test-support';
 
@@ -251,9 +255,16 @@ describe('W4-S3 self-serve controls — admin-gated wiring (server stays the aut
 describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () => {
   const ADMIN_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] };
   const MEMBER_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] };
+  // The Workspace panel (3.5-B.2) now also fetches these; stub them so it renders cleanly.
+  const WS = {
+    '/api/auth/me': { body: SESSION_OK },
+    '/api/org': { body: ORG_INFO_OWNER },
+    '/api/orgs/members': { body: MEMBERS_OK },
+  };
 
   it('admin + a configured key: Active badge, fingerprint, Replace + Remove, and the audit events', async () => {
     stubFetch({
+      ...WS,
       '/api/orgs': { body: ADMIN_ORGS },
       '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
       '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
@@ -269,7 +280,7 @@ describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () =>
     expect(html).toContain('Audit log');
     expect(html).toContain('Set');
     expect(html).toContain('Removed');
-    // the still-planned rows survive untouched
+    // the Workspace panel is live; Billing stays a Planned row
     expect(html).toContain('Workspace');
     expect(html).toContain('Planned');
     expect(html).not.toContain('Coming soon');
@@ -277,6 +288,7 @@ describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () =>
 
   it('admin + no key: Not configured + a Set key control; audit empty state', async () => {
     stubFetch({
+      ...WS,
       '/api/orgs': { body: ADMIN_ORGS },
       '/api/orgs/credentials': { body: VENDOR_CREDS_EMPTY },
       '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_EMPTY },
@@ -291,6 +303,8 @@ describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () =>
 
   it('non-admin: read-only status + the gated control, NO password input, NO audit panel/fetch', async () => {
     const routes: Record<string, { status?: number; body?: unknown }> = {
+      ...WS,
+      '/api/org': { body: ORG_INFO_MEMBER },
       '/api/orgs': { body: MEMBER_ORGS },
       '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
       // deliberately NO /api/orgs/credentials/audit route → a fetch would 404 here / 403 in prod
@@ -307,6 +321,7 @@ describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () =>
 
   it('a vendor-read error renders an honest error block, the rest of settings still renders', async () => {
     stubFetch({
+      ...WS,
       '/api/orgs': { body: ADMIN_ORGS },
       '/api/orgs/credentials': { status: 500, body: {} },
       '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_EMPTY },
@@ -315,17 +330,97 @@ describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () =>
     expect(r.kind).toBe('ok'); // the page itself still renders
     const html = htmlOf(r);
     expect(html).toContain('Could not load vendor keys');
-    expect(html).toContain('Workspace'); // planned rows unaffected
+    expect(html).toContain('Workspace'); // the workspace panel is unaffected
   });
 
   it('SECURITY: no audit event payload ever renders a raw key', async () => {
     stubFetch({
+      ...WS,
       '/api/orgs': { body: ADMIN_ORGS },
       '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
       '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
     });
     const html = htmlOf(await loadSettings());
     expect(html).not.toContain('sk-ant'); // fixtures carry only fingerprints, asserted
+  });
+});
+
+describe('settings — Workspace panel (slice 3.5-B.2: name + members/roles)', () => {
+  const ADMIN_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] };
+  const MEMBER_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] };
+  const VENDOR = {
+    '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+    '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
+  };
+
+  it('owner: the workspace name + a live Rename, role <select>s, Remove controls, and the (you) marker', async () => {
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK }, // caller is u1
+      '/api/org': { body: ORG_INFO_OWNER },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('Roadhero'); // the workspace name
+    expect(html).toContain('data-act="ws-name-edit"'); // live Rename (admin+)
+    // role badges carry a TEXT label (not color-only)
+    expect(html).toContain('>Owner<');
+    expect(html).toContain('>Admin<');
+    expect(html).toContain('>Member<');
+    // owner gets per-member role + remove controls
+    expect(html).toContain('data-act="ws-role"');
+    expect(html).toContain('data-act="ws-remove"');
+    // the caller's own row is marked
+    expect(html).toContain('(you)');
+    expect(html).not.toContain('Coming soon');
+  });
+
+  it('admin (not owner): can Rename, but the member list is read-only (badges, no role/remove controls)', async () => {
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: { id: 'org_default', name: 'Roadhero', role: 'admin' } },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('data-act="ws-name-edit"'); // admin+ can rename
+    expect(html).toContain('>Owner<'); // badges still render
+    expect(html).not.toContain('data-act="ws-role"'); // role change is owner-only
+    expect(html).not.toContain('data-act="ws-remove"');
+  });
+
+  it('member: read-only name (gated Rename) + read-only member badges', async () => {
+    stubFetch({
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: ORG_INFO_MEMBER },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: MEMBER_ORGS },
+      '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('Roadhero');
+    expect(html).toContain('Workspace settings are managed by an admin'); // gated Rename
+    expect(html).not.toContain('data-act="ws-name-edit"');
+    expect(html).not.toContain('data-act="ws-role"');
+    expect(html).not.toContain('data-act="ws-remove"');
+    expect(html).toContain('>Member<'); // badges still visible
+  });
+
+  it('an org-info read error renders an honest error block; the rest of settings still renders', async () => {
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { status: 500, body: {} },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+    });
+    const r = await loadSettings();
+    expect(r.kind).toBe('ok');
+    const html = htmlOf(r);
+    expect(html).toContain('Could not load the workspace');
+    expect(html).toContain('Vendor keys'); // the rest of settings unaffected
   });
 });
 

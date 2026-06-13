@@ -38,6 +38,38 @@
 .vk-confirm-q { font-size: var(--fs-sm); color: var(--fg-2); }
 .vk-confirm-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 
+/* ── Workspace panel (slice 3.5-B.2 — instance name + members/roles) ─────────── */
+.ws-name-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px; border-radius: var(--radius-md); background: var(--bg-sub); border: 1px solid var(--line); margin-top: 4px; }
+.ws-name-id { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.ws-name-k { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); }
+.ws-name-v { font-family: var(--font-display); font-size: var(--fs-md); font-weight: 600; color: var(--fg); letter-spacing: -0.01em; }
+.ws-name-ctl { flex: none; }
+
+.ws-name-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--line-2); background: var(--surface-2); }
+.ws-label { font-size: var(--fs-xs); font-weight: 600; color: var(--fg-2); }
+.ws-input { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-size: var(--fs-sm); transition: border-color var(--dur) var(--ease); }
+.ws-input::placeholder { color: var(--fg-faint); }
+.ws-input:focus { outline: none; border-color: color-mix(in srgb, var(--signal) 55%, transparent); box-shadow: var(--focus-ring-soft); }
+.ws-name-actions { display: flex; align-items: center; gap: 8px; }
+.ws-err { font-size: var(--fs-xs); color: var(--red); margin: 0; }
+
+.ws-members-head { font-size: var(--fs-xs); font-weight: 600; color: var(--fg-2); text-transform: uppercase; letter-spacing: 0.06em; margin: 18px 0 8px; }
+.ws-members { display: flex; flex-direction: column; gap: 1px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--line); }
+.ws-member { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 11px 14px; background: var(--bg-sub); }
+.ws-member-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ws-member-name { font-size: var(--fs-sm); font-weight: 600; color: var(--fg); }
+.ws-you { font-size: var(--fs-2xs); font-weight: 500; color: var(--fg-faint); }
+.ws-member-email { font-size: var(--fs-2xs); color: var(--fg-faint); }
+.ws-member-role { flex: none; }
+.ws-member-controls { display: flex; align-items: center; gap: 8px; flex: none; }
+.ws-role-select { padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-size: var(--fs-xs); }
+.ws-role-select:focus { outline: none; border-color: color-mix(in srgb, var(--signal) 55%, transparent); box-shadow: var(--focus-ring-soft); }
+.ws-role-select:disabled { opacity: 0.6; }
+
+.ws-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--red) 28%, transparent); background: color-mix(in srgb, var(--red) 7%, transparent); }
+.ws-confirm-q { font-size: var(--fs-sm); color: var(--fg-2); }
+.ws-confirm-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
 /* ── Audit panel ───────────────────────────────────────────────────────────── */
 .audit-list { display: flex; flex-direction: column; gap: 1px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--line); }
 .audit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 11px 14px; background: var(--bg-sub); font-size: var(--fs-sm); }

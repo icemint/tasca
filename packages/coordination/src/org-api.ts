@@ -40,6 +40,8 @@ type Route =
   | { kind: 'list-orgs' }
   | { kind: 'create-org' }
   | { kind: 'switch-org' }
+  | { kind: 'get-org' }
+  | { kind: 'rename-org' }
   | { kind: 'list-members' }
   | { kind: 'add-member' }
   | { kind: 'set-role'; userId: string }
@@ -55,6 +57,10 @@ function matchRoute(method: string, path: string): Route | null {
     return null;
   }
   if (path === '/api/active-org') return method === 'POST' ? { kind: 'switch-org' } : null;
+  // The ACTIVE org's info + rename (slice 3.5-B.2). These are NOT multiplicity routes — they act on
+  // the ONE active org, so the single-tenant guard below deliberately does not cover them.
+  if (path === '/api/org') return method === 'GET' ? { kind: 'get-org' } : null;
+  if (path === '/api/org/name') return method === 'POST' ? { kind: 'rename-org' } : null;
   if (path === '/api/orgs/members') {
     if (method === 'GET') return { kind: 'list-members' };
     if (method === 'POST') return { kind: 'add-member' };
@@ -127,6 +133,20 @@ export async function orgApiHandler(
       sendJson(res, 200, { orgs: await deps.membership.listOrgsForUser(userId) });
       return true;
     }
+    // GET /api/org — the ACTIVE org's name + the caller's role (any member). The active-org info
+    // that the multi-tenant /api/orgs carries for the one org; surfaced standalone for single-tenant.
+    if (route.kind === 'get-org') {
+      const orgId = await deps.membership.getActiveOrg(userId);
+      if (orgId === null) {
+        sendJson(res, 403, { error: 'no organization membership' });
+        return true;
+      }
+      const name = await deps.membership.getOrgName(orgId);
+      // dev (no session) = full access; a real session resolves its true role.
+      const role = session ? await deps.membership.getRole(userId, orgId) : 'owner';
+      sendJson(res, 200, { id: orgId, name: name ?? '', role });
+      return true;
+    }
     // GET /api/orgs/members — the active org's team (any member may see it).
     if (route.kind === 'list-members') {
       const orgId = await deps.membership.getActiveOrg(userId);
@@ -190,6 +210,26 @@ export async function orgApiHandler(
       return true;
     }
     const callerRole = session ? await deps.membership.getRole(userId, orgId) : 'owner'; // dev = full access
+
+    // ── workspace settings on the ACTIVE org: rename = ADMIN+ (slice 3.5-B.2) ────
+    // Governance, not member authority — an admin may rename the workspace; a member cannot.
+    if (route.kind === 'rename-org') {
+      if (callerRole === null || !atLeast(callerRole, 'admin')) {
+        sendJson(res, 403, { error: 'admin role required to rename the workspace' });
+        return true;
+      }
+      const body = await readBody(req, res);
+      if (body === undefined) return true;
+      const raw = (body as { name?: unknown }).name;
+      const name = typeof raw === 'string' ? raw.trim() : '';
+      if (name.length === 0 || name.length > 80) {
+        sendJson(res, 400, { error: 'name (1–80 chars) is required' });
+        return true;
+      }
+      await deps.membership.renameOrg(orgId, name);
+      sendJson(res, 200, { ok: true, name });
+      return true;
+    }
 
     // ── roster management on the ACTIVE org: ADMIN+ (slice 5b: roster = admin) ──
     // Hiring/unhiring agents is a roster write — gate on the endpoint (a member calling → 403),

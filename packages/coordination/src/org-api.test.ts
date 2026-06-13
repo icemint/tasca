@@ -18,6 +18,8 @@ class FakeOrgRepo implements OrgMembershipRepo {
   roleChanges: Array<{ orgId: string; userId: string; role: OrgRole }> = [];
   removed: Array<{ orgId: string; userId: string }> = [];
   nextMemberOutcome: MemberWriteOutcome = 'ok';
+  orgName: string | null = 'Acme';
+  renames: Array<{ orgId: string; name: string }> = [];
 
   addMember(userId: string, orgId: string) {
     this.members.add(`${userId}:${orgId}`);
@@ -61,6 +63,13 @@ class FakeOrgRepo implements OrgMembershipRepo {
   async removeMember(orgId: string, userId: string) {
     this.removed.push({ orgId, userId });
     return this.nextMemberOutcome;
+  }
+  async getOrgName() {
+    return this.orgName;
+  }
+  async renameOrg(orgId: string, name: string) {
+    this.renames.push({ orgId, name });
+    this.orgName = name;
   }
 }
 
@@ -282,6 +291,65 @@ describe('member management — OWNER-gated (slice 5b)', () => {
     const r = await run(deps(repo), fakeReq('POST', '/api/orgs/members', { headers: csrf(), body: JSON.stringify({ email: 'x@x', role: 'superuser' }) }));
     expect(r.statusCode).toBe(400);
     expect(repo.added).toEqual([]);
+  });
+});
+
+describe('workspace settings — name (slice 3.5-B.2)', () => {
+  it('GET /api/org returns the active org id + name + the caller’s role (any member)', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    repo.orgName = 'Acme';
+    const r = await run(deps(repo), fakeReq('GET', '/api/org'));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ id: 'org_default', name: 'Acme', role: 'member' });
+  });
+
+  it('POST /api/org/name renames the active org for an ADMIN', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'admin';
+    const r = await run(deps(repo), fakeReq('POST', '/api/org/name', { headers: csrf(), body: JSON.stringify({ name: '  Globex  ' }) }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ ok: true, name: 'Globex' }); // trimmed
+    expect(repo.renames).toEqual([{ orgId: 'org_default', name: 'Globex' }]);
+  });
+
+  it('PRIV-ESC BLOCK: a MEMBER cannot rename the workspace (403), no rename recorded', async () => {
+    const repo = new FakeOrgRepo();
+    repo.callerRole = 'member';
+    const r = await run(deps(repo), fakeReq('POST', '/api/org/name', { headers: csrf(), body: JSON.stringify({ name: 'Hijack' }) }));
+    expect(r.statusCode).toBe(403);
+    expect(repo.renames).toEqual([]);
+  });
+
+  it('rename requires CSRF (403) and a non-empty / ≤80-char name (400) — never reaches the repo', async () => {
+    const noCsrf = new FakeOrgRepo();
+    const rCsrf = await run(deps(noCsrf), fakeReq('POST', '/api/org/name', { body: JSON.stringify({ name: 'X' }) }));
+    expect(rCsrf.statusCode).toBe(403);
+    expect(noCsrf.renames).toEqual([]);
+
+    const empty = new FakeOrgRepo();
+    const rEmpty = await run(deps(empty), fakeReq('POST', '/api/org/name', { headers: csrf(), body: JSON.stringify({ name: '   ' }) }));
+    expect(rEmpty.statusCode).toBe(400);
+    expect(empty.renames).toEqual([]);
+
+    const long = new FakeOrgRepo();
+    const rLong = await run(deps(long), fakeReq('POST', '/api/org/name', { headers: csrf(), body: JSON.stringify({ name: 'a'.repeat(81) }) }));
+    expect(rLong.statusCode).toBe(400);
+    expect(long.renames).toEqual([]);
+  });
+
+  it('NOT covered by the single-tenant guard: /api/org + /api/org/name work with singleTenant true AND false', async () => {
+    for (const singleTenant of [true, false]) {
+      const repo = new FakeOrgRepo(); // owner by default
+      const info = await run(deps(repo, { singleTenant }), fakeReq('GET', '/api/org'));
+      expect(info.statusCode).toBe(200);
+      const rename = await run(
+        deps(repo, { singleTenant }),
+        fakeReq('POST', '/api/org/name', { headers: csrf(), body: JSON.stringify({ name: 'Renamed' }) })
+      );
+      expect(rename.statusCode).toBe(200);
+      expect(repo.renames).toEqual([{ orgId: 'org_default', name: 'Renamed' }]);
+    }
   });
 });
 

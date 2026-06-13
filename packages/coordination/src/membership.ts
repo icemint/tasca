@@ -139,6 +139,13 @@ export interface OrgMembershipRepo extends RoleReader {
   /** Set the user's active org (the caller MUST have checked isMember first). Upsert. */
   setActiveOrg(userId: string, orgId: string): Promise<void>;
 
+  // ── org settings (slice 3.5-B.2: Workspace name) ─────────────────────────────
+  /** The org's display name, or null if no such org. (`organization` RESOLVES the tenant — it is
+   *  not itself a tenant table — so reading/writing its name is allowed outside the org-scoped layer.) */
+  getOrgName(orgId: string): Promise<string | null>;
+  /** Rename the org. The caller MUST have checked the active org + role (admin+) first. */
+  renameOrg(orgId: string, name: string): Promise<void>;
+
   // ── member management (slice 5b; getRole is inherited from RoleReader) ───────
   /** The org's members (the team list). */
   listMembers(orgId: string): Promise<OrgMemberSummary[]>;
@@ -274,6 +281,20 @@ export class PgOrgMembershipRepo implements OrgMembershipRepo {
        ON CONFLICT (user_id) DO UPDATE SET org_id = EXCLUDED.org_id, updated_at = now()`,
       [userId, orgId]
     );
+  }
+
+  // ── org settings (slice 3.5-B.2) ────────────────────────────────────────────
+
+  async getOrgName(orgId: string): Promise<string | null> {
+    const res = await this.db.query<{ name: string }>(
+      `SELECT name FROM organization WHERE id = $1`,
+      [orgId]
+    );
+    return res.rows[0]?.name ?? null;
+  }
+
+  async renameOrg(orgId: string, name: string): Promise<void> {
+    await this.db.query(`UPDATE organization SET name = $2 WHERE id = $1`, [orgId, name]);
   }
 
   // ── role + member management (slice 5b) ─────────────────────────────────────
