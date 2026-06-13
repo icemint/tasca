@@ -1,8 +1,8 @@
 # Serves the pre-built Astro static output via nginx.
 #
-# NOTE: `dist/` is produced by the CD workflow (pnpm --filter @tasca/website
-# build) BEFORE `docker build` runs — this image only packages the result, it
-# does not build the site. Build context is the `website/` directory.
+# NOTE: `dist/` is produced by cd-app.yml (`pnpm run build` in app/, with PUBLIC_GIT_SHA baked into
+# version.txt) BEFORE `docker build` runs — this image only packages the result, it does not build
+# the site. Build context is the `app/` directory.
 FROM nginx:1.27-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
