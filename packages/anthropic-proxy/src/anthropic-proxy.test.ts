@@ -659,4 +659,40 @@ describe('TCP-listen mode + baked usage context (in-process per-task proxy)', ()
     await handle.close();
     expect(Date.now() - start).toBeLessThan(1000); // resolved promptly — closeAllConnections() tore the live socket down
   });
+
+  it('STRIPS the client accept-encoding so the upstream returns an identity (parseable) body — the usage tee cannot read a gzipped stream', async () => {
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const { port } = await startTcpProxy(up.origin);
+    // The Claude CLI sends accept-encoding: gzip by default; if forwarded, Anthropic gzips the response
+    // and the tee (which parses bytes as UTF-8 SSE/JSON) silently extracts NO usage.
+    await reqViaTcp(port, { headers: { 'accept-encoding': 'gzip, deflate, br' }, body: '{}' });
+    expect(up.received[0]!.headers['accept-encoding']).toBeUndefined(); // stripped → upstream won't compress
+  });
+
+  it('a metered 2xx that yields NO usage logs a WARNING (loud — never a silent unmetered agent run)', async () => {
+    const warns: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const up = await fakeUpstream((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true })); // a 2xx with no id/usage → the tee extracts nothing
+    });
+    const handle = await serveAnthropicProxy({
+      tcpPort: 0,
+      tcpHost: '127.0.0.1',
+      apiKey: MASTER_KEY,
+      upstreamOrigin: up.origin,
+      usageContext: { orgId: 'org-UNMETERED', taskId: 'task-UNMETERED' },
+      usageSink: { record: () => {} },
+      logger: { warn: (msg, ctx) => warns.push({ msg, ...(ctx ? { ctx } : {}) }) },
+    });
+    const port = handle.address!.port;
+    await reqViaTcp(port, { body: '{}' });
+    await tick();
+    await handle.close();
+    expect(warns).toHaveLength(1);
+    expect(warns[0]!.msg).toMatch(/NO usage|UNMETERED/);
+    expect(warns[0]!.ctx).toMatchObject({ orgId: 'org-UNMETERED', taskId: 'task-UNMETERED' });
+  });
 });
