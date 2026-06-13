@@ -8,9 +8,11 @@ import type {
   Agent,
   AgentDetail,
   ConnectionsResponse,
+  CredentialAuditResponse,
   SessionResponse,
   TaskDetail,
   TaskSummary,
+  VendorCredentialsResponse,
 } from './contract';
 
 /** Narrow a LoadResult to its html (throws on unauth/error), so view assertions
@@ -148,3 +150,21 @@ export const CONNECTIONS_OK: ConnectionsResponse = {
     },
   ],
 };
+
+// ── vendor credentials (slice 3.5-A.2c.2) — the read shape NEVER carries a key. ──
+export const VENDOR_CREDS_ACTIVE: VendorCredentialsResponse = {
+  credentials: [
+    { provider: 'anthropic', status: 'active', fingerprint: '1a2b', lastValidatedAt: new Date().toISOString() },
+  ],
+};
+
+export const VENDOR_CREDS_EMPTY: VendorCredentialsResponse = { credentials: [] };
+
+export const CREDENTIAL_AUDIT_OK: CredentialAuditResponse = {
+  events: [
+    { id: 'ev2', actorUserId: 'u1', action: 'credential.set', target: 'anthropic', payload: { fingerprint: '1a2b', status: 'active' }, at: new Date().toISOString() },
+    { id: 'ev1', actorUserId: null, action: 'credential.delete', target: 'anthropic', payload: {}, at: '2026-06-12T00:00:00Z' },
+  ],
+};
+
+export const CREDENTIAL_AUDIT_EMPTY: CredentialAuditResponse = { events: [] };

@@ -1,0 +1,47 @@
+/* ============================================================================
+   TASCA app · Settings styles (slice 3.5-A.2c.2 — Vendor keys + audit).
+   Tokens only, both themes. Builds on app-views.css (.pcard / .ictl / .idrow)
+   and connections.css (.conn-status status badge). No raw hex/rgb here.
+   ============================================================================ */
+.settings-stack { display: flex; flex-direction: column; gap: 18px; margin-top: 22px; max-width: 680px; }
+
+/* ── Vendor keys panel ─────────────────────────────────────────────────────── */
+.vk-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px; border-radius: var(--radius-md); background: var(--bg-sub); border: 1px solid var(--line); }
+.vk-id { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.vk-name { font-family: var(--font-display); font-size: var(--fs-md); font-weight: 600; color: var(--fg); letter-spacing: -0.01em; }
+.vk-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--fg-faint); }
+.vk-fp { font-size: var(--fs-2xs); color: var(--fg-3); letter-spacing: 0.02em; }
+.vk-when { font-size: var(--fs-2xs); color: var(--fg-faint); }
+.vk-status { flex: none; }
+.vk-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* The "Not configured" glyph: a hollow dash inside the badge dot slot (shape, not color, carries
+   meaning alongside the always-present label). Active reuses the filled .conn-status .d dot. */
+.conn-status .d.hollow { background: transparent; border: 1.5px solid currentColor; }
+
+.vk-danger { border-color: color-mix(in srgb, var(--red) 42%, transparent); color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.vk-danger:hover { border-color: color-mix(in srgb, var(--red) 62%, transparent); color: var(--red); }
+
+.vk-future { font-size: var(--fs-xs); color: var(--fg-faint); margin: 12px 0 0; }
+
+/* Reveal-on-demand set/replace form. */
+.vk-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--line-2); background: var(--surface-2); }
+.vk-label { font-size: var(--fs-xs); font-weight: 600; color: var(--fg-2); }
+.vk-input { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-size: var(--fs-sm); transition: border-color var(--dur) var(--ease); }
+.vk-input::placeholder { color: var(--fg-faint); }
+.vk-input:focus { outline: none; border-color: color-mix(in srgb, var(--signal) 55%, transparent); box-shadow: var(--focus-ring-soft); }
+.vk-form-actions { display: flex; align-items: center; gap: 8px; }
+.vk-err { font-size: var(--fs-xs); color: var(--red); margin: 0; }
+
+/* Two-step remove confirm (no window.confirm in this codebase). */
+.vk-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid color-mix(in srgb, var(--red) 28%, transparent); background: color-mix(in srgb, var(--red) 7%, transparent); }
+.vk-confirm-q { font-size: var(--fs-sm); color: var(--fg-2); }
+.vk-confirm-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* ── Audit panel ───────────────────────────────────────────────────────────── */
+.audit-list { display: flex; flex-direction: column; gap: 1px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--line); }
+.audit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 11px 14px; background: var(--bg-sub); font-size: var(--fs-sm); }
+.audit-verb { font-weight: 600; color: var(--fg-2); min-width: 64px; }
+.audit-target { font-size: var(--fs-xs); color: var(--fg-3); }
+.audit-actor { font-size: var(--fs-xs); color: var(--fg-faint); margin-left: auto; }
+.audit-when { font-size: var(--fs-2xs); color: var(--fg-faint); flex: none; }

@@ -1,5 +1,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { post, ensureCsrf, pauseAgent, hireAgent, unhireAgent, _resetCsrfForTest } from './api';
+import {
+  post,
+  ensureCsrf,
+  pauseAgent,
+  hireAgent,
+  unhireAgent,
+  setVendorCredential,
+  deleteVendorCredential,
+  _resetCsrfForTest,
+} from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -137,5 +146,42 @@ describe('roster writes (W4-S3) — hire/unhire send CSRF + classify honestly', 
     const m = mockWrites([{ status: 403 }, { status: 200, body: { ok: true } }]);
     expect((await unhireAgent('agent-elvis')).kind).toBe('ok');
     expect(m.csrfFetches()).toBe(2); // token was refreshed and the DELETE retried
+  });
+});
+
+describe('vendor credentials (slice 3.5-A.2c.2) — write-only, CSRF, honest classification', () => {
+  it('setVendorCredential POSTs {provider, key} to /api/orgs/credentials with the CSRF header', async () => {
+    const m = mockWrites([{ status: 200, body: { ok: true, provider: 'anthropic', status: 'active', fingerprint: '1a2b' } }]);
+    const r = await setVendorCredential('anthropic', 'sk-ant-secret');
+    expect(r.kind).toBe('ok');
+    expect(m.posts[0]!.url).toBe('/api/orgs/credentials');
+    expect(m.posts[0]!.body).toEqual({ provider: 'anthropic', key: 'sk-ant-secret' });
+    expect(m.posts[0]!.headers['x-csrf-token']).toBe('tok-1');
+  });
+
+  it('a live-rejected key (400 code:key_invalid) surfaces as a conflict carrying the code (never ok)', async () => {
+    // The worker validates the key live; an invalid key is a 400 {code:key_invalid}. This helper lifts
+    // a parseable 400 into the conflict channel so the view can name the vendor rejection specifically.
+    mockWrites([{ status: 400, body: { error: 'invalid', code: 'key_invalid' } }]);
+    const r = await setVendorCredential('anthropic', 'bad');
+    expect(r.kind).toBe('conflict');
+    expect(r.kind === 'conflict' && (r.data as { code?: string }).code).toBe('key_invalid');
+  });
+
+  it('an UNPARSEABLE 400 stays an honest error (never a fabricated conflict)', async () => {
+    mockWrites([{ status: 400 }]); // empty body → res.json() throws
+    expect((await setVendorCredential('anthropic', 'bad')).kind).toBe('error');
+  });
+
+  it('deleteVendorCredential DELETEs /api/orgs/credentials/:provider with the CSRF header', async () => {
+    const m = mockWrites([{ status: 200, body: { ok: true } }]);
+    expect((await deleteVendorCredential('anthropic')).kind).toBe('ok');
+    expect(m.posts[0]!.url).toBe('/api/orgs/credentials/anthropic');
+    expect(m.posts[0]!.headers['x-csrf-token']).toBe('tok-1');
+  });
+
+  it('deleteVendorCredential on a missing provider → notfound (honest, not ok)', async () => {
+    mockWrites([{ status: 404 }]);
+    expect((await deleteVendorCredential('anthropic')).kind).toBe('notfound');
   });
 });

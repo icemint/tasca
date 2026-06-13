@@ -17,6 +17,10 @@ import {
   TASK_EXECUTING_DETAIL,
   TASK_NO_CAPACITY_DETAIL,
   CONNECTIONS_OK,
+  VENDOR_CREDS_ACTIVE,
+  VENDOR_CREDS_EMPTY,
+  CREDENTIAL_AUDIT_OK,
+  CREDENTIAL_AUDIT_EMPTY,
   htmlOf,
 } from '../test-support';
 
@@ -244,14 +248,84 @@ describe('W4-S3 self-serve controls — admin-gated wiring (server stays the aut
   });
 });
 
-describe('settings', () => {
-  it('is an honest deferred shell listing the planned panels', async () => {
+describe('settings — vendor keys + credential audit (slice 3.5-A.2c.2)', () => {
+  const ADMIN_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] };
+  const MEMBER_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] };
+
+  it('admin + a configured key: Active badge, fingerprint, Replace + Remove, and the audit events', async () => {
+    stubFetch({
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+      '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('Anthropic');
+    expect(html).toContain('Active');
+    expect(html).toContain('key ••••1a2b'); // fingerprint, never a key
+    expect(html).toContain('data-act="vk-edit"'); // Replace key
+    expect(html).toContain('Replace key');
+    expect(html).toContain('data-act="vk-remove"'); // Remove
+    // audit panel renders the events as verbs (Set / Removed), newest first
+    expect(html).toContain('Audit log');
+    expect(html).toContain('Set');
+    expect(html).toContain('Removed');
+    // the still-planned rows survive untouched
+    expect(html).toContain('Workspace');
+    expect(html).toContain('Planned');
+    expect(html).not.toContain('Coming soon');
+  });
+
+  it('admin + no key: Not configured + a Set key control; audit empty state', async () => {
+    stubFetch({
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/credentials': { body: VENDOR_CREDS_EMPTY },
+      '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_EMPTY },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('Not configured');
+    expect(html).toContain('Set key');
+    expect(html).toContain('data-act="vk-edit"');
+    expect(html).not.toContain('data-act="vk-remove"'); // nothing to remove
+    expect(html).toContain('No credential changes yet'); // audit empty state
+  });
+
+  it('non-admin: read-only status + the gated control, NO password input, NO audit panel/fetch', async () => {
+    const routes: Record<string, { status?: number; body?: unknown }> = {
+      '/api/orgs': { body: MEMBER_ORGS },
+      '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+      // deliberately NO /api/orgs/credentials/audit route → a fetch would 404 here / 403 in prod
+    };
+    stubFetch(routes);
+    const html = htmlOf(await loadSettings());
+    expect(html).toContain('Active'); // status is still visible read-only
+    expect(html).toContain('Vendor keys are managed by an admin'); // gated reason
+    expect(html).toContain('data-ro'); // disabled gated control
+    expect(html).not.toContain('type="password"'); // no form for a non-admin
+    expect(html).not.toContain('data-act="vk-edit"');
+    expect(html).not.toContain('Audit log'); // admin-only panel absent
+  });
+
+  it('a vendor-read error renders an honest error block, the rest of settings still renders', async () => {
+    stubFetch({
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/credentials': { status: 500, body: {} },
+      '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_EMPTY },
+    });
     const r = await loadSettings();
-    expect(r.kind).toBe('ok');
-    expect(htmlOf(r)).toContain('Workspace');
-    expect(htmlOf(r)).toContain('Audit log');
-    expect(htmlOf(r)).toContain('Planned'); // honest deferred tag, not a stray "Coming soon"
-    expect(htmlOf(r)).not.toContain('Coming soon');
+    expect(r.kind).toBe('ok'); // the page itself still renders
+    const html = htmlOf(r);
+    expect(html).toContain('Could not load vendor keys');
+    expect(html).toContain('Workspace'); // planned rows unaffected
+  });
+
+  it('SECURITY: no audit event payload ever renders a raw key', async () => {
+    stubFetch({
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+      '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).not.toContain('sk-ant'); // fixtures carry only fingerprints, asserted
   });
 });
 
