@@ -51,8 +51,9 @@ const ROLE_LABEL: Record<OrgRole, string> = {
   member: 'Member',
   viewer: 'Viewer',
 };
-// A shape/glyph per role so the badge is NEVER color-alone (a label is always present too): a filled
-// dot for owner, a half (hollow-bordered) dot for admin, a hollow dot for member.
+// The badge is NEVER color-alone — a text role label (Owner/Admin/Member) is ALWAYS rendered. The dot
+// adds a second, non-color signal where it differs: a FILLED dot for owner/admin, a HOLLOW dot for
+// member/viewer. (Owner vs admin are distinguished by the label + color, not the dot shape.)
 const ROLE_BADGE_CLASS: Record<OrgRole, string> = {
   owner: 'ok',
   admin: 'warn',
