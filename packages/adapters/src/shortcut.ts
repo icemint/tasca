@@ -254,6 +254,32 @@ export class ShortcutAdapter implements PlatformAdapter {
   }
 
   /**
+   * Post a comment onto a Shortcut story under the AGENT'S OWN Agent-User token
+   * (slice SC-3): `POST /api/v3/stories/:storyId/comments {text}` with the
+   * per-agent `Shortcut-Token` header — so the comment is attributed to the
+   * agent's native Shortcut identity. Throws on a non-2xx (the coordination
+   * status reporter swallows it; the PR is already open). The token rides ONLY in
+   * the header — it is never logged here or by the reporter.
+   */
+  async postStoryComment(input: { token: string; storyId: string; text: string }): Promise<void> {
+    const res = await this.fetchImpl(
+      `${this.apiBase}/api/v3/stories/${encodeURIComponent(input.storyId)}/comments`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Shortcut-Token': input.token,
+        },
+        body: JSON.stringify({ text: input.text }),
+      }
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`shortcut postStoryComment failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+  }
+
+  /**
    * GATED — write-back identity / provisioning. Throws until the token-issuance
    * model (Shortcut-side token vs Devin-style partner trust) is confirmed. Do
    * NOT implement here; see docs/Tasca-Shortcut-Kickoff-Brief.md item 2.

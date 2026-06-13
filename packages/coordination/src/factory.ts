@@ -17,7 +17,7 @@ import { makeUsageSink } from './usage-context';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
-import { VendorKeyResolver, type VendorValidator } from './vendor-credential';
+import { VendorKeyResolver, type VendorValidator, type AgentCredentialResolver } from './vendor-credential';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import { PgAgentCreator } from './agent-creator';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -57,6 +57,11 @@ export interface CreateCoordinationDeps {
   /** BYOK vendor credentials (slice 3.5-A): the env-held master key (null → write surface 503s) + the
    *  validate-on-input probe. Absent → the credential API is not wired. */
   vendorCredential?: { masterKey: Buffer | null; validator: VendorValidator };
+  /** Per-agent platform identity (slice SC-3): the env-held master key (null → the set surface 503s).
+   *  Wires POST /api/orgs/:orgId/agents/:agentId/identity/shortcut and shares the AgentCredentialResolver
+   *  the host's Shortcut status reporter reads (so a set busts the reporter's cache on this node).
+   *  Absent → the agent-identity API is not wired. */
+  agentCredential?: { masterKey: Buffer | null; resolver: AgentCredentialResolver };
   /** Window to wait (polling) for a runner to claim before retiring the task to
    *  needs_attention. Default 30000ms. */
   runnerWaitMs?: number;
@@ -304,6 +309,25 @@ export function createCoordination(
             masterKey: input.vendorCredential.masterKey,
             membership,
             // Governance audit trail (slice 3.5-A.2c.1): the same store implements GovernanceAuditSink.
+            audit: store,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
+        }
+      : {}),
+    // The per-agent identity API (slice SC-3) — wired only when the agent-credential bits (master key
+    // presence + the shared resolver) are supplied. Admin-gated, CSRF, write-only set of an agent's
+    // Shortcut Agent-User token; upserts the identity_binding projection + governance-audits the set.
+    ...(input.agentCredential
+      ? {
+          agentIdentityApi: {
+            store,
+            resolver: input.agentCredential.resolver,
+            identity,
+            roster,
+            masterKey: input.agentCredential.masterKey,
+            membership,
+            // Governance audit trail: the same store implements GovernanceAuditSink.
             audit: store,
             ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
             ...(input.logger !== undefined ? { logger: input.logger } : {}),

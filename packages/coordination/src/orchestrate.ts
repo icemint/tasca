@@ -1026,6 +1026,8 @@ export async function finalizeDispatch(
         platform: event.platform,
         externalStoryId: statusStoryId,
         agentId,
+        // The task's org scopes the per-agent credential vault the Shortcut reporter reads (slice SC-3).
+        orgId,
         state: 'in_review',
         comment: isChild ? `Subtask ${event.externalStoryId}: PR opened` : 'PR opened',
         prUrl,

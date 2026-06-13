@@ -23,6 +23,12 @@ export interface StatusUpdate {
   externalStoryId: string;
   /** The agent whose native identity authors the update. */
   agentId: string;
+  /**
+   * The task's org — the tenant scope the per-agent credential vault is keyed by (slice SC-3). The
+   * GitHub reporter ignores it (it resolves the owner from the story id); the Shortcut reporter needs
+   * it to resolve the agent's OWN Shortcut token org-scoped. Optional so the type stays additive.
+   */
+  orgId?: string;
   /** Workflow-state transition to apply on the platform (e.g. 'in_review'). */
   state?: string;
   /** Human-readable progress comment. */

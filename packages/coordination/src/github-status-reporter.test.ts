@@ -168,4 +168,19 @@ describe('routingStatusReporter', () => {
     expect(fallbackCalls).toHaveLength(1);
     expect(fallbackCalls[0]!.platform).toBe('shortcut');
   });
+
+  it('when a shortcut reporter is wired, shortcut events route to IT, not the fallback', async () => {
+    const shortcutCalls: StatusUpdate[] = [];
+    const fallbackCalls: StatusUpdate[] = [];
+    const github: StatusReporter = { async postStatus() {} };
+    const shortcut: StatusReporter = { async postStatus(u) { shortcutCalls.push(u); } };
+    const fallback: StatusReporter = { async postStatus(u) { fallbackCalls.push(u); } };
+    const router = routingStatusReporter({ github, shortcut, fallback });
+
+    await router.postStatus(update({ platform: 'shortcut', externalStoryId: 'sc-1' }));
+
+    expect(shortcutCalls).toHaveLength(1);
+    expect(shortcutCalls[0]!.platform).toBe('shortcut');
+    expect(fallbackCalls).toHaveLength(0); // the gated no-op is NOT taken when a real reporter is wired
+  });
 });

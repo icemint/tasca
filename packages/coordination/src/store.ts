@@ -13,6 +13,8 @@ import type {
   VendorProvider,
   VendorCredentialStatus,
   VendorCredentialStore,
+  AgentCredentialProvider,
+  AgentCredentialStore,
 } from './vendor-credential';
 import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
 import type { CreateInviteInput, InviteSummary, AcceptInviteResult, InviteStore } from './invite';
@@ -614,7 +616,9 @@ class RollbackProposal extends Error {
  * PgClaimRepository / PgIdentityRepository style). Constructor takes a pool or a
  * single connection.
  */
-export class PgCoordinationStore implements CoordinationStore, VendorCredentialStore, GovernanceAuditSink, InviteStore {
+export class PgCoordinationStore
+  implements CoordinationStore, VendorCredentialStore, AgentCredentialStore, GovernanceAuditSink, InviteStore
+{
   constructor(private readonly db: Queryable) {}
 
   // ── Org invites (slice 3.5-B.3.1) — single-use, hashed-at-rest, expiring org-join capability ──
@@ -773,6 +777,43 @@ export class PgCoordinationStore implements CoordinationStore, VendorCredentialS
       [orgId, provider]
     );
     return (res.rowCount ?? 0) > 0;
+  }
+
+  // ── Per-agent platform credentials (slice SC-3) — sealed at rest; no method returns plaintext ─────
+  async setAgentCredential(
+    orgId: string,
+    agentId: string,
+    provider: AgentCredentialProvider,
+    sealed: SealedCredential,
+    fingerprint: string,
+    createdBy: string | null
+  ): Promise<void> {
+    // Upsert (org_id, agent_id, provider): a replace overwrites the sealed token + fingerprint and
+    // refreshes status/last_validated_at. org-scoped — a set can only land on THIS org's agent.
+    await this.db.query(
+      `INSERT INTO org_agent_credential (org_id, agent_id, provider, ciphertext, nonce, auth_tag, key_fingerprint, status, created_by, last_validated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8, now())
+       ON CONFLICT (org_id, agent_id, provider) DO UPDATE SET
+         ciphertext = EXCLUDED.ciphertext, nonce = EXCLUDED.nonce, auth_tag = EXCLUDED.auth_tag,
+         key_fingerprint = EXCLUDED.key_fingerprint, status = 'active', last_validated_at = now()`,
+      [orgId, agentId, provider, sealed.ciphertext, sealed.nonce, sealed.authTag, fingerprint, createdBy]
+    );
+  }
+
+  async getSealedAgentCredential(
+    orgId: string,
+    agentId: string,
+    provider: AgentCredentialProvider
+  ): Promise<SealedCredential | null> {
+    // The resolver's read — returns the SEALED blob (the master key to open it lives in env, not here).
+    // ORG-SCOPED + agent-scoped: a cross-tenant token is unreachable from another org's context.
+    const res = await this.db.query<{ ciphertext: string; nonce: string; auth_tag: string }>(
+      `SELECT ciphertext, nonce, auth_tag FROM org_agent_credential
+        WHERE org_id = $1 AND agent_id = $2 AND provider = $3 AND status = 'active'`,
+      [orgId, agentId, provider]
+    );
+    const row = res.rows[0];
+    return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
   }
 
   async recordWebhookEvent(

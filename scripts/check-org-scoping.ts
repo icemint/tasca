@@ -28,6 +28,7 @@ export const TENANT_TABLES = [
   'proposal',
   'usage_event',
   'org_vendor_credential',
+  'org_agent_credential',
   'governance_audit_event',
   'org_invite',
   'project',
