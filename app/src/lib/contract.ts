@@ -189,6 +189,27 @@ export interface OrgsResponse {
   orgs: OrgSummary[];
 }
 
+// ── workspace settings (slice 3.5-B.2: instance name + members/roles) ──────────
+/** The caller's ACTIVE org (GET /api/org) — its name + the caller's role in it. */
+export interface OrgInfo {
+  id: string;
+  name: string;
+  role: OrgRole;
+}
+export type OrgInfoResponse = OrgInfo;
+
+/** A member of the active org (GET /api/orgs/members). */
+export interface OrgMember {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: OrgRole;
+}
+
+export interface MembersResponse {
+  members: OrgMember[];
+}
+
 /** An agent hired into the active org (GET /api/orgs/agents). */
 export interface HiredAgent {
   agentId: string;

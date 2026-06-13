@@ -263,6 +263,15 @@ run('role matrix + member management (Postgres, slice 5b)', () => {
     expect(act.rowCount).toBe(0); // active pointer cleared → resolveOrg falls back
   });
 
+  it('getOrgName / renameOrg round-trip (slice 3.5-B.2)', async () => {
+    expect(await repo.getOrgName('team')).toBe('Team');
+    expect(await repo.getOrgName('no-such-org')).toBeNull();
+    await repo.renameOrg('team', 'Renamed Team');
+    expect(await repo.getOrgName('team')).toBe('Renamed Team');
+    // restore so later ordered tests reading 'team' see a stable name
+    await repo.renameOrg('team', 'Team');
+  });
+
   it('role is scoped to the ACTIVE org: owner of A, member of B → owner powers only when A is active', async () => {
     await pool.query(`INSERT INTO organization (id,name) VALUES ('s_a','A'),('s_b','B') ON CONFLICT (id) DO NOTHING`);
     await pool.query(`INSERT INTO org_membership (user_id, org_id, role) VALUES ('outsider','s_a','owner'),('outsider','s_b','member')`);

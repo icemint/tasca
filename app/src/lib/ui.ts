@@ -148,6 +148,9 @@ export const RO_GATE_ADMIN_ROSTER = 'Admin role required to manage the roster';
 /** Per-org vendor keys are set/replaced/removed by an admin (slice 3.5-A.2c.2); a non-admin
  *  sees the read-only status with this honest reason on the disabled control. */
 export const RO_GATE_VENDOR_KEYS = 'Vendor keys are managed by an admin';
+/** Workspace name + member roles are managed by an admin/owner (slice 3.5-B.2); a non-admin
+ *  sees the read-only workspace with this honest reason on the disabled control. */
+export const RO_GATE_WORKSPACE = 'Workspace settings are managed by an admin';
 
 /** Render a mutating control in the read-only console: visible-but-disabled, with a
  *  consistent class hook (`.ro-ctl` + `data-ro`) and an honest reason surfaced to

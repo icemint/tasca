@@ -1,33 +1,65 @@
-// Settings (C8). Two panels are now LIVE (slice 3.5-A.2c.2): "Vendor keys" lets an admin
-// set / replace / remove a per-org vendor key (Anthropic today) WITHOUT ever seeing a stored
-// key (the read shape carries only a status + a non-reversible fingerprint), and "Audit log"
-// shows the credential governance trail (admin+). Workspace + Billing stay honest `Planned`
-// rows. The key input is WRITE-ONLY: never pre-filled, never echoed, cleared + re-rendered
-// from server truth on save.
+// Settings (C8). Three panels are now LIVE: "Workspace" (slice 3.5-B.2) lets an admin rename the
+// instance + manage members and roles (list / change-role / remove; owner-only for role + remove);
+// "Vendor keys" (slice 3.5-A.2c.2) lets an admin set / replace / remove a per-org vendor key
+// (Anthropic today) WITHOUT ever seeing a stored key (the read shape carries only a status + a
+// non-reversible fingerprint); "Audit log" shows the credential governance trail (admin+). Billing
+// stays an honest `Planned` row. The key input is WRITE-ONLY: never pre-filled, never echoed,
+// cleared + re-rendered from server truth on save.
 
 import {
   getVendorCredentials,
   setVendorCredential,
   deleteVendorCredential,
   getCredentialAudit,
+  getOrgInfo,
+  getMembers,
+  renameOrg,
+  setMemberRole,
+  removeMember,
+  getSession,
   canManageActiveOrg,
+  redirectToLogin,
   type WriteResult,
 } from '../api';
-import { liveAction } from '../live';
+import { liveAction, showBanner } from '../live';
 import { error, empty } from '../states';
 import type { LoadResult } from '../mount';
-import { I, esc, roControl, RO_GATE_VENDOR_KEYS } from '../ui';
+import { I, esc, roControl, RO_GATE_VENDOR_KEYS, RO_GATE_WORKSPACE } from '../ui';
 import type { ApiResult } from '../api';
-import type { CredentialAuditEvent, VendorCredentialStatus, VendorCredentialsResponse } from '../contract';
+import type {
+  CredentialAuditEvent,
+  MembersResponse,
+  OrgInfo,
+  OrgMember,
+  OrgRole,
+  VendorCredentialStatus,
+  VendorCredentialsResponse,
+} from '../contract';
 
 const PROVIDER = 'anthropic';
 const PROVIDER_LABEL = 'Anthropic';
 
 // Deferred panels — unchanged honest "not yet available" rows.
-const PLANNED = [
-  { title: 'Workspace', desc: 'Name, members and defaults for your team.' },
-  { title: 'Billing & usage', desc: 'Plan, invoices and per-agent spend.' },
-];
+const PLANNED = [{ title: 'Billing & usage', desc: 'Plan, invoices and per-agent spend.' }];
+
+// The role lattice the Workspace panel surfaces (product labels). The backend lattice is
+// owner|admin|member; the role <select> offers exactly these, in privilege order.
+const MANAGED_ROLES: readonly OrgRole[] = ['owner', 'admin', 'member'];
+const ROLE_LABEL: Record<OrgRole, string> = {
+  owner: 'Owner',
+  admin: 'Admin',
+  member: 'Member',
+  viewer: 'Viewer',
+};
+// The badge is NEVER color-alone — a text role label (Owner/Admin/Member) is ALWAYS rendered. The dot
+// adds a second, non-color signal where it differs: a FILLED dot for owner/admin, a HOLLOW dot for
+// member/viewer. (Owner vs admin are distinguished by the label + color, not the dot shape.)
+const ROLE_BADGE_CLASS: Record<OrgRole, string> = {
+  owner: 'ok',
+  admin: 'warn',
+  member: 'off',
+  viewer: 'off',
+};
 
 function relTime(iso: string | null): string {
   if (!iso) return '—';
@@ -171,14 +203,133 @@ function auditPanel(res: ApiResult<{ events: CredentialAuditEvent[] }>): string 
     </div>`;
 }
 
+// ── Workspace panel (slice 3.5-B.2: instance name + members/roles) ─────────────
+
+/** A role badge — NEVER color-alone: the role label is always present, paired with a glyph
+ *  (a dot whose fill/shape varies by role) AND a token color. Reuses the connections
+ *  `.conn-status` badge treatment (ok/warn/off + the `.d` / `.d.hollow` dot shapes). */
+function roleBadge(role: OrgRole): string {
+  const cls = ROLE_BADGE_CLASS[role];
+  const dot = role === 'member' || role === 'viewer' ? '<span class="d hollow"></span>' : '<span class="d"></span>';
+  return `<span class="conn-status ${cls}">${dot}${esc(ROLE_LABEL[role] ?? role)}</span>`;
+}
+
+/** The role <select> for an owner acting on a member (owner-only). */
+function roleSelect(m: OrgMember): string {
+  const opts = MANAGED_ROLES.map(
+    (r) => `<option value="${r}"${r === m.role ? ' selected' : ''}>${esc(ROLE_LABEL[r])}</option>`
+  ).join('');
+  return `<select class="ws-role-select" data-act="ws-role" data-user-id="${esc(m.userId)}" aria-label="Role for ${esc(m.displayName || m.email)}">${opts}</select>`;
+}
+
+/** One member row: identity + a role badge (+ a `(you)` marker), and — owner-only — a role
+ *  control + a two-step Remove. A non-owner sees the badge only (read-only list). */
+function memberRow(m: OrgMember, isOwner: boolean, selfUserId: string | null): string {
+  const you = m.userId === selfUserId ? ' <span class="ws-you">(you)</span>' : '';
+  const name = esc(m.displayName || m.email);
+  const controls = isOwner
+    ? `<div class="ws-member-controls">${roleSelect(m)}` +
+      `<button class="ictl vk-danger" type="button" data-act="ws-remove" data-user-id="${esc(m.userId)}" aria-label="Remove ${name}">Remove</button></div>`
+    : '';
+  const confirm = isOwner
+    ? `<div class="ws-confirm" data-ws-confirm="${esc(m.userId)}" hidden>
+        <span class="ws-confirm-q">Remove ${name} from this workspace?</span>
+        <div class="ws-confirm-actions">
+          <button class="ictl vk-danger" type="button" data-act="ws-remove-confirm" data-user-id="${esc(m.userId)}" aria-label="Confirm removing ${name}">Confirm remove</button>
+          <button class="ictl" type="button" data-act="ws-remove-cancel" data-user-id="${esc(m.userId)}">Cancel</button>
+        </div>
+      </div>`
+    : '';
+  return `<div class="ws-member">
+      <div class="ws-member-id">
+        <div class="ws-member-name">${name}${you}</div>
+        <div class="ws-member-email">${esc(m.email)}</div>
+      </div>
+      <div class="ws-member-role">${roleBadge(m.role)}</div>
+      ${controls}
+    </div>${confirm}`;
+}
+
+/** The name block: the workspace name + (admin+) a reveal-on-demand inline edit form. A non-admin
+ *  sees the read-only name + a single gated control (never a form). */
+function nameBlock(info: OrgInfo, canManage: boolean): string {
+  const control = canManage
+    ? `<button class="ictl signal" type="button" data-act="ws-name-edit" aria-label="Rename the workspace">Rename</button>`
+    : roControl('Rename', { gate: RO_GATE_WORKSPACE });
+  const form = canManage
+    ? `<form class="ws-name-form" data-ws-name-form hidden>
+        <label class="ws-label" for="ws-name">Workspace name</label>
+        <input id="ws-name" class="ws-input" type="text" name="name" maxlength="80" autocomplete="off"
+          value="${esc(info.name)}" aria-label="Workspace name" />
+        <div class="ws-name-actions">
+          <button class="btn-add" type="submit" data-act="ws-name-save">Save</button>
+          <button class="ictl" type="button" data-act="ws-name-cancel">Cancel</button>
+        </div>
+        <p class="ws-err" data-ws-name-err hidden role="alert"></p>
+      </form>`
+    : '';
+  return `<div class="ws-name-row">
+      <div class="ws-name-id"><div class="ws-name-k">Name</div><div class="ws-name-v">${esc(info.name || '—')}</div></div>
+      <div class="ws-name-ctl">${control}</div>
+    </div>${form}`;
+}
+
+/** The Workspace panel. On a read failure it renders an honest error block (the rest of the page
+ *  still renders). Role + remove controls are OWNER-only (the caller's role === 'owner'); the name
+ *  edit is admin+. The backend enforces both — the UI gate is UX, not the security boundary. */
+function workspacePanel(
+  infoRes: ApiResult<OrgInfo>,
+  membersRes: ApiResult<MembersResponse>,
+  canManage: boolean,
+  selfUserId: string | null
+): string {
+  if (infoRes.kind !== 'ok') {
+    const msg = infoRes.kind === 'error' ? infoRes.message : 'Sign in again to manage the workspace.';
+    return `<div class="pcard ws-panel">
+        <div class="pc-h">Workspace</div>
+        <div class="pc-sub">Your workspace name, members and their roles.</div>
+        ${error('Could not load the workspace. ' + msg)}
+      </div>`;
+  }
+  const info = infoRes.data;
+  const isOwner = info.role === 'owner';
+
+  let membersBody: string;
+  if (membersRes.kind !== 'ok') {
+    const msg = membersRes.kind === 'error' ? membersRes.message : 'Sign in again to view members.';
+    membersBody = error('Could not load members. ' + msg);
+  } else if (membersRes.data.members.length === 0) {
+    membersBody = empty('No members yet', 'Members appear here once they sign in.', I.roster);
+  } else {
+    membersBody = `<div class="ws-members">${membersRes.data.members
+      .map((m) => memberRow(m, isOwner, selfUserId))
+      .join('')}</div>`;
+  }
+
+  return `<div class="pcard ws-panel">
+      <div class="pc-h">Workspace</div>
+      <div class="pc-sub">Your workspace name, members and their roles.</div>
+      ${nameBlock(info, canManage)}
+      <div class="ws-members-head">Members</div>
+      ${membersBody}
+    </div>`;
+}
+
 export async function loadSettings(): Promise<LoadResult> {
   const canManage = await canManageActiveOrg();
-  // The vendor read is member+ (always fetched); the audit read is admin+ (only fetched for
-  // an admin — a member fetch would 403). Both run concurrently with the role already resolved.
-  const [credRes, auditRes] = await Promise.all([
+  // Workspace name + members are member+ (always fetched); the vendor read is member+ (always);
+  // the audit read is admin+ (only fetched for an admin — a member fetch would 403). All run
+  // concurrently. The session resolves the caller's own id (the `(you)` marker).
+  const [orgRes, membersRes, credRes, auditRes, sessionRes] = await Promise.all([
+    getOrgInfo(),
+    getMembers(),
     getVendorCredentials(),
     canManage ? getCredentialAudit() : Promise.resolve(null),
+    getSession(),
   ]);
+
+  const selfUserId =
+    sessionRes.kind === 'ok' && sessionRes.data.authenticated ? sessionRes.data.user.id : null;
 
   const planned = PLANNED.map(
     (s) =>
@@ -189,6 +340,7 @@ export async function loadSettings(): Promise<LoadResult> {
 
   const html = `<div class="roster-head"><div><h1>Settings</h1><div class="sub">Workspace configuration</div></div></div>
     <div class="settings-stack">
+      ${workspacePanel(orgRes, membersRes, canManage, selfUserId)}
       ${vendorPanel(credRes, canManage)}
       ${auditHtml}
       <div class="pcard">
@@ -301,6 +453,124 @@ export function wireSettings(el: HTMLElement, rerun: () => Promise<void>): void 
       rerun,
       write: (): Promise<WriteResult<unknown>> => deleteVendorCredential(PROVIDER),
       describe: describeKeyFailure,
+    });
+  });
+
+  wireWorkspace(el, rerun);
+}
+
+/** Honest failure copy for workspace member writes. The last-owner guard arrives as a 409
+ *  `code:'last_owner'` (the conflict channel) — surfaced as its OWN message, never swallowed. */
+function describeMemberFailure(r: WriteResult<unknown>): string {
+  if (r.kind === 'conflict') {
+    const code = (r.data as { code?: string } | undefined)?.code;
+    if (code === 'last_owner') return 'Can’t change the last owner — promote someone else first.';
+    return 'Members changed elsewhere — showing the latest. Review and retry.';
+  }
+  switch (r.kind) {
+    case 'forbidden':
+      return 'Couldn’t apply — you may not have owner rights, or your session token expired. Showing the latest.';
+    case 'notfound':
+      return 'That member isn’t available to change — showing the latest.';
+    case 'error':
+      return `Couldn’t apply the change (${r.message}). Showing the latest.`;
+    default:
+      return 'Couldn’t apply the change. Showing the latest.';
+  }
+}
+
+/** Wire the Workspace panel: the admin+ name rename (reveal-on-demand inline form) and the
+ *  owner-only per-member role change + two-step remove. Controls absent for a non-admin/non-owner
+ *  simply have no listeners (the server is the authority either way). */
+function wireWorkspace(el: HTMLElement, rerun: () => Promise<void>): void {
+  // ── name rename (admin+) ─────────────────────────────────────────────────────
+  const nameForm = el.querySelector<HTMLFormElement>('[data-ws-name-form]');
+  const nameInput = nameForm?.querySelector<HTMLInputElement>('input[name="name"]') ?? null;
+  const nameErr = el.querySelector<HTMLElement>('[data-ws-name-err]');
+
+  el.querySelector<HTMLButtonElement>('[data-act="ws-name-edit"]')?.addEventListener('click', () => {
+    if (nameErr) nameErr.hidden = true;
+    if (nameForm) nameForm.hidden = false;
+    nameInput?.focus();
+  });
+  el.querySelector<HTMLButtonElement>('[data-act="ws-name-cancel"]')?.addEventListener('click', () => {
+    if (nameForm) nameForm.hidden = true;
+    if (nameErr) nameErr.hidden = true;
+  });
+  nameForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!nameInput) return;
+    const name = nameInput.value.trim();
+    if (!name) {
+      if (nameErr) {
+        nameErr.textContent = 'Enter a workspace name before saving.';
+        nameErr.hidden = false;
+      }
+      return;
+    }
+    const saveBtn = nameForm.querySelector<HTMLButtonElement>('[data-act="ws-name-save"]');
+    if (!saveBtn) return;
+    void liveAction({
+      button: saveBtn,
+      pendingLabel: 'Saving…',
+      view: el,
+      rerun,
+      write: (): Promise<WriteResult<unknown>> => renameOrg(name),
+      describe: describeMemberFailure,
+    });
+  });
+
+  // ── member role change (owner-only) ──────────────────────────────────────────
+  el.querySelectorAll<HTMLSelectElement>('[data-act="ws-role"]').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      if (sel.dataset.busy === '1') return;
+      const userId = sel.dataset.userId;
+      const role = sel.value as OrgRole;
+      if (!userId) return;
+      sel.dataset.busy = '1';
+      sel.disabled = true;
+      void (async () => {
+        let result: WriteResult<unknown>;
+        try {
+          result = await setMemberRole(userId, role);
+        } catch {
+          result = { kind: 'error', message: 'Unexpected error' };
+        }
+        if (result.kind === 'unauth') {
+          redirectToLogin();
+          return;
+        }
+        await rerun();
+        if (result.kind !== 'ok') showBanner(el, describeMemberFailure(result));
+      })();
+    });
+  });
+
+  // ── two-step member remove (owner-only) ──────────────────────────────────────
+  el.querySelectorAll<HTMLButtonElement>('[data-act="ws-remove"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const userId = btn.dataset.userId;
+      el.querySelector<HTMLElement>(`[data-ws-confirm="${userId}"]`)?.removeAttribute('hidden');
+    });
+  });
+  el.querySelectorAll<HTMLButtonElement>('[data-act="ws-remove-cancel"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const userId = btn.dataset.userId;
+      el.querySelector<HTMLElement>(`[data-ws-confirm="${userId}"]`)?.setAttribute('hidden', '');
+    });
+  });
+  el.querySelectorAll<HTMLButtonElement>('[data-act="ws-remove-confirm"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const userId = btn.dataset.userId;
+      if (!userId) return;
+      void liveAction({
+        button: btn,
+        pendingLabel: 'Removing…',
+        view: el,
+        rerun,
+        write: (): Promise<WriteResult<unknown>> => removeMember(userId),
+        describe: describeMemberFailure,
+      });
     });
   });
 }

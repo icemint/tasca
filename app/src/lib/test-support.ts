@@ -9,6 +9,8 @@ import type {
   AgentDetail,
   ConnectionsResponse,
   CredentialAuditResponse,
+  MembersResponse,
+  OrgInfo,
   SessionResponse,
   TaskDetail,
   TaskSummary,
@@ -168,3 +170,15 @@ export const CREDENTIAL_AUDIT_OK: CredentialAuditResponse = {
 };
 
 export const CREDENTIAL_AUDIT_EMPTY: CredentialAuditResponse = { events: [] };
+
+// ── workspace settings (slice 3.5-B.2) — org info + members. The caller is u1. ──
+export const ORG_INFO_OWNER: OrgInfo = { id: 'org_default', name: 'Roadhero', role: 'owner' };
+export const ORG_INFO_MEMBER: OrgInfo = { id: 'org_default', name: 'Roadhero', role: 'member' };
+
+export const MEMBERS_OK: MembersResponse = {
+  members: [
+    { userId: 'u1', email: 'denny@tasca.dev', displayName: 'Denny', role: 'owner' },
+    { userId: 'u2', email: 'mona@tasca.dev', displayName: 'Mona', role: 'admin' },
+    { userId: 'u3', email: 'qwen@tasca.dev', displayName: null, role: 'member' },
+  ],
+};

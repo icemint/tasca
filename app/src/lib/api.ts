@@ -20,6 +20,9 @@ import type {
   ConnectionsResponse,
   CredentialAuditResponse,
   HiredAgentsResponse,
+  MembersResponse,
+  OrgInfo,
+  OrgRole,
   OrgsResponse,
   ProposalsResponse,
   ProposalSummary,
@@ -310,6 +313,24 @@ export async function canManageActiveOrg(): Promise<boolean> {
   const active = res.data.orgs.find((o) => o.active) ?? res.data.orgs[0];
   return !!active && (active.role === 'admin' || active.role === 'owner');
 }
+
+// ── workspace settings (slice 3.5-B.2: instance name + members/roles) ──────────
+// Name read is member+; rename is admin+; member list is member+; set-role / remove are owner-only
+// (the server enforces all of it). A 409 `code:'last_owner'` on set-role/remove arrives via the
+// conflict channel (classify parses 409 bodies), so the view can show the specific guard message.
+
+/** The caller's active org — its name + the caller's role. */
+export const getOrgInfo = () => get<OrgInfo>('/api/org');
+/** Rename the active workspace (admin+; server-gated). */
+export const renameOrg = (name: string) => post<{ ok: true; name: string } | { error: string }>('/api/org/name', { name });
+/** The active org's members (member+). */
+export const getMembers = () => get<MembersResponse>('/api/orgs/members');
+/** Change a member's role (owner-only; server-gated). A last-owner refusal is a 409 `code:'last_owner'`. */
+export const setMemberRole = (userId: string, role: OrgRole) =>
+  post<{ ok: true } | { error: string; code?: string }>(`/api/orgs/members/${encodeURIComponent(userId)}/role`, { role });
+/** Remove a member (owner-only; server-gated). A last-owner refusal is a 409 `code:'last_owner'`. */
+export const removeMember = (userId: string) =>
+  del<{ ok: true } | { error: string; code?: string }>(`/api/orgs/members/${encodeURIComponent(userId)}`);
 
 export const getHiredAgents = () => get<HiredAgentsResponse>('/api/orgs/agents');
 
