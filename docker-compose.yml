@@ -1,0 +1,149 @@
+# Tasca — self-host topology (one command: `make up`).
+#
+# This is the OSS entrypoint. It mirrors the production security boundary (see
+# docs/decisions/2026-06-09-coordination-execution-split.md): the agent-runner executes a
+# prompt-injected agent, so it is the lowest-trust process — it holds NO keys and has NO
+# direct internet (only the egress-proxy's Anthropic+GitHub allowlist). The worker holds
+# the keys; neither key crosses to the runner.
+#
+# Config comes from .env (copy from .env.example). The worker/runner images are built
+# FROM tasca-base:latest — `make up` builds that base first; a bare `docker compose up`
+# will not find it. See SELF_HOST.md.
+
+name: tasca
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pg}
+      POSTGRES_DB: tasca
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend # internal-only; the DB is never internet-exposed
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The trusted worker: coordination HTTP + credential broker + Anthropic proxy + reaper.
+  # Holds the Anthropic key and the GitHub App key; neither crosses to the runner.
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/worker.Dockerfile
+      args:
+        TASCA_BASE_IMAGE: ${TASCA_BASE_IMAGE:-tasca-base:latest}
+    user: '0:10001' # root uid (writes /data), runner's gid → broker socket group-owned 10001
+    environment:
+      # Bundled Postgres by default; override DATABASE_URL in .env for an external DB.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-pg}@postgres:5432/tasca}
+      TASCA_BROKER_SOCKET: /run/tasca/broker.sock
+      TASCA_DISPATCH_MODE: queue # enqueue for the runner + run the reaper
+      TASCA_ANTHROPIC_PROXY_SOCKET: /run/tasca/anthropic.sock
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # BYOK vault + single-tenant instance.
+      TASCA_SECRET_STORE_KEY: ${TASCA_SECRET_STORE_KEY:-}
+      TASCA_SINGLE_TENANT: ${TASCA_SINGLE_TENANT:-on}
+      TASCA_INSTANCE_ORG_ID: ${TASCA_INSTANCE_ORG_ID:-}
+      # OAuth login (all five required together, or login stays disabled).
+      OAUTH_REDIRECT_BASE: ${OAUTH_REDIRECT_BASE:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      # GitHub App (repo dispatch + PR write-back) — optional at first boot.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      # Optional features.
+      SHORTCUT_WEBHOOK_SECRET: ${SHORTCUT_WEBHOOK_SECRET:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      TASCA_INVITE_FROM: ${TASCA_INVITE_FROM:-}
+    volumes:
+      - worker-data:/data
+      - broker-sock:/run/tasca # the broker + anthropic-proxy sockets, shared with the runner
+    networks:
+      backend: {}
+      frontend:
+        aliases:
+          - tasca-worker # the app's nginx proxies /api/* to tasca-worker:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '8080:8080' # webhooks + /healthz ingress
+
+  # The egress allowlist proxy: the runner's ONLY route to the internet (Anthropic + GitHub).
+  egress-proxy:
+    build:
+      context: ./deploy/egress-proxy
+    networks:
+      - frontend # the bridge to the internet
+      - runner-egress # the runner-facing side (internal)
+    restart: unless-stopped
+
+  # The lowest-trust process: claims dispatch_job, mints a scoped token, runs the agent,
+  # opens the PR, revokes the token. NON-ROOT, no keys, no direct internet.
+  runner:
+    build:
+      context: .
+      dockerfile: deploy/runner.Dockerfile
+      args:
+        TASCA_BASE_IMAGE: ${TASCA_BASE_IMAGE:-tasca-base:latest}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-pg}@postgres:5432/tasca}
+      TASCA_BROKER_SOCKET: /run/tasca/broker.sock
+      # NO ANTHROPIC_API_KEY — the runner reaches Anthropic only through the keyless bridge.
+      TASCA_ANTHROPIC_PROXY_SOCKET: /run/tasca/anthropic.sock
+      HTTPS_PROXY: http://egress-proxy:8888
+      HTTP_PROXY: http://egress-proxy:8888
+      NO_PROXY: postgres,localhost,127.0.0.1
+      # Git identity for the commits agents make.
+      TASCA_GIT_AUTHOR_NAME: ${TASCA_GIT_AUTHOR_NAME:-}
+      TASCA_GIT_AUTHOR_EMAIL: ${TASCA_GIT_AUTHOR_EMAIL:-}
+    volumes:
+      - runner-data:/data
+      - broker-sock:/run/tasca
+    networks:
+      - backend # the dispatch queue (Postgres) — internal, no internet
+      - runner-egress # the proxy — internal, no internet
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The SPA (static, nginx), built from source. Proxies /api/* to the worker; serve it on
+  # http://localhost:3000. This is the URL you log in at (and OAUTH_REDIRECT_BASE).
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.build
+    networks:
+      - frontend
+    depends_on:
+      - worker
+    ports:
+      - '3000:80'
+    restart: unless-stopped
+
+networks:
+  # The internet-facing bridge. The worker (trusted), the egress-proxy, and the app attach.
+  frontend:
+    driver: bridge
+  # DB plane: internal-only (no internet). Postgres + worker + runner.
+  backend:
+    driver: bridge
+    internal: true
+  # The runner→proxy plane: internal-only.
+  runner-egress:
+    driver: bridge
+    internal: true
+
+volumes:
+  pgdata:
+  worker-data:
+  runner-data:
+  broker-sock:
