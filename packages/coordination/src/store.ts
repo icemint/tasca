@@ -15,6 +15,8 @@ import type {
   VendorCredentialStore,
 } from './vendor-credential';
 import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
+import type { CreateInviteInput, InviteSummary, AcceptInviteResult, InviteStore } from './invite';
+import type { OrgRole } from './membership';
 import {
   TASK_TRANSITIONS,
   type CapabilityMatch,
@@ -573,8 +575,87 @@ class RollbackProposal extends Error {
  * PgClaimRepository / PgIdentityRepository style). Constructor takes a pool or a
  * single connection.
  */
-export class PgCoordinationStore implements CoordinationStore, VendorCredentialStore, GovernanceAuditSink {
+export class PgCoordinationStore implements CoordinationStore, VendorCredentialStore, GovernanceAuditSink, InviteStore {
   constructor(private readonly db: Queryable) {}
+
+  // ── Org invites (slice 3.5-B.3.1) — single-use, hashed-at-rest, expiring org-join capability ──
+  async createInvite(orgId: string, input: CreateInviteInput): Promise<{ id: string }> {
+    // Store ONLY the token HASH (the raw token leaves the server in the create response + email, never
+    // here). org-scoped: org_id from the caller (the inviter's active org).
+    const id = randomUUID();
+    await this.db.query(
+      `INSERT INTO org_invite (id, org_id, email, role, token_hash, invited_by, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, orgId, input.email, input.role, input.tokenHash, input.invitedBy, input.expiresAt]
+    );
+    return { id };
+  }
+
+  async listPendingInvites(orgId: string): Promise<InviteSummary[]> {
+    // ORG-SCOPED, pending + unexpired only, newest-first. Projects id/email/role/timestamps — NEVER the
+    // token or its hash (the secret never leaves the create path).
+    const res = await this.db.query<{ id: string; email: string; role: OrgRole; created_at: Date; expires_at: Date }>(
+      `SELECT id, email, role, created_at, expires_at
+         FROM org_invite
+        WHERE org_id = $1 AND status = 'pending' AND expires_at > now()
+        ORDER BY created_at DESC`,
+      [orgId]
+    );
+    return res.rows.map((r) => ({
+      id: r.id,
+      email: r.email,
+      role: r.role,
+      createdAt: toIso(r.created_at),
+      expiresAt: toIso(r.expires_at),
+    }));
+  }
+
+  async revokeInvite(orgId: string, id: string): Promise<boolean> {
+    // ORG-SCOPED: a revoke can only touch THIS org's pending invites — org A can never revoke org B's.
+    // Only a pending invite flips to revoked; returns whether a row changed (false → not found / not pending).
+    const res = await this.db.query(
+      `UPDATE org_invite SET status = 'revoked'
+        WHERE org_id = $1 AND id = $2 AND status = 'pending'`,
+      [orgId, id]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async acceptInvite(tokenHash: string, acceptingUserId: string): Promise<AcceptInviteResult> {
+    // Single-use accept in ONE transaction: lock the invite row by its token_hash (the global capability —
+    // the org is unknown until found), validate it is still usable, mark it accepted, and enroll the user.
+    // A second accept of the same token sees status='accepted' → 'consumed'. The failure outcomes are kept
+    // generic ('invalid' vs 'consumed' — never WHY consumed) so the API can collapse both without enumeration.
+    return this.withTaskTx(async (db) => {
+      const found = await db.query<{ id: string; org_id: string; role: OrgRole; status: string; expired: boolean }>(
+        `SELECT id, org_id, role, status, (expires_at <= now()) AS expired
+           FROM org_invite WHERE token_hash = $1 FOR UPDATE`,
+        [tokenHash]
+      );
+      const invite = found.rows[0];
+      if (!invite) return { kind: 'invalid' };
+      if (invite.status !== 'pending' || invite.expired) return { kind: 'consumed' };
+
+      await db.query(
+        `UPDATE org_invite SET status = 'accepted', accepted_at = now(), accepted_by = $2 WHERE id = $1`,
+        [invite.id, acceptingUserId]
+      );
+      // Enroll at the invited role using the SAME idempotent INSERT pattern ensureInstanceMembership uses:
+      // a returning member keeps their existing role (no downgrade), a new member joins at `role`.
+      await db.query(
+        `INSERT INTO org_membership (user_id, org_id, role) VALUES ($1,$2,$3)
+         ON CONFLICT (user_id, org_id) DO NOTHING`,
+        [acceptingUserId, invite.org_id, invite.role]
+      );
+      // Make the joined org their active one if they have none set yet (idempotent — a returning user keeps theirs).
+      await db.query(
+        `INSERT INTO user_active_org (user_id, org_id) VALUES ($1,$2)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [acceptingUserId, invite.org_id]
+      );
+      return { kind: 'ok', orgId: invite.org_id, role: invite.role };
+    });
+  }
 
   // ── Governance audit trail (slice 3.5-A.2c.1) — append-only, org-scoped credential-mgmt ledger ──
   async recordGovernanceAudit(
