@@ -199,3 +199,36 @@ export interface HiredAgent {
 export interface HiredAgentsResponse {
   agents: HiredAgent[];
 }
+
+// ── per-org vendor credentials (slice 3.5-A.2c.2: Settings "Vendor keys") ───────
+// The stored key is WRITE-ONLY — the read shape NEVER carries it, only a status +
+// a non-reversible fingerprint. `status` is 'active' when a key is sealed for the
+// provider, 'unconfigured' when none is set.
+export type VendorCredentialState = 'active' | 'unconfigured';
+
+export interface VendorCredentialStatus {
+  provider: string;
+  status: VendorCredentialState;
+  /** A short non-reversible fingerprint of the sealed key (never the key itself). */
+  fingerprint: string | null;
+  lastValidatedAt: string | null;
+}
+
+export interface VendorCredentialsResponse {
+  credentials: VendorCredentialStatus[];
+}
+
+/** A governance event from GET /api/orgs/credentials/audit. The payload carries only a
+ *  fingerprint + status — never a key. */
+export interface CredentialAuditEvent {
+  id: string;
+  actorUserId: string | null;
+  action: 'credential.set' | 'credential.delete';
+  target: string | null;
+  payload: { fingerprint?: string; status?: string };
+  at: string;
+}
+
+export interface CredentialAuditResponse {
+  events: CredentialAuditEvent[];
+}

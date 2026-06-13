@@ -18,6 +18,7 @@ import type {
   Agent,
   AgentDetail,
   ConnectionsResponse,
+  CredentialAuditResponse,
   HiredAgentsResponse,
   OrgsResponse,
   ProposalsResponse,
@@ -26,6 +27,7 @@ import type {
   SessionResponse,
   TaskDetail,
   TaskSummary,
+  VendorCredentialsResponse,
 } from './contract';
 
 export type ApiResult<T> =
@@ -315,6 +317,63 @@ export const hireAgent = (agentId: string) =>
   post<{ ok: true } | { error: string; code?: string }>('/api/orgs/agents', { agentId });
 export const unhireAgent = (agentId: string) =>
   del<{ ok: true } | { error: string }>(`/api/orgs/agents/${encodeURIComponent(agentId)}`);
+
+// ── per-org vendor credentials (slice 3.5-A.2c.2: Settings "Vendor keys") ──────
+// The stored key is WRITE-ONLY: the read + audit shapes never carry it, and `set`
+// validates the key live before sealing (a bad key → 400 code:'key_invalid'). All
+// reads are member+; all writes + the audit read are admin+ (the server enforces it).
+
+/** Read the org's vendor-credential statuses (no key — status + fingerprint only). */
+export const getVendorCredentials = () => get<VendorCredentialsResponse>('/api/orgs/credentials');
+
+type VendorSetBody =
+  | { ok: true; provider: string; status: 'active'; fingerprint: string }
+  | { error: string; code?: string };
+
+/**
+ * Set (or replace) the org's key for a provider. The server VALIDATES the key live before sealing
+ * it — a rejected key is a 400 `{error, code:'key_invalid'}`. The shared `classify` collapses a 400
+ * to an opaque 'error' (it only parses 409 bodies); for this surface the caller needs the
+ * `key_invalid` code so the UI can say "the vendor rejected it" rather than a generic failure. So
+ * this helper mirrors `post` (CSRF + one self-healing 403 retry) but additionally lifts a parseable
+ * 400 into the `conflict` channel carrying its code — leaving the shared write path untouched.
+ * The key is WRITE-ONLY: it is sent once and never echoed back.
+ */
+export async function setVendorCredential(provider: string, key: string): Promise<WriteResult<VendorSetBody>> {
+  let token = await ensureCsrf();
+  if (token === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const send = (t: string): Promise<Response> =>
+    fetch('/api/orgs/credentials', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify({ provider, key }),
+    });
+  let res: Response;
+  try {
+    res = await send(token);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  // A live-rejected key (400, parseable) surfaces via the conflict channel so the view can read
+  // its `code`. An unparseable 400 stays an honest 'error' (never a fabricated conflict).
+  if (res.status === 400) {
+    try {
+      return { kind: 'conflict', data: (await res.json()) as VendorSetBody };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  return classify<VendorSetBody>(res);
+}
+/** Remove the org's key for a provider. */
+export const deleteVendorCredential = (provider: string) =>
+  del<{ ok: true } | { error: string }>(`/api/orgs/credentials/${encodeURIComponent(provider)}`);
+/** Read the credential governance audit trail (admin+; newest first). */
+export const getCredentialAudit = () => get<CredentialAuditResponse>('/api/orgs/credentials/audit');
 
 /** Begin the GitHub App install/connect flow (slice 5c). A REDIRECT-OUT (session+admin gated
  *  server-side), NOT an in-page write — the browser leaves to GitHub and returns via the Setup URL. */

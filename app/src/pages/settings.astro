@@ -6,7 +6,7 @@ import AppShell from '../layouts/AppShell.astro';
 </AppShell>
 <script>
   import { mount } from '../lib/mount';
-  import { loadSettings } from '../lib/views/settings';
+  import { loadSettings, wireSettings } from '../lib/views/settings';
   const el = document.getElementById('view');
-  if (el) void mount(el, loadSettings);
+  if (el) void mount(el, loadSettings, wireSettings);
 </script>
