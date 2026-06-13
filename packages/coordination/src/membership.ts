@@ -129,7 +129,7 @@ export interface OrgMembershipRepo extends RoleReader {
   /**
    * Single-tenant (slice 3.5-B.1) login hook: enroll the user into the ONE instance org and make it
    * active. The FIRST member of the instance org becomes `owner` (the operator/first login); everyone
-   * after is `user` — least-privilege; the operator promotes via member management. Idempotent + race-
+   * after is `member` — least-privilege; the operator promotes via member management. Idempotent + race-
    * safe (deterministic instance id + ON CONFLICT): a returning user is a no-op (no downgrade/dup), and
    * concurrent first-logins converge to exactly ONE owner.
    */
