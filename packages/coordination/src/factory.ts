@@ -85,6 +85,9 @@ export interface CreateCoordinationDeps {
   /** Single-tenant edition (slice 3.5-B.1): when true the org-multiplicity routes (list/create/switch
    *  org) 404. Set from singleTenantEnabled() at the host; default false (multi-tenant). */
   singleTenant?: boolean;
+  /** Org invites (slice 3.5-B.3.1): the app origin the accept link is built against (the OAuth redirect
+   *  base / app origin). Absent → the invite API is not wired (those paths 404). */
+  inviteAcceptBaseUrl?: string;
 }
 
 /**
@@ -306,6 +309,20 @@ export function createCoordination(
       ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
       ...(input.logger !== undefined ? { logger: input.logger } : {}),
     },
+    // The org-invite API (slice 3.5-B.3.1) — wired only when an accept base URL is supplied (the app
+    // origin). Admin-gated create/list/revoke + an authenticated possession-based accept; the store seals
+    // each invite as a hashed-at-rest single-use token.
+    ...(input.inviteAcceptBaseUrl
+      ? {
+          inviteApi: {
+            store,
+            membership,
+            acceptBaseUrl: input.inviteAcceptBaseUrl,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
+        }
+      : {}),
     // The GitHub connect API (slice 5c) — wired only when the App bits are supplied. Binds a
     // customer's GitHub install to their org via the secure begin→callback flow.
     ...(input.githubConnect

@@ -24,6 +24,7 @@ import { writeApiHandler, type WriteApiDeps } from './write-api';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
 import { vendorCredentialApiHandler, type VendorCredentialApiDeps } from './vendor-credential-api';
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
+import { inviteApiHandler, type InviteApiDeps } from './invite-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
@@ -56,6 +57,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * existing binding method). Absent → those paths fall through to 404 (additive).
    */
   proposalApi?: ProposalApiDeps;
+  /**
+   * The org-invite API (slice 3.5-B.3.1: POST/GET /api/invites, DELETE /api/invites/:id, POST
+   * /api/invites/accept). Session-gated; mutations CSRF; create/list/revoke admin-gated, accept any
+   * session. Absent → those paths fall through to 404 (additive).
+   */
+  inviteApi?: InviteApiDeps;
   /**
    * The GitHub connect API (slice 5c: GET /api/connect/github + .../callback). Session-gated;
    * binds a customer's GitHub install to their org. Absent → those paths fall through to 404.
@@ -333,6 +340,9 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
 
     // PM-assistant API (only when wired). Handles GET /api/proposals + the mutating POSTs.
     if (deps.proposalApi && (await proposalApiHandler(req, res, deps.proposalApi))) return;
+
+    // Org-invite API (only when wired). Handles /api/invites* before the generic read API's /api/* claim.
+    if (deps.inviteApi && (await inviteApiHandler(req, res, deps.inviteApi))) return;
 
     // Read API (only when wired). Handles GET /api/* read endpoints.
     if (deps.readApi && (await readApiHandler(req, res, deps.readApi))) return;

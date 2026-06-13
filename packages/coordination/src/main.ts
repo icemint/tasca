@@ -374,7 +374,12 @@ async function main(): Promise<void> {
   // /api/* read endpoints enforce a real login. Only wired when auth is enabled;
   // when unset, read-api fails closed in production (503) and is open in dev.
   let verifySession: ((req: IncomingMessage) => Promise<{ userId: string } | null>) | undefined;
+  // Org invites (slice 3.5-B.3.1): the accept link is built against the app origin = the OAuth redirect
+  // base. Resolved here (at the composition root) and injected; absent auth → no invite API (it needs a
+  // session to attribute the accepting identity anyway).
+  let inviteAcceptBaseUrl: string | undefined;
   if (authEnv) {
+    inviteAcceptBaseUrl = authEnv.OAUTH_REDIRECT_BASE;
     const authRepo = new PgAuthRepository(pool);
     // Slice 5a: every login provisions the user's org (auto personal org on first login) BEFORE the
     // session is minted, so a logged-in user always has an org by their first request — no no-org
@@ -454,6 +459,7 @@ async function main(): Promise<void> {
     ...(runnerWaitMs !== undefined ? { runnerWaitMs } : {}),
     ...(authHandler ? { authHandler } : {}),
     ...(verifySession ? { verifySession } : {}),
+    ...(inviteAcceptBaseUrl ? { inviteAcceptBaseUrl } : {}),
     ...(githubConnectInput ? { githubConnect: githubConnectInput } : {}),
     ...(breakerThreshold !== undefined ? { breakerThreshold } : {}),
     ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),

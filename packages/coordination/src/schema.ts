@@ -416,6 +416,38 @@ CREATE INDEX IF NOT EXISTS governance_audit_event_org_at_idx ON governance_audit
 CREATE OR REPLACE RULE governance_audit_event_no_update AS ON UPDATE TO governance_audit_event DO INSTEAD NOTHING;
 CREATE OR REPLACE RULE governance_audit_event_no_delete AS ON DELETE TO governance_audit_event DO INSTEAD NOTHING;`;
 
+/**
+ * Org invites (slice 3.5-B.3.1): a single-use, hashed-at-rest, expiring capability to JOIN an org at a
+ * specific role. An admin mints one (POST /api/invites); the invitee logs in (OAuth = identity) and the
+ * raw token (possession = authorization) enrolls them at `role` — the invite `email` is informational and
+ * is NEVER matched against the OAuth identity's email.
+ *
+ * Security model: the raw token is a 256-bit base64url secret returned ONCE (the create response + the
+ * email) and NEVER stored — only `token_hash` = sha256(token) hex (UNIQUE) is persisted. Accept looks the
+ * row up by `token_hash` in ONE transaction (SELECT ... FOR UPDATE → mark accepted → enroll), so it is
+ * single-use; a second accept sees status='accepted'. expires_at fences a stale link.
+ *
+ * org-scoped: org_id NOT NULL FK; in the org-scoping CI guard's TENANT_TABLES; every store method that
+ * touches it is required-orgId — EXCEPT acceptInvite, which looks the row up by token_hash (a global
+ * unguessable secret) BEFORE the org is known (the token IS the capability). That one by-token-hash SELECT
+ * is the sole invite lookup not pre-scoped by org; it stays in the scoped layer (store.ts) all the same.
+ */
+export const ORG_INVITE_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS org_invite (
+  id          text PRIMARY KEY,
+  org_id      text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  email       text NOT NULL,
+  role        text NOT NULL CHECK (role IN ('owner','admin','member')),
+  token_hash  text NOT NULL UNIQUE,
+  status      text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','revoked')),
+  invited_by  text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  expires_at  timestamptz NOT NULL,
+  accepted_at timestamptz,
+  accepted_by text
+);
+CREATE INDEX IF NOT EXISTS org_invite_org_status_idx ON org_invite (org_id, status, created_at DESC);`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -429,4 +461,5 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
   VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
   GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
+  ORG_INVITE_TABLE_DDL, // slice 3.5-B.3.1: single-use, hashed-at-rest, expiring org-join invites
 ];
