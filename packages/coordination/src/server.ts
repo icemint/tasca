@@ -25,6 +25,7 @@ import { orgApiHandler, type OrgApiDeps } from './org-api';
 import { agentApiHandler, type AgentApiDeps } from './agent-api';
 import { projectApiHandler, type ProjectApiDeps } from './project-api';
 import { vendorCredentialApiHandler, type VendorCredentialApiDeps } from './vendor-credential-api';
+import { agentIdentityApiHandler, type AgentIdentityApiDeps } from './agent-identity-api';
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
 import { inviteApiHandler, type InviteApiDeps } from './invite-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
@@ -65,6 +66,12 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * returns a key). Absent → those paths fall through to 404 (additive).
    */
   vendorCredentialApi?: VendorCredentialApiDeps;
+  /**
+   * The per-agent identity API (slice SC-3: POST /api/orgs/:orgId/agents/:agentId/identity/shortcut).
+   * Session-gated; CSRF + admin-gated; write-only (seals the agent's Shortcut token, never returns it).
+   * Absent → that path falls through to 404 (additive).
+   */
+  agentIdentityApi?: AgentIdentityApiDeps;
   /**
    * The PM-assistant API (slice W3-S1: GET /api/proposals, POST /api/proposals/generate +
    * .../:id/{accept,dismiss}). Session + CSRF + member-gated; advisory (accept routes through an
@@ -359,6 +366,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // BYOK vendor-credential API (only when wired). Handles /api/orgs/credentials before the
     // org-api/read-api (more specific path; both must run before the generic read API's /api/* claim).
     if (deps.vendorCredentialApi && (await vendorCredentialApiHandler(req, res, deps.vendorCredentialApi))) return;
+
+    // Per-agent identity API (only when wired). Handles POST /api/orgs/:orgId/agents/:agentId/identity/shortcut
+    // before the generic read API's /api/* claim.
+    if (deps.agentIdentityApi && (await agentIdentityApiHandler(req, res, deps.agentIdentityApi))) return;
 
     // PM-assistant API (only when wired). Handles GET /api/proposals + the mutating POSTs.
     if (deps.proposalApi && (await proposalApiHandler(req, res, deps.proposalApi))) return;

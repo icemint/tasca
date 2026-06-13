@@ -386,6 +386,45 @@ describe('ShortcutAdapter.registerWebhook (REST v3, injected fetch)', () => {
   });
 });
 
+describe('ShortcutAdapter.postStoryComment (REST v3, injected fetch — slice SC-3)', () => {
+  it('POSTs to /api/v3/stories/:id/comments with the agent token + {text}', async () => {
+    let captured: { url: string; init: RequestInit } | undefined;
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init: init ?? {} };
+      return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+    }) as unknown as typeof fetch;
+
+    const a = adapter({ apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+    await a.postStoryComment({ token: 'tok_agent_elvis', storyId: '778899', text: 'PR opened\nPR: https://x/pull/1' });
+
+    expect(captured?.url).toBe('https://api.example.test/api/v3/stories/778899/comments');
+    expect(captured?.init.method).toBe('POST');
+    const headers = captured?.init.headers as Record<string, string>;
+    expect(headers['Shortcut-Token']).toBe('tok_agent_elvis');
+    expect(JSON.parse(String(captured?.init.body))).toEqual({ text: 'PR opened\nPR: https://x/pull/1' });
+  });
+
+  it('url-encodes the story id', async () => {
+    let captured: string | undefined;
+    const fakeFetch = (async (url: string | URL | Request) => {
+      captured = String(url);
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    const a = adapter({ apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+    await a.postStoryComment({ token: 't', storyId: 'a/b', text: 'x' });
+    expect(captured).toBe('https://api.example.test/api/v3/stories/a%2Fb/comments');
+  });
+
+  it('throws on a non-2xx response (the reporter swallows it)', async () => {
+    const fakeFetch = (async () =>
+      new Response('forbidden', { status: 403, statusText: 'Forbidden' })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    await expect(
+      a.postStoryComment({ token: 't', storyId: '1', text: 'x' })
+    ).rejects.toThrow(/403/);
+  });
+});
+
 describe('ShortcutAdapter gated halves (stubbed)', () => {
   it('provisionIdentity throws the gated error citing the brief', async () => {
     await expect(adapter().provisionIdentity('agent_elvis', {})).rejects.toThrow(

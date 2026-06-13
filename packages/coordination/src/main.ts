@@ -32,7 +32,7 @@ import {
   SESSION_COOKIE,
 } from '@tasca/auth';
 import { createExecution } from '@tasca/execution';
-import { GitHubAdapter, GitHubAppClient } from '@tasca/adapters';
+import { GitHubAdapter, GitHubAppClient, ShortcutAdapter } from '@tasca/adapters';
 import { serveBroker, type BrokerServerHandle } from '@tasca/broker';
 import { makeRepoTokenMinter } from './broker-minter';
 import { PgIdentityRepository } from '@tasca/identity';
@@ -40,7 +40,8 @@ import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
-import { loadMasterKey, liveVendorValidator } from './vendor-credential';
+import { loadMasterKey, liveVendorValidator, AgentCredentialResolver } from './vendor-credential';
+import { ShortcutStatusReporter } from './shortcut-status-reporter';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
 import { singleTenantEnabled, resolveInstanceOrgId } from './instance';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
@@ -235,7 +236,34 @@ async function main(): Promise<void> {
       githubWritebackEnabled = false;
     }
   }
-  let statusReporter: StatusReporter = gatedStatusReporter;
+  // Shortcut write-back (slice SC-3): an agent posts a story comment AS ITSELF, under its own Shortcut
+  // Agent-User token resolved from the per-agent vault. Enabled when the vault master key is present AND
+  // the Shortcut webhook secret is set (no shortcut intake → no shortcut write-back to do). The resolver
+  // is SHARED with the agent-identity set-API (passed into the factory) so a set busts its cache here.
+  const agentMasterKey = loadMasterKey();
+  let agentCredentialResolver: AgentCredentialResolver | undefined;
+  let shortcutStatusReporter: ShortcutStatusReporter | undefined;
+  if (agentMasterKey && webhookSecret) {
+    const store = new PgCoordinationStore(pool);
+    agentCredentialResolver = new AgentCredentialResolver(store, agentMasterKey);
+    // The write-back adapter only drives postStoryComment (per-agent token in the header); its
+    // webhookSecret is unused for that path but required to construct.
+    const writebackAdapter = new ShortcutAdapter({ webhookSecret });
+    shortcutStatusReporter = new ShortcutStatusReporter({
+      credentials: agentCredentialResolver,
+      adapter: writebackAdapter,
+      logger,
+    });
+    logger.info?.('shortcut write-back enabled (per-agent identity vault)');
+  } else {
+    logger.info?.('shortcut write-back disabled (needs TASCA_SECRET_STORE_KEY + SHORTCUT_WEBHOOK_SECRET)');
+  }
+
+  // Shortcut write-back routes via routingStatusReporter even when github is off — start from a
+  // shortcut-or-fallback router; the github block below re-routes with github added when it is enabled.
+  let statusReporter: StatusReporter = shortcutStatusReporter
+    ? routingStatusReporter({ github: gatedStatusReporter, shortcut: shortcutStatusReporter, fallback: gatedStatusReporter })
+    : gatedStatusReporter;
   let githubInstallationHandler: ((rawBody: string) => Promise<void>) | undefined;
   let provisioner: RepoProvisioner | undefined;
   // Slice 5c connect bits (App client + slug) — set when the GitHub App env is present; passed to
@@ -272,7 +300,11 @@ async function main(): Promise<void> {
       github: writebackAdapter,
       logger,
     });
-    statusReporter = routingStatusReporter({ github: githubReporter, fallback: gatedStatusReporter });
+    statusReporter = routingStatusReporter({
+      github: githubReporter,
+      ...(shortcutStatusReporter ? { shortcut: shortcutStatusReporter } : {}),
+      fallback: gatedStatusReporter,
+    });
     // The install webhook is CONFIRMATION only (slice 5c): the org binding is owned by the connect
     // CALLBACK (which has the session + nonce). The webhook cannot securely attribute an org, so it
     // never sets org_id — on `created` it refreshes the installation_id/health of the connection the
@@ -477,6 +509,11 @@ async function main(): Promise<void> {
     // BYOK vendor credentials (slice 3.5-A): the master key lives in the server env (NOT the DB);
     // absent → the write surface 503s. Live validate-on-input probes the vendor before storing.
     vendorCredential: { masterKey: loadMasterKey(), validator: liveVendorValidator() },
+    // Per-agent identity (slice SC-3): wire the agent-identity set-API only when the shortcut write-back
+    // resolver was built (master key + shortcut secret present), sharing that resolver for cache-bust.
+    ...(agentCredentialResolver
+      ? { agentCredential: { masterKey: agentMasterKey, resolver: agentCredentialResolver } }
+      : {}),
   });
 
   const server = coordination.createServer();

@@ -160,17 +160,22 @@ export class GitHubStatusReporter implements StatusReporter {
 
 /**
  * Route a StatusUpdate to the reporter for its platform. 'github' → the GitHub
- * reporter; every other platform → the injected fallback (the existing gated
- * no-op — shortcut/linear write-back stay gated). The orchestration loop injects
+ * reporter; 'shortcut' → the Shortcut reporter when one is wired (slice SC-3),
+ * else the fallback; every other platform → the injected fallback (the existing
+ * gated no-op — linear write-back stays gated). The orchestration loop injects
  * the routing reporter as its single `status` dependency.
  */
 export function routingStatusReporter(byPlatform: {
   github: StatusReporter;
+  shortcut?: StatusReporter;
   fallback: StatusReporter;
 }): StatusReporter {
   return {
     async postStatus(update: StatusUpdate): Promise<void> {
-      const reporter = update.platform === 'github' ? byPlatform.github : byPlatform.fallback;
+      let reporter: StatusReporter;
+      if (update.platform === 'github') reporter = byPlatform.github;
+      else if (update.platform === 'shortcut') reporter = byPlatform.shortcut ?? byPlatform.fallback;
+      else reporter = byPlatform.fallback;
       await reporter.postStatus(update);
     },
   };

@@ -385,6 +385,28 @@ CREATE TABLE IF NOT EXISTS org_vendor_credential (
   PRIMARY KEY (org_id, provider)
 );`;
 
+/** Per-agent platform credentials (slice SC-3): one row per (org, agent, provider). Stores ONLY the
+ *  AEAD ciphertext + nonce + auth tag (sealed under the env-held master key — see vendor-credential.ts)
+ *  + a non-reversible fingerprint + status. NO plaintext token. This is the per-agent token vault that
+ *  lets an agent post to a Shortcut story AS ITSELF. org-scoped, in TENANT_TABLES; PK (org_id, agent_id,
+ *  provider). ON DELETE CASCADE on BOTH the org and the agent — dropping either drops the credential. */
+export const AGENT_CREDENTIAL_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS org_agent_credential (
+  org_id            text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  agent_id          text NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
+  provider          text NOT NULL CHECK (provider IN ('shortcut')),
+  ciphertext        text NOT NULL,
+  nonce             text NOT NULL,
+  auth_tag          text NOT NULL,
+  key_fingerprint   text NOT NULL,
+  status            text NOT NULL DEFAULT 'active' CHECK (status IN ('active','invalid')),
+  created_by        text,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  last_validated_at timestamptz,
+  PRIMARY KEY (org_id, agent_id, provider)
+);
+CREATE INDEX IF NOT EXISTS org_agent_credential_org_idx ON org_agent_credential (org_id);`;
+
 /**
  * Governance audit trail (slice 3.5-A.2c.1): an append-only, org-scoped ledger of credential
  * management actions (set / delete). A credential mutation is a HUMAN-ADMIN, ORG-SCOPED governance
@@ -538,6 +560,7 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
   USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
   VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
+  AGENT_CREDENTIAL_TABLE_DDL, // slice SC-3: per-agent platform tokens (sealed) — Shortcut native identity
   GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
   ORG_INVITE_TABLE_DDL, // slice 3.5-B.3.1: single-use, hashed-at-rest, expiring org-join invites
   PROJECT_TABLE_DDL, // slice Project-A: the project entity (after organization exists)
