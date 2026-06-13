@@ -26,6 +26,10 @@ export interface OrgApiDeps {
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
   /** Fail-closed escape hatch: no verifier wired → 503 unless explicitly opened (dev/tests only). */
   allowUnauthenticated?: boolean;
+  /** Single-tenant edition (slice 3.5-B.1): when true the org-MULTIPLICITY routes (list/create/switch
+   *  org) 404 — the OSS edition exposes no org multiplicity. Member-management + roster routes are
+   *  unaffected. Injected from the composition root (singleTenantEnabled()); default false (multi-tenant). */
+  singleTenant?: boolean;
   logger?: Logger;
 }
 
@@ -108,6 +112,14 @@ export async function orgApiHandler(
     return true;
   }
   const userId = session?.userId ?? '(dev)';
+
+  // Single-tenant (slice 3.5-B.1): the org-MULTIPLICITY routes do not act — the OSS edition has ONE
+  // org, so listing/creating/switching orgs is not a thing it exposes. 404 (not 403) — the surface
+  // does not exist in this edition. Member-management + roster routes fall through, fully working.
+  if (deps.singleTenant && (route.kind === 'list-orgs' || route.kind === 'create-org' || route.kind === 'switch-org')) {
+    sendJson(res, 404, { error: 'not found' });
+    return true;
+  }
 
   try {
     // GET /api/orgs — the switcher list (the user's orgs). No CSRF (read).

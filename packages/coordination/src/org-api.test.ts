@@ -34,6 +34,9 @@ class FakeOrgRepo implements OrgMembershipRepo {
   async ensurePersonalOrg() {
     return 'org_default';
   }
+  async ensureInstanceMembership() {
+    return undefined;
+  }
   async createOrg(userId: string, name: string) {
     this.created.push({ userId, name });
     return 'org-new';
@@ -374,5 +377,63 @@ describe('roster management — ADMIN-gated (slice 5d)', () => {
     );
     expect(rBad.statusCode).toBe(400);
     expect(bad.hires).toEqual([]);
+  });
+});
+
+describe('single-tenant gating (slice 3.5-B.1)', () => {
+  it('with singleTenant: true, the 3 multiplicity routes 404 and never act', async () => {
+    const repo = new FakeOrgRepo();
+    repo.addMember('u1', 'o-mine');
+    const d = (over: Partial<OrgApiDeps> = {}) => deps(repo, { singleTenant: true, ...over });
+
+    const list = await run(d(), fakeReq('GET', '/api/orgs'));
+    expect(list.statusCode).toBe(404);
+
+    const create = await run(d(), fakeReq('POST', '/api/orgs', { headers: csrf(), body: JSON.stringify({ name: 'Acme' }) }));
+    expect(create.statusCode).toBe(404);
+    expect(repo.created).toEqual([]); // never created
+
+    const switchOrg = await run(d(), fakeReq('POST', '/api/active-org', { headers: csrf(), body: JSON.stringify({ orgId: 'o-mine' }) }));
+    expect(switchOrg.statusCode).toBe(404);
+    expect(repo.switched).toEqual([]); // never switched
+  });
+
+  it('with singleTenant: true, member-management + roster routes still work', async () => {
+    const repo = new FakeOrgRepo(); // owner by default
+    const members = await run(deps(repo, { singleTenant: true }), fakeReq('GET', '/api/orgs/members'));
+    expect(members.statusCode).toBe(200);
+
+    const add = await run(
+      deps(repo, { singleTenant: true }),
+      fakeReq('POST', '/api/orgs/members', { headers: csrf(), body: JSON.stringify({ email: 'new@x', role: 'admin' }) })
+    );
+    expect(add.statusCode).toBe(200);
+    expect(repo.added).toEqual([{ orgId: 'org_default', email: 'new@x', role: 'admin' }]);
+
+    const roster = new FakeRoster();
+    const hire = await run(
+      deps(repo, { singleTenant: true, roster }),
+      fakeReq('POST', '/api/orgs/agents', { headers: csrf(), body: JSON.stringify({ agentId: 'agent-elvis' }) })
+    );
+    expect(hire.statusCode).toBe(200);
+    expect(roster.hires).toEqual([{ orgId: 'org_default', agentId: 'agent-elvis' }]);
+  });
+
+  it('REGRESSION: with singleTenant false/unset (default), all 3 routes behave as today', async () => {
+    const repo = new FakeOrgRepo();
+    repo.addMember('u1', 'o-mine');
+    repo.orgs = [{ id: 'o1', name: 'One', role: 'owner', active: true }];
+
+    const list = await run(deps(repo), fakeReq('GET', '/api/orgs'));
+    expect(list.statusCode).toBe(200);
+    expect(JSON.parse(list.body).orgs).toHaveLength(1);
+
+    const create = await run(deps(repo), fakeReq('POST', '/api/orgs', { headers: csrf(), body: JSON.stringify({ name: 'Acme' }) }));
+    expect(create.statusCode).toBe(200);
+    expect(repo.created).toEqual([{ userId: 'u1', name: 'Acme' }]);
+
+    const switchOrg = await run(deps(repo), fakeReq('POST', '/api/active-org', { headers: csrf(), body: JSON.stringify({ orgId: 'o-mine' }) }));
+    expect(switchOrg.statusCode).toBe(200);
+    expect(repo.switched).toEqual([{ userId: 'u1', orgId: 'o-mine' }]);
   });
 });

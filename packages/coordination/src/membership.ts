@@ -126,6 +126,14 @@ export interface OrgMembershipRepo extends RoleReader {
    * via a deterministic personal-org id + ON CONFLICT. Returns the user's (now-guaranteed) active org.
    */
   ensurePersonalOrg(userId: string): Promise<string>;
+  /**
+   * Single-tenant (slice 3.5-B.1) login hook: enroll the user into the ONE instance org and make it
+   * active. The FIRST member of the instance org becomes `owner` (the operator/first login); everyone
+   * after is `user` — least-privilege; the operator promotes via member management. Idempotent + race-
+   * safe (deterministic instance id + ON CONFLICT): a returning user is a no-op (no downgrade/dup), and
+   * concurrent first-logins converge to exactly ONE owner.
+   */
+  ensureInstanceMembership(userId: string, instanceOrgId: string): Promise<void>;
   /** Create a new org owned by the user and switch their active org to it. Returns the new org id. */
   createOrg(userId: string, name: string): Promise<string>;
   /** Set the user's active org (the caller MUST have checked isMember first). Upsert. */
@@ -219,6 +227,34 @@ export class PgOrgMembershipRepo implements OrgMembershipRepo {
       throw new Error(`ensurePersonalOrg: failed to provision an org for user ${userId}`);
     }
     return active;
+  }
+
+  async ensureInstanceMembership(userId: string, instanceOrgId: string): Promise<void> {
+    // Enroll the user into the ONE instance org. Role: the FIRST member (the org has NONE yet) is
+    // 'owner' (the operator/first login); everyone after is 'member' (least-privilege — the schema's
+    // lowest role; the operator promotes from there). "Exactly one owner" must hold even when TWO
+    // DIFFERENT users first-login concurrently — and the (user_id, org_id) PK does NOT serialize that
+    // (different user_ids, both INSERTs would land). So serialize per-org under the SAME advisory lock
+    // member-management uses (lock-ordering-safe, deterministic on the org id): under it the NOT EXISTS
+    // role choice is stable, so at most one row is written 'owner'. A returning member is a plain no-op
+    // (ON CONFLICT). org_membership RESOLVES the tenant, so this is not under the org-scoping CI guard.
+    await this.withTx(async (db) => {
+      await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [instanceOrgId]);
+      await db.query(
+        `INSERT INTO org_membership (user_id, org_id, role)
+           SELECT $1, $2,
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM org_membership WHERE org_id = $2) THEN 'owner' ELSE 'member' END
+         ON CONFLICT (user_id, org_id) DO NOTHING`,
+        [userId, instanceOrgId]
+      );
+      // Point the user's active org at the instance org if unset (idempotent — a returning user keeps
+      // theirs, which is already the instance org since it is their only membership).
+      await db.query(
+        `INSERT INTO user_active_org (user_id, org_id) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [userId, instanceOrgId]
+      );
+    });
   }
 
   async createOrg(userId: string, name: string): Promise<string> {
