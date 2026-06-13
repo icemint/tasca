@@ -113,6 +113,20 @@ export interface ConnectionsResponse {
   platforms: ConnectionPlatform[];
 }
 
+// ── projects (slice Project-B: the project switcher) ──────────────────────────
+/** A project in the active org (GET /api/projects) — a finer task-view filter WITHIN the org. */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  repoRef: string | null;
+}
+
+/** The org's projects + which one is active (null = the cross-project "All projects" view). */
+export interface ProjectsResponse {
+  projects: ProjectSummary[];
+  activeProjectId: string | null;
+}
+
 // ── session (the Auth track's published contract) ─────────────────────────────
 export interface SessionUser {
   id: string;

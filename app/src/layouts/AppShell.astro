@@ -14,6 +14,7 @@ import '../styles/invite.css';
 import '../styles/pm-assistant.css';
 import '../styles/states.css';
 import '../styles/onboarding.css';
+import '../styles/project-switcher.css';
 import '../styles/a11y.css';
 import { MARK, I } from '../lib/icons';
 
@@ -58,6 +59,7 @@ const nav = [
         <span class="onb-mark" set:html={MARK} /><span class="brand-word"><span class="a">Tas</span><span class="b">ca</span></span>
       </a>
       <div class="topbar-right">
+        <div class="psw" data-project-switcher aria-label="Project scope"></div>
         <span class="ro-badge" title="Read-only console — Tasca is in read-only mode today; agent and task actions arrive with the write API">Read-only</span>
         <span class="theme-seg" role="group" aria-label="Theme">
           <button data-t="dark" type="button" aria-label="Dark theme" aria-pressed="true">Dark</button>
@@ -84,6 +86,15 @@ const nav = [
     // No-op when nothing is pending; runs at most once; never throws.
     import { consumePendingInvite } from '../lib/invite-consume';
     void consumePendingInvite();
+  </script>
+
+  <script>
+    // Project switcher (slice Project-B): scope every task view to one project (or "All projects").
+    // Reads the project list + active id once on shell load; selecting reloads to re-fetch the
+    // server-filtered task set. Non-essential chrome — a read failure simply leaves it empty.
+    import { mountProjectSwitcher } from '../lib/project-switcher';
+    const host = document.querySelector<HTMLElement>('[data-project-switcher]');
+    if (host) void mountProjectSwitcher(host);
   </script>
 
   <script>

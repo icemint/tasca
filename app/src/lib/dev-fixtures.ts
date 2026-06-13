@@ -105,6 +105,16 @@ export function resolveFixture(path: string): unknown {
   }
   if (p === '/api/routing-decisions') return ROUTING_DECISIONS;
   if (p === '/api/connections') return CONNECTIONS;
+  if (p === '/api/projects') {
+    return {
+      projects: [
+        { id: 'proj_api', name: 'api', repoRef: 'acme/api' },
+        { id: 'proj_billing', name: 'billing', repoRef: 'acme/billing' },
+        { id: 'proj_edge', name: 'edge', repoRef: 'acme/edge' },
+      ],
+      activeProjectId: null,
+    };
+  }
 
   const agentMatch = /^\/api\/agents\/(.+)$/.exec(p);
   if (agentMatch) {

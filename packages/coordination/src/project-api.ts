@@ -18,8 +18,9 @@ import type { OrgMembershipReader } from './resolve-org';
 import { sendJson, readJsonBody, verifyCsrf } from './http-util';
 
 export interface ProjectApiDeps {
-  /** The project read/switch surface — the org's project list + the validated active-project switch. */
-  store: Pick<CoordinationStore, 'listProjects' | 'setActiveProject'>;
+  /** The project read/switch surface — the org's project list, the user's active project (so the
+   *  switcher can mark it), the validated active-project switch, and the clear-to-all-projects. */
+  store: Pick<CoordinationStore, 'listProjects' | 'getActiveProject' | 'setActiveProject' | 'clearActiveProject'>;
   /** Resolves the user's active org (the tenant boundary the project list is scoped to). */
   membership: OrgMembershipReader;
   /** Verify the request's session (same contract as the read/org API). */
@@ -29,11 +30,14 @@ export interface ProjectApiDeps {
   logger?: Logger;
 }
 
-type Route = { kind: 'list-projects' } | { kind: 'switch-project' };
+type Route = { kind: 'list-projects' } | { kind: 'switch-project' } | { kind: 'clear-project' };
 
 function matchRoute(method: string, path: string): Route | null {
   if (path === '/api/projects') return method === 'GET' ? { kind: 'list-projects' } : null;
-  if (path === '/api/active-project') return method === 'POST' ? { kind: 'switch-project' } : null;
+  if (path === '/api/active-project') {
+    if (method === 'POST') return { kind: 'switch-project' };
+    if (method === 'DELETE') return { kind: 'clear-project' };
+  }
   return null;
 }
 
@@ -68,22 +72,36 @@ export async function projectApiHandler(
   const userId = session?.userId ?? '(dev)';
 
   try {
-    // GET /api/projects — the active org's projects (any member). No CSRF (read).
+    // GET /api/projects — the active org's projects + which one is active (so the switcher can mark
+    // it; null = the "all projects" view). Any member. No CSRF (read).
     if (route.kind === 'list-projects') {
       const orgId = await deps.membership.getActiveOrg(userId);
       if (orgId === null) {
         sendJson(res, 403, { error: 'no organization membership' });
         return true;
       }
-      sendJson(res, 200, { projects: await deps.store.listProjects(orgId) });
+      const [projects, activeProjectId] = await Promise.all([
+        deps.store.listProjects(orgId),
+        deps.store.getActiveProject(userId),
+      ]);
+      sendJson(res, 200, { projects, activeProjectId });
       return true;
     }
 
-    // POST /api/active-project — switch the active project. CSRF double-submit.
+    // POST /api/active-project (switch) + DELETE /api/active-project (clear) both mutate the user's
+    // selection → CSRF double-submit, mirroring the POST's gating.
     if (!verifyCsrf(req)) {
       sendJson(res, 403, { error: 'missing or invalid CSRF token' });
       return true;
     }
+
+    // DELETE /api/active-project — clear to the cross-project "all projects" view (idempotent).
+    if (route.kind === 'clear-project') {
+      await deps.store.clearActiveProject(userId);
+      sendJson(res, 200, { ok: true, activeProjectId: null });
+      return true;
+    }
+
     const body = await readBody(req, res);
     if (body === undefined) return true;
     const projectId = (body as { projectId?: unknown }).projectId;

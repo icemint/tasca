@@ -18,12 +18,18 @@ class FakeProjectStore {
   async listProjects(orgId: string): Promise<ProjectSummary[]> {
     return this.projects[orgId] ?? [];
   }
+  async getActiveProject(userId: string): Promise<string | null> {
+    return this.active[userId] ?? null;
+  }
   async setActiveProject(userId: string, projectId: string): Promise<'ok' | 'not_found'> {
     // A foreign-org project is indistinguishable from a nonexistent one — both 'not_found' (no oracle).
     const org = this.projectOrg[projectId];
     if (org === undefined || org !== this.activeOrgOf) return 'not_found';
     this.active[userId] = projectId;
     return 'ok';
+  }
+  async clearActiveProject(userId: string): Promise<void> {
+    delete this.active[userId];
   }
 }
 
@@ -100,7 +106,18 @@ describe('GET /api/projects — the active org’s projects', () => {
     };
     const r = await run(deps(s, 'org_a'), fakeReq('GET', '/api/projects'));
     expect(r.statusCode).toBe(200);
-    expect(JSON.parse(r.body)).toEqual({ projects: [{ id: 'p1', name: 'a', repoRef: 'owner/a' }] });
+    expect(JSON.parse(r.body)).toEqual({
+      projects: [{ id: 'p1', name: 'a', repoRef: 'owner/a' }],
+      activeProjectId: null, // nothing selected → the "all projects" view
+    });
+  });
+
+  it('returns the user’s active project so the switcher can mark it', async () => {
+    const s = new FakeProjectStore();
+    s.projects = { org_a: [{ id: 'p1', name: 'a', repoRef: 'owner/a' }] };
+    s.active = { u1: 'p1' };
+    const r = await run(deps(s, 'org_a'), fakeReq('GET', '/api/projects'));
+    expect(JSON.parse(r.body).activeProjectId).toBe('p1');
   });
 
   it('403 when the user has no org membership', async () => {
@@ -124,6 +141,40 @@ describe('auth + CSRF gates', () => {
     const r = await run(deps(s), fakeReq('POST', '/api/active-project', { body: JSON.stringify({ projectId: 'p1' }) }));
     expect(r.statusCode).toBe(403);
     expect(s.active.u1).toBeUndefined();
+  });
+
+  it('DELETE /api/active-project without CSRF → 403, nothing cleared', async () => {
+    const s = new FakeProjectStore();
+    s.active = { u1: 'p1' };
+    const r = await run(deps(s), fakeReq('DELETE', '/api/active-project'));
+    expect(r.statusCode).toBe(403);
+    expect(s.active.u1).toBe('p1'); // untouched
+  });
+
+  it('DELETE /api/active-project requires a session (401)', async () => {
+    const r = await run(
+      deps(new FakeProjectStore(), 'org_a', { verifySession: () => null }),
+      fakeReq('DELETE', '/api/active-project', { headers: csrf() })
+    );
+    expect(r.statusCode).toBe(401);
+  });
+});
+
+describe('DELETE /api/active-project — clear to the “all projects” view', () => {
+  it('clears the selection and reports activeProjectId:null', async () => {
+    const s = new FakeProjectStore();
+    s.active = { u1: 'p1' };
+    const r = await run(deps(s), fakeReq('DELETE', '/api/active-project', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ ok: true, activeProjectId: null });
+    expect(s.active.u1).toBeUndefined();
+  });
+
+  it('is idempotent — clearing with no selection still succeeds', async () => {
+    const s = new FakeProjectStore();
+    const r = await run(deps(s), fakeReq('DELETE', '/api/active-project', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ ok: true, activeProjectId: null });
   });
 });
 
