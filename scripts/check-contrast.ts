@@ -15,16 +15,37 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export type Theme = 'dark' | 'light';
 
+/**
+ * A `color-mix(in srgb, <color> P%, transparent)` tinted background composited over an
+ * opaque base surface. CSS renders `transparent` as the base showing through, so the
+ * effective opaque color is `(P/100)*color + (1 - P/100)*base`. Status chips and signal
+ * controls paint text over exactly this — a flat-token check misses the real ratio.
+ */
+export interface MixBg {
+  /** The tint hue token, e.g. '--green' (mixed at `pct`% with transparent). */
+  mix: string;
+  /** Mix percentage, e.g. 9 for `color-mix(… 9%, transparent)`. */
+  pct: number;
+  /** The opaque surface the tint composites over, e.g. '--surface'. */
+  over: string;
+}
+
 /** A single asserted text-on-surface pairing. `min` is the WCAG ratio it must clear. */
 export interface Pairing {
   /** Foreground (text/status) token name, e.g. '--fg-faint'. */
   fg: string;
-  /** Background (surface) token name, e.g. '--surface'. */
-  bg: string;
-  /** Minimum contrast ratio (4.5 for normal text). */
+  /** Background: a flat surface token name, or a `color-mix` tint over a base. */
+  bg: string | MixBg;
+  /**
+   * Minimum contrast ratio. 4.5 for normal body/status text (AA). A lower value is
+   * permitted ONLY with a documented `note` justifying the exemption (e.g. placeholder
+   * text, which WCAG 1.4.3 treats as an inactive UI affordance at the 3:1 minimum).
+   */
   min: number;
   /** Human label for the report row. */
   label: string;
+  /** Rationale, REQUIRED when `min < 4.5`, so no exemption is silent. */
+  note?: string;
 }
 
 /**
@@ -32,8 +53,15 @@ export interface Pairing {
  * on, plus the status text colors. Asserted in BOTH themes. AA normal-text = 4.5:1.
  *
  * --fg / --fg-2 / --fg-3 / --fg-4 / --fg-faint  → on --bg and --surface (body/secondary
- *   text sits on both); --fg-4 / --fg-faint additionally on --surface-2 (raised cards).
- * --green / --red / --amber / --signal          → on --surface (status text).
+ *   text sits on both); --fg-4 / --fg-faint additionally on --surface-2 (raised cards),
+ *   --fg-faint also on --surface-3 / --bg-sub (input + placeholder fields).
+ * --green / --red / --amber / --signal          → on --surface and --surface-2 (status text
+ *   on flat cards and hover rows).
+ * --signal-2                                     → primary text on signal controls; on
+ *   --bg / --surface / --surface-2 AND on the signal-9% tint those controls paint.
+ * --green / --amber / --red / --signal-2         → on their own color-mix tints (the chips
+ *   and pills paint colored text over a tint of the SAME hue — the case a flat check misses).
+ * --ink-on-amber                                 → label text ON the amber fill (.btn-primary).
  */
 export const PAIRINGS: readonly Pairing[] = [
   { fg: '--fg', bg: '--bg', min: 4.5, label: 'fg / bg' },
@@ -48,10 +76,44 @@ export const PAIRINGS: readonly Pairing[] = [
   { fg: '--fg-faint', bg: '--bg', min: 4.5, label: 'fg-faint / bg' },
   { fg: '--fg-faint', bg: '--surface', min: 4.5, label: 'fg-faint / surface' },
   { fg: '--fg-faint', bg: '--surface-2', min: 4.5, label: 'fg-faint / surface-2' },
+  // Input placeholders: --fg-faint is the muted-most tier. On --bg-sub it clears 4.5 in
+  // both themes (asserted at full AA below). On --surface-3 (the densest input fill) it
+  // lands at ~4.36 dark / ~4.37 light. --fg-faint CANNOT be darkened to fix this without
+  // inverting the muted-tier order (it must stay lighter/darker than --fg-4 per theme), so
+  // this one pairing is an EXPLICIT exemption: --fg-faint on --surface-3 renders ONLY as
+  // ::placeholder text (grep-verified — never body copy), which WCAG 1.4.3 classifies as an
+  // inactive UI affordance held to the 3:1 minimum, not the 4.5:1 normal-text minimum.
+  {
+    fg: '--fg-faint',
+    bg: '--surface-3',
+    min: 3.0,
+    label: 'fg-faint / surface-3 (placeholder)',
+    note: 'placeholder-only (::placeholder); WCAG 1.4.3 inactive-affordance 3:1 minimum',
+  },
+  { fg: '--fg-faint', bg: '--bg-sub', min: 4.5, label: 'fg-faint / bg-sub (placeholder)' },
+  { fg: '--fg-4', bg: '--bg-sub', min: 4.5, label: 'fg-4 / bg-sub' },
+  // Status text on flat surfaces.
   { fg: '--green', bg: '--surface', min: 4.5, label: 'green (status) / surface' },
   { fg: '--red', bg: '--surface', min: 4.5, label: 'red (status) / surface' },
   { fg: '--amber', bg: '--surface', min: 4.5, label: 'amber (status) / surface' },
   { fg: '--signal', bg: '--surface', min: 4.5, label: 'signal (status) / surface' },
+  // Status text on hover rows (--surface-2).
+  { fg: '--green', bg: '--surface-2', min: 4.5, label: 'green (status) / surface-2' },
+  { fg: '--red', bg: '--surface-2', min: 4.5, label: 'red (status) / surface-2' },
+  { fg: '--amber', bg: '--surface-2', min: 4.5, label: 'amber (status) / surface-2' },
+  // --signal-2 primary text (Set key / Rename / Connect / Repair / Accept / Assign …).
+  { fg: '--signal-2', bg: '--bg', min: 4.5, label: 'signal-2 / bg' },
+  { fg: '--signal-2', bg: '--surface', min: 4.5, label: 'signal-2 / surface' },
+  { fg: '--signal-2', bg: '--surface-2', min: 4.5, label: 'signal-2 / surface-2' },
+  // Colored text on its own color-mix tint — the case a flat-surface check cannot model.
+  // Worst (lowest-contrast) tint % per hue across the real CSS is asserted here.
+  { fg: '--signal-2', bg: { mix: '--signal', pct: 9, over: '--surface' }, min: 4.5, label: 'signal-2 / signal-9% tint' },
+  { fg: '--amber', bg: { mix: '--amber', pct: 13, over: '--surface' }, min: 4.5, label: 'amber / amber-13% tint' },
+  { fg: '--amber', bg: { mix: '--amber', pct: 9, over: '--surface-2' }, min: 4.5, label: 'amber / amber-9% tint (hover row)' },
+  { fg: '--green', bg: { mix: '--green', pct: 13, over: '--surface' }, min: 4.5, label: 'green / green-13% tint' },
+  { fg: '--red', bg: { mix: '--red', pct: 13, over: '--surface' }, min: 4.5, label: 'red / red-13% tint' },
+  // Label text ON the amber fill (.btn-primary).
+  { fg: '--ink-on-amber', bg: '--amber', min: 4.5, label: 'ink-on-amber / amber (fill)' },
 ];
 
 /** Parsed token declarations, split into the dark (`:root`) and light scopes. */
@@ -155,6 +217,21 @@ export function parseColor(value: string): Rgb | null {
   return null;
 }
 
+/**
+ * Composite a `color-mix(in srgb, color P%, transparent)` tint over an opaque base.
+ * `transparent` contributes the base showing through, so the rendered opaque color is
+ * `(P/100)*color + (1 - P/100)*base` per channel. Channels stay fractional (the contrast
+ * math linearizes from [0,255], not integers) — no rounding here, to match the GPU result.
+ */
+export function compositeMix(color: Rgb, pct: number, base: Rgb): Rgb {
+  const p = pct / 100;
+  return {
+    r: p * color.r + (1 - p) * base.r,
+    g: p * color.g + (1 - p) * base.g,
+    b: p * color.b + (1 - p) * base.b,
+  };
+}
+
 /** WCAG relative luminance of an sRGB color. */
 export function luminance(c: Rgb): number {
   return 0.2126 * linearize(c.r) + 0.7152 * linearize(c.g) + 0.0722 * linearize(c.b);
@@ -175,15 +252,32 @@ export interface Result extends Pairing {
   pass: boolean;
 }
 
+/**
+ * Resolve a pairing's background to a concrete sRGB color in a theme. A flat token
+ * resolves through its var() chain; a `MixBg` resolves the tint hue + the base surface,
+ * then composites the `color-mix(… P%, transparent)` over the base.
+ */
+function resolveBg(bg: string | MixBg, theme: Theme, scopes: ThemeScopes): Rgb | null {
+  if (typeof bg === 'string') {
+    const v = resolve(bg, theme, scopes);
+    return v ? parseColor(v) : null;
+  }
+  const tintVal = resolve(bg.mix, theme, scopes);
+  const baseVal = resolve(bg.over, theme, scopes);
+  const tint = tintVal ? parseColor(tintVal) : null;
+  const base = baseVal ? parseColor(baseVal) : null;
+  if (!tint || !base) return null;
+  return compositeMix(tint, bg.pct, base);
+}
+
 /** Evaluate every pairing in both themes against the parsed tokens. */
 export function evaluate(scopes: ThemeScopes): Result[] {
   const out: Result[] = [];
   for (const theme of ['dark', 'light'] as const) {
     for (const p of PAIRINGS) {
       const fgVal = resolve(p.fg, theme, scopes);
-      const bgVal = resolve(p.bg, theme, scopes);
       const fg = fgVal ? parseColor(fgVal) : null;
-      const bg = bgVal ? parseColor(bgVal) : null;
+      const bg = resolveBg(p.bg, theme, scopes);
       if (!fg || !bg) {
         out.push({ ...p, theme, ratio: null, pass: false });
         continue;
@@ -195,10 +289,25 @@ export function evaluate(scopes: ThemeScopes): Result[] {
   return out;
 }
 
+/** Render a background descriptor for the failure report. */
+function describeBg(bg: string | MixBg): string {
+  return typeof bg === 'string' ? bg : `color-mix(${bg.mix} ${bg.pct}% over ${bg.over})`;
+}
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TOKENS_PATH = path.join(REPO_ROOT, 'app', 'src', 'styles', 'tokens.css');
 
 function main(): void {
+  // Fail closed against silent exemptions: any below-AA pairing MUST justify itself.
+  const undocumented = PAIRINGS.filter((p) => p.min < 4.5 && !p.note);
+  if (undocumented.length > 0) {
+    for (const p of undocumented) {
+      console.error(`  ${p.label}: min ${p.min} < 4.5 without a note — undocumented exemption`);
+    }
+    console.error(`contrast check: ${undocumented.length} below-AA pairing(s) lack a rationale note`);
+    process.exit(1);
+  }
+
   const scopes = parseTokens(readFileSync(TOKENS_PATH, 'utf8'));
   const results = evaluate(scopes);
 
@@ -218,7 +327,7 @@ function main(): void {
   }
   for (const f of failures) {
     const got = f.ratio === null ? 'unresolved color' : `${f.ratio.toFixed(2)}:1`;
-    console.error(`  ${f.theme}: ${f.label} (${f.fg} on ${f.bg}) = ${got}, need ${f.min}:1`);
+    console.error(`  ${f.theme}: ${f.label} (${f.fg} on ${describeBg(f.bg)}) = ${got}, need ${f.min}:1`);
   }
   console.error(`contrast check: ${failures.length} sub-AA pairing(s)`);
   process.exit(1);

@@ -302,20 +302,36 @@
   --fg-faint:  var(--p-slate-480);   /* AA-muted: ~4.8 on white (was slate-300, sub-AA) */
 
   --signal:     var(--p-blue-700);
-  --signal-2:   var(--p-blue-800);
+  /* --signal-2 is PRIMARY control text (Set key / Rename / Connect / Repair / Accept /
+     Assign …) painted on a color-mix(--signal 9%, transparent) tint. The old --p-blue-800
+     cleared 4.63 on white but only 4.01 on that tint (sub-AA). Darkened to a blue between
+     --signal and the tint that clears 4.5 on the tint AND on --surface-2 (6.66 / 4.76). */
+  --signal-2:   #004FAE;
   --signal-3:   var(--p-blue-700);
   --signal-glow:var(--p-blue-glow-l);
 
-  /* amber-as-text on white: bright dark-theme amber fails AA, so override to the
-     darkened amber-700 (5.02:1 on white). Accent/border amber usages unaffected. */
-  --amber:  var(--p-amber-700);
+  /* amber-as-text on white: bright dark-theme amber fails AA. --p-amber-700 (#B45309)
+     cleared 5.02 on flat white but only 4.12 on its own 9% tint (hover-row chips).
+     Darkened to #9C4A02 so amber text clears 4.5 on every amber tint it actually paints. */
+  --amber:  #9C4A02;
 
-  --header-bg: rgba(255,255,255,0.78);
+  /* --header-bg is intentionally NOT overridden in light: the header rendered the dark translucent
+     backdrop in BOTH themes before this tokenization, so it inherits the :root value to preserve that
+     exact appearance. Whether the light theme should get a light header is a separate design decision,
+     not an AA-contrast side effect. */
 
-  --green:  var(--p-green-700);
-  --red:    var(--p-red-600);
+  /* green/red as status text also paint on color-mix tints of their own hue (chips, pills,
+     hover rows). The bright primitives cleared flat --surface but not the tints:
+       --p-green-700 (#15803D) → 4.21 on its 13% tint;  darken to #0F7034 (5.12 on tint).
+       --p-red-600   (#DC2626) → 3.94 on its 13% tint, 4.46 on --surface-2; → #C81E1E (4.63). */
+  --green:  #0F7034;
+  --red:    #C81E1E;
   --purple: var(--p-purple-700);
   --violet: var(--p-violet-700);
+
+  /* .btn-primary label sits ON the amber fill. The dark-theme --ink-on-amber (#1A1303)
+     only reaches 3.67 on the darkened light amber; white (--on-accent) clears 5.02. */
+  --ink-on-amber: var(--on-accent);
 
   --shadow-sm:  0 1px 2px rgba(15,23,42,0.06);
   --shadow-md:  0 4px 12px -2px rgba(15,23,42,0.10);

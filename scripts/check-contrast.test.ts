@@ -5,7 +5,9 @@ import {
   parseColor,
   luminance,
   contrastRatio,
+  compositeMix,
   evaluate,
+  PAIRINGS,
 } from './check-contrast';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -92,6 +94,51 @@ describe('parseTokens — scope split + multi-declaration lines + var() resoluti
   it('does not read a #hex that lives inside a comment', () => {
     const scopes = parseTokens(`:root { /* note: was #FF0000 */ --fg: #FFFFFF; }`);
     expect(resolve('--fg', 'dark', scopes)).toBe('#FFFFFF');
+  });
+});
+
+describe('compositeMix — color-mix(in srgb, color P%, transparent) over an opaque base', () => {
+  it('50% of a color over white is the per-channel midpoint (transparent shows the base)', () => {
+    // color-mix(in srgb, #000000 50%, transparent) painted over #FFFFFF renders #808080.
+    const mid = compositeMix(parseColor('#000000')!, 50, parseColor('#FFFFFF')!);
+    expect(mid).toEqual({ r: 127.5, g: 127.5, b: 127.5 });
+  });
+
+  it('0% is the base untouched; 100% is the color untouched', () => {
+    const base = parseColor('#123456')!;
+    const color = parseColor('#ABCDEF')!;
+    expect(compositeMix(color, 0, base)).toEqual(base);
+    expect(compositeMix(color, 100, base)).toEqual(color);
+  });
+
+  it('a 10% green tint over white matches the hand-computed composite', () => {
+    // (0.1)*#15803D + (0.9)*#FFFFFF, per channel.
+    const c = compositeMix(parseColor('#15803D')!, 10, parseColor('#FFFFFF')!);
+    expect(c.r).toBeCloseTo(0.1 * 0x15 + 0.9 * 255, 4);
+    expect(c.g).toBeCloseTo(0.1 * 0x80 + 0.9 * 255, 4);
+    expect(c.b).toBeCloseTo(0.1 * 0x3d + 0.9 * 255, 4);
+  });
+});
+
+describe('the PAIRINGS list asserts tinted (color-mix) backgrounds, not just flat surfaces', () => {
+  it('includes at least one MixBg pairing — the case a flat-token check cannot model', () => {
+    const tinted = PAIRINGS.filter((p) => typeof p.bg === 'object');
+    expect(tinted.length).toBeGreaterThan(0);
+    // The signal-2-on-signal-tint case (the primary-control regression the panel caught).
+    expect(
+      tinted.some(
+        (p) =>
+          p.fg === '--signal-2' &&
+          typeof p.bg === 'object' &&
+          p.bg.mix === '--signal'
+      )
+    ).toBe(true);
+  });
+
+  it('every below-AA pairing carries a documented rationale note (no silent exemption)', () => {
+    for (const p of PAIRINGS.filter((p) => p.min < 4.5)) {
+      expect(p.note, `${p.label} is below AA without a note`).toBeTruthy();
+    }
   });
 });
 
