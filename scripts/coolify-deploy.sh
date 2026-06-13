@@ -36,12 +36,14 @@ set -uo pipefail
 base="${COOLIFY_API_URL%/}"
 auth="Authorization: Bearer ${COOLIFY_API_TOKEN}"
 
-# 1) Point the resource at the new immutable image tag. Keep the response (don't discard it).
+# 1) Point the resource at the new immutable image tag. Log the response (don't discard it) so a
+# weird-but-200 PATCH is visible in the logs.
 patch=$(curl -fsS -X PATCH "${base}/api/v1/applications/${COOLIFY_RESOURCE_UUID}" \
       -H "$auth" -H "Content-Type: application/json" \
       -d "{\"docker_registry_image_name\":\"${IMAGE}\",\"docker_registry_image_tag\":\"${SHA_TAG}\"}" 2>/dev/null) || {
   echo "::error::PATCH application image tag failed"; exit 1
 }
+echo "patch: $(printf '%s' "$patch" | head -c 200)"
 
 # 1b) Confirm the PATCH stuck. Diagnostic, not a hard gate (the live-SHA check below is the real
 # proof) — but a mismatch here is the leading indicator of a redeploy about to roll the old image.
@@ -91,7 +93,10 @@ if [ -n "${VERIFY_SHA_URL:-}" ] && [ -n "${EXPECT_SHA:-}" ]; then
     echo "::warning::rollout status unconfirmed — relying on the live-SHA check to decide."
   fi
   live=""
-  for i in $(seq 1 18); do  # ~3 min (18 × 10s) for the new container to take traffic
+  # ~6 min (36 × 10s). The poll starts only AFTER Coolify reports finished, but a slow host may
+  # report finished BEFORE the heavy image (multi-GB base) is pulled + healthy — so allow for the
+  # cold-pull tail rather than flip a legitimate deploy red. A genuine #5318 hang still fails, later.
+  for i in $(seq 1 36); do
     live=$(curl -fsS --max-time 8 "${VERIFY_SHA_URL}" 2>/dev/null | tr -d '[:space:]' || true)
     echo "verify[$i]: ${VERIFY_SHA_URL} -> ${live:-<unreachable>} (want ${EXPECT_SHA})"
     if [ "$live" = "$EXPECT_SHA" ]; then echo "✓ live image is build ${EXPECT_SHA} — deploy verified"; exit 0; fi
