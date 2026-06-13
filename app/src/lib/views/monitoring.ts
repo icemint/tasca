@@ -3,7 +3,7 @@
 // failed tasks. KPI tiles report honest counts only (no throughput / cost-burn /
 // success-over-time aggregates — those columns don't exist, so they're omitted).
 
-import { getTasks } from '../api';
+import { getTasks, getProjects } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { I, platTag, tierTag, taskRef, esc, roControl } from '../ui';
@@ -67,25 +67,42 @@ function attentionRail(tasks: TaskSummary[]): string {
   return `<div class="pcard esc-rail" style="margin-top:24px"><div class="pc-h">Needs attention <span class="pc-h-r mono dim">${attn.length}</span></div>${rows}</div>`;
 }
 
+/** Resolve the active-project scope label for the board header (best-effort). "All projects" when
+ *  nothing is selected or the lookup fails — the indicator must never block the board. The read API
+ *  already filters the tasks by the active project server-side; this only NAMES the active scope. */
+async function activeScopeLabel(): Promise<string> {
+  const res = await getProjects();
+  if (res.kind !== 'ok' || res.data.activeProjectId === null) return 'All projects';
+  return res.data.projects.find((p) => p.id === res.data.activeProjectId)?.name ?? 'All projects';
+}
+
 export async function loadMonitoring(): Promise<LoadResult> {
-  const res = await getTasks({ limit: 200 });
+  const [res, scope] = await Promise.all([getTasks({ limit: 200 }), activeScopeLabel()]);
   return fromResult(res, (tasks) => {
-    const head = `<div class="roster-head"><div><h1>Monitoring</h1><div class="sub">Live pipeline across every connected platform</div></div>
+    const head = `<div class="roster-head"><div><h1>Monitoring</h1><div class="sub">Live pipeline · <span class="scope-tag">${esc(scope)}</span></div></div>
       <div class="head-actions">
         <button class="ictl" type="button" data-act="refresh" aria-label="Refresh the pipeline">Refresh</button>
         <span class="live-dot big" role="status" aria-label="Live — refreshes on demand">Live</span>
       </div></div>`;
 
     if (!tasks.length) {
+      // Reflect the active scope: a filtered-empty PROJECT must not read as "no tasks at all".
+      const scoped = scope !== 'All projects';
       return {
         kind: 'empty',
         html:
           head +
-          empty(
-            'No tasks yet',
-            'When a connected platform assigns work to one of your agents, it flows through this pipeline.',
-            I.monitor
-          ),
+          (scoped
+            ? empty(
+                `No tasks in ${scope}`,
+                'No work has reached this project yet. Switch to "All projects" to see tasks across the workspace.',
+                I.monitor
+              )
+            : empty(
+                'No tasks yet',
+                'When a connected platform assigns work to one of your agents, it flows through this pipeline.',
+                I.monitor
+              )),
       };
     }
 

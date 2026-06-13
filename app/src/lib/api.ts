@@ -25,6 +25,7 @@ import type {
   OrgInfo,
   OrgRole,
   OrgsResponse,
+  ProjectsResponse,
   ProposalsResponse,
   ProposalSummary,
   StandupSummary,
@@ -420,3 +421,18 @@ export const getCredentialAudit = () => get<CredentialAuditResponse>('/api/orgs/
 export function connectGitHub(): void {
   if (typeof location !== 'undefined') location.assign('/api/connect/github');
 }
+
+// ── project switcher (slice Project-B) ────────────────────────────────────────
+// The active project is a finer task-view filter WITHIN the org (the read API filters by it
+// server-side). The list read carries which one is active; switch/clear are member+ CSRF writes.
+
+/** The active org's projects + which one is active (null = the "All projects" view). */
+export const getProjects = () => get<ProjectsResponse>('/api/projects');
+
+/** Switch the active project (server-validated in-org; a foreign/unknown id → notfound). */
+export const setActiveProject = (projectId: string) =>
+  post<{ ok: true; activeProjectId: string }>('/api/active-project', { projectId });
+
+/** Clear the active project → the cross-project "All projects" view (idempotent). */
+export const clearActiveProject = () =>
+  del<{ ok: true; activeProjectId: null }>('/api/active-project');

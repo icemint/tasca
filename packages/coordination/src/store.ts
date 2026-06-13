@@ -262,6 +262,11 @@ export interface CoordinationStore {
    *  oracle), and a foreign-org project is never activated. `ok` on success. */
   setActiveProject(userId: string, projectId: string): Promise<'ok' | 'not_found'>;
 
+  /** Clear the user's active project (slice Project-B) — back to the cross-project "all projects" view.
+   *  Idempotent: clearing when none is set is a no-op (getActiveProject then resolves null). No org
+   *  validation needed — a delete narrows nothing, it widens to the org's full task set. */
+  clearActiveProject(userId: string): Promise<void>;
+
   getTask(orgId: string, taskId: string): Promise<Task | null>;
 
   /** A task's content/status origin (slice W3-S1c): stored content + the parent's platform story
@@ -940,6 +945,13 @@ export class PgCoordinationStore implements CoordinationStore, VendorCredentialS
       );
       return 'ok';
     });
+  }
+
+  async clearActiveProject(userId: string): Promise<void> {
+    // Drop the user's selection → getActiveProject resolves null = the cross-project "all projects"
+    // view. Keyed on user_id only: a delete narrows nothing (no cross-tenant concern), and clearing
+    // when none is set deletes no row — idempotent.
+    await this.db.query(`DELETE FROM user_active_project WHERE user_id = $1`, [userId]);
   }
 
   async getTaskOrigin(orgId: string, taskId: string): Promise<TaskOrigin | null> {

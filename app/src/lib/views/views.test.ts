@@ -75,6 +75,17 @@ describe('monitoring', () => {
     expect(htmlOf(r)).toContain('data-act="refresh"');
     expect(htmlOf(r)).toContain('data-ro="soon"'); // Re-tier / Escalate
     expect(htmlOf(r)).not.toContain('Coming soon');
+    // scope indicator: with no active project the board reads "All projects"
+    expect(htmlOf(r)).toContain('class="scope-tag">All projects');
+  });
+
+  it('names the active project in the board scope indicator (slice Project-B)', async () => {
+    stubFetch({
+      '/api/tasks': { body: [TASK_LRU] },
+      '/api/projects': { body: { projects: [{ id: 'p1', name: 'billing', repoRef: 'acme/billing' }], activeProjectId: 'p1' } },
+    });
+    const r = await loadMonitoring();
+    expect(htmlOf(r)).toContain('class="scope-tag">billing');
   });
 
   it('renders an honest empty pipeline', async () => {

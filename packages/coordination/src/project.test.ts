@@ -232,6 +232,19 @@ run('PgCoordinationStore — project resolution, listing, active-project (slice 
     expect(await store.getActiveProject('u1')).toBe(inOrg); // round-trips
   });
 
+  it('clearActiveProject drops the selection (set → clear → null), and is idempotent on no selection', async () => {
+    const inOrg = await store.getOrCreateProject('org_a', 'owner/widgets');
+    expect(await store.setActiveProject('u1', inOrg)).toBe('ok');
+    expect(await store.getActiveProject('u1')).toBe(inOrg);
+
+    await store.clearActiveProject('u1');
+    expect(await store.getActiveProject('u1')).toBeNull(); // back to the "all projects" view
+
+    // Idempotent — clearing again when none is set is a no-op (no error, still null).
+    await store.clearActiveProject('u1');
+    expect(await store.getActiveProject('u1')).toBeNull();
+  });
+
   it('getActiveProject returns null for a stale active project whose org is no longer the user’s active org', async () => {
     // u1 is parked on an org_a project (from the previous test). Switch their active org to org_b
     // (where they are NOT a member of record here) — the stale org_a selection must resolve to null.
