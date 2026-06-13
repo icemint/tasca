@@ -14,6 +14,7 @@ import type {
   VendorCredentialStatus,
   VendorCredentialStore,
 } from './vendor-credential';
+import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
 import {
   TASK_TRANSITIONS,
   type CapabilityMatch,
@@ -572,8 +573,34 @@ class RollbackProposal extends Error {
  * PgClaimRepository / PgIdentityRepository style). Constructor takes a pool or a
  * single connection.
  */
-export class PgCoordinationStore implements CoordinationStore, VendorCredentialStore {
+export class PgCoordinationStore implements CoordinationStore, VendorCredentialStore, GovernanceAuditSink {
   constructor(private readonly db: Queryable) {}
+
+  // ── Governance audit trail (slice 3.5-A.2c.1) — append-only, org-scoped credential-mgmt ledger ──
+  async recordGovernanceAudit(
+    orgId: string,
+    e: { actorUserId: string; action: string; target?: string; payload?: Record<string, unknown> }
+  ): Promise<void> {
+    // Append one row. The table's UPDATE/DELETE rules make the trail append-only; org_id scopes it.
+    // payload carries {fingerprint,status} for a set / {} for a delete — NEVER the raw key.
+    await this.db.query(
+      `INSERT INTO governance_audit_event (id, org_id, actor_user_id, action, target, payload)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+      [randomUUID(), orgId, e.actorUserId, e.action, e.target ?? null, JSON.stringify(e.payload ?? {})]
+    );
+  }
+
+  async listGovernanceAudit(orgId: string, opts?: { limit?: number }): Promise<GovernanceAuditEvent[]> {
+    // ORG-SCOPED, newest-first. The limit is clamped so a hostile/oversized request can't ask for
+    // the whole trail.
+    const limit = clampLimit(opts?.limit, 50, 200);
+    const res = await this.db.query<GovernanceAuditRow>(
+      `SELECT id, actor_user_id, action, target, payload, at
+         FROM governance_audit_event WHERE org_id = $1 ORDER BY at DESC, id DESC LIMIT $2`,
+      [orgId, limit]
+    );
+    return res.rows.map(mapGovernanceAudit);
+  }
 
   // ── BYOK vendor credentials (slice 3.5-A) — sealed at rest; no method returns plaintext ──────────
   async setVendorCredential(
@@ -1568,6 +1595,26 @@ interface PullRequestRow {
   url: string;
   state: string;
   created_at: Date | string;
+}
+
+interface GovernanceAuditRow {
+  id: string;
+  actor_user_id: string;
+  action: string;
+  target: string | null;
+  payload: Record<string, unknown> | null;
+  at: Date | string;
+}
+
+function mapGovernanceAudit(row: GovernanceAuditRow): GovernanceAuditEvent {
+  return {
+    id: row.id,
+    actorUserId: row.actor_user_id,
+    action: row.action,
+    target: row.target,
+    payload: row.payload ?? {},
+    at: toIso(row.at),
+  };
 }
 
 interface ConnectionRow {

@@ -11,6 +11,7 @@ import type { SessionInfo } from './read-api';
 import type { Logger } from './ports';
 import { atLeast, type RoleReader } from './membership';
 import { sendJson, readJsonBody, verifyCsrf } from './http-util';
+import type { GovernanceAuditSink } from './governance-audit';
 import {
   isVendorProvider,
   sealVendorKey,
@@ -29,6 +30,10 @@ export interface VendorCredentialApiDeps {
    *  a key we cannot seal. */
   masterKey: Buffer | null;
   membership: RoleReader;
+  /** Governance audit trail (slice 3.5-A.2c.1). OPTIONAL: absent → no trail recorded and the audit
+   *  read returns an empty list. The record write is best-effort relative to the credential op (the
+   *  key is already sealed+stored) — a failed audit write is logged, never failing the credential op. */
+  audit?: GovernanceAuditSink;
   verifySession?: (req: IncomingMessage) => Promise<SessionInfo | null> | SessionInfo | null;
   allowUnauthenticated?: boolean;
   logger?: Logger;
@@ -36,6 +41,7 @@ export interface VendorCredentialApiDeps {
 
 type Route =
   | { kind: 'list' }
+  | { kind: 'audit' }
   | { kind: 'set' }
   | { kind: 'delete'; provider: string };
 
@@ -43,6 +49,10 @@ function matchRoute(method: string, path: string): Route | null {
   if (path === '/api/orgs/credentials') {
     if (method === 'GET') return { kind: 'list' };
     if (method === 'POST') return { kind: 'set' };
+    return null;
+  }
+  if (path === '/api/orgs/credentials/audit') {
+    if (method === 'GET') return { kind: 'audit' };
     return null;
   }
   const m = /^\/api\/orgs\/credentials\/([^/]+)$/.exec(path);
@@ -93,6 +103,19 @@ export async function vendorCredentialApiHandler(
     return true;
   }
 
+  // GET /audit — the governance trail. ADMIN+ (governance-sensitive, gated like the write paths, not
+  // like the member+ status GET); no CSRF (a read changes no state). Absent audit sink → empty list.
+  if (route.kind === 'audit') {
+    const role = session ? await deps.membership.getRole(userId, orgId) : 'owner'; // dev = full access
+    if (role === null || !atLeast(role, 'admin')) {
+      sendJson(res, 403, { error: 'admin role required to view the credential audit trail' });
+      return true;
+    }
+    const events = deps.audit ? await deps.audit.listGovernanceAudit(orgId, { limit: 50 }) : [];
+    sendJson(res, 200, { events });
+    return true;
+  }
+
   // ── mutations: CSRF + ADMIN+ (keys are governance, slice 5b/D5) ──
   if (!verifyCsrf(req)) {
     sendJson(res, 403, { error: 'missing or invalid CSRF token' });
@@ -134,6 +157,13 @@ export async function vendorCredentialApiHandler(
     const fingerprint = fingerprintVendorKey(provider, plaintext);
     await deps.store.setVendorCredential(orgId, provider, sealed, fingerprint, userId === '(dev)' ? null : userId);
     deps.resolver.invalidate(orgId, provider); // rotation takes effect immediately on this node
+    // Governance trail: record the set with the fingerprint + status — NEVER the key. Best-effort:
+    // the key is already sealed+stored, so a failed audit write must not turn this into a 500.
+    await recordAudit(deps, orgId, userId, {
+      action: 'credential.set',
+      target: provider,
+      payload: { fingerprint, status: 'active' },
+    });
     // WRITE-ONLY response: status + fingerprint, never the key.
     sendJson(res, 200, { ok: true, provider, status: 'active', fingerprint });
     return true;
@@ -146,8 +176,32 @@ export async function vendorCredentialApiHandler(
   }
   const removed = await deps.store.deleteVendorCredential(orgId, route.provider as VendorProvider);
   deps.resolver.invalidate(orgId, route.provider as VendorProvider);
+  if (removed) {
+    await recordAudit(deps, orgId, userId, { action: 'credential.delete', target: route.provider, payload: {} });
+  }
   sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'no key configured for that provider' });
   return true;
+}
+
+/** Best-effort governance-audit write: records the action when an audit sink is wired, and swallows a
+ *  write failure into a logged error (the credential op already succeeded — its key is sealed+stored —
+ *  so the audit trail must never be what fails the response). NEVER pass the raw key in `payload`. */
+async function recordAudit(
+  deps: VendorCredentialApiDeps,
+  orgId: string,
+  userId: string,
+  e: { action: string; target?: string; payload?: Record<string, unknown> }
+): Promise<void> {
+  if (!deps.audit) return;
+  try {
+    await deps.audit.recordGovernanceAudit(orgId, { actorUserId: userId, ...e });
+  } catch (err) {
+    deps.logger?.error('vendor-credential-api: governance audit write failed', {
+      orgId,
+      action: e.action,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** Read + JSON-parse the body; on malformed input send 400 and return undefined (mirrors org-api). */

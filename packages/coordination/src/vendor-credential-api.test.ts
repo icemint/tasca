@@ -11,6 +11,7 @@ import {
   type VendorCredentialStatus,
   type VendorValidator,
 } from './vendor-credential';
+import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
 import type { OrgRole } from './membership';
 
 const MASTER = randomBytes(32);
@@ -41,6 +42,28 @@ class FakeStore implements VendorCredentialStore {
 const okValidator: VendorValidator = { validate: async () => ({ ok: true }) };
 const rejectValidator: VendorValidator = { validate: async () => ({ ok: false, reason: 'the key was rejected by the vendor (invalid or revoked)' }) };
 
+/** In-memory governance-audit sink (real state) — newest-first, org-scoped, like the Pg impl. */
+class FakeAudit implements GovernanceAuditSink {
+  rows: Array<{ orgId: string } & GovernanceAuditEvent> = [];
+  async recordGovernanceAudit(orgId: string, e: { actorUserId: string; action: string; target?: string; payload?: Record<string, unknown> }) {
+    this.rows.push({ orgId, id: String(this.rows.length + 1), actorUserId: e.actorUserId, action: e.action, target: e.target ?? null, payload: e.payload ?? {}, at: new Date().toISOString() });
+  }
+  async listGovernanceAudit(orgId: string, opts?: { limit?: number }): Promise<GovernanceAuditEvent[]> {
+    return this.rows.filter((r) => r.orgId === orgId).slice().reverse().slice(0, opts?.limit ?? 50)
+      .map(({ orgId: _o, ...e }) => e);
+  }
+}
+
+/** A sink whose record always throws — to prove the audit write is best-effort (never fails the op). */
+const throwingAudit: GovernanceAuditSink = {
+  async recordGovernanceAudit() {
+    throw new Error('audit store down');
+  },
+  async listGovernanceAudit() {
+    return [];
+  },
+};
+
 function deps(over: Partial<VendorCredentialApiDeps> & { role?: OrgRole | null; activeOrg?: string | null } = {}): VendorCredentialApiDeps {
   const store = over.store ?? new FakeStore();
   return {
@@ -52,6 +75,7 @@ function deps(over: Partial<VendorCredentialApiDeps> & { role?: OrgRole | null; 
       getActiveOrg: async () => (over.activeOrg === undefined ? 'org1' : over.activeOrg),
       getRole: async () => (over.role === undefined ? 'admin' : over.role),
     } as VendorCredentialApiDeps['membership'],
+    audit: over.audit ?? new FakeAudit(),
     verifySession: over.verifySession ?? (() => ({ userId: 'u1' })),
     ...(over.logger ? { logger: over.logger } : {}),
   };
@@ -158,5 +182,72 @@ describe('vendor-credential API — write-only, admin-gated, fail-closed', () =>
     expect((await run(deps({ verifySession: () => null }), fakeReq('GET', '/api/orgs/credentials'))).statusCode).toBe(401);
     expect((await run(deps({ activeOrg: null }), fakeReq('GET', '/api/orgs/credentials'))).statusCode).toBe(403);
     expect((await run(deps(), fakeReq('GET', '/api/tasks'))).owned).toBe(false);
+  });
+});
+
+describe('vendor-credential API — governance audit trail (slice 3.5-A.2c.1)', () => {
+  it('POST records a credential.set audit row with the fingerprint — and NEVER the raw key', async () => {
+    const audit = new FakeAudit();
+    const d = deps({ audit });
+    const r = await run(d, fakeReq('POST', '/api/orgs/credentials', { headers: csrf({ 'content-type': 'application/json' }), body: JSON.stringify({ provider: 'anthropic', key: SECRET }) }));
+    expect(r.statusCode).toBe(200);
+    expect(audit.rows).toHaveLength(1);
+    const row = audit.rows[0]!;
+    expect(row).toMatchObject({ orgId: 'org1', actorUserId: 'u1', action: 'credential.set', target: 'anthropic' });
+    expect(row.payload).toMatchObject({ status: 'active' });
+    expect(typeof (row.payload as { fingerprint?: unknown }).fingerprint).toBe('string');
+    // CRITICAL: the audit payload (and the whole row) must NEVER contain the raw key.
+    expect(JSON.stringify(row)).not.toContain(SECRET);
+    expect(Object.values(row.payload)).not.toContain(SECRET);
+  });
+
+  it('DELETE records a credential.delete audit row (empty payload, no key)', async () => {
+    const audit = new FakeAudit();
+    const d = deps({ audit });
+    await (d.store as FakeStore).setVendorCredential('org1', 'anthropic', { ciphertext: 'x', nonce: 'y', authTag: 'z' }, 'fp', null);
+    const r = await run(d, fakeReq('DELETE', '/api/orgs/credentials/anthropic', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]).toMatchObject({ actorUserId: 'u1', action: 'credential.delete', target: 'anthropic', payload: {} });
+    expect(JSON.stringify(audit.rows[0])).not.toContain(SECRET);
+  });
+
+  it('a 404 DELETE (no key configured) records NOTHING (only successful ops are audited)', async () => {
+    const audit = new FakeAudit();
+    const r = await run(deps({ audit }), fakeReq('DELETE', '/api/orgs/credentials/anthropic', { headers: csrf() }));
+    expect(r.statusCode).toBe(404);
+    expect(audit.rows).toHaveLength(0);
+  });
+
+  it('a failing audit write is BEST-EFFORT: the credential op still succeeds (200), the error is logged', async () => {
+    const logged: Array<{ message: string }> = [];
+    const logger = { error: (message: string) => logged.push({ message }), info: () => {} };
+    const r = await run(deps({ audit: throwingAudit, logger }), fakeReq('POST', '/api/orgs/credentials', { headers: csrf(), body: JSON.stringify({ provider: 'anthropic', key: SECRET }) }));
+    expect(r.statusCode).toBe(200); // the key is sealed+stored; a broken audit must NOT fail the store
+    expect(logged.some((l) => l.message.includes('governance audit write failed'))).toBe(true);
+  });
+
+  it('GET /audit as ADMIN returns the events; the payloads carry NO raw key', async () => {
+    const audit = new FakeAudit();
+    const d = deps({ audit });
+    await run(d, fakeReq('POST', '/api/orgs/credentials', { headers: csrf(), body: JSON.stringify({ provider: 'anthropic', key: SECRET }) }));
+    const r = await run(d, fakeReq('GET', '/api/orgs/credentials/audit'));
+    expect(r.statusCode).toBe(200);
+    expect(r.json.events).toHaveLength(1);
+    expect(r.json.events[0]).toMatchObject({ action: 'credential.set', target: 'anthropic' });
+    expect(r.body).not.toContain(SECRET); // the audit read NEVER exposes the key
+  });
+
+  it('GET /audit as a NON-admin (member) → 403 (governance-sensitive, gated like the writes)', async () => {
+    const r = await run(deps({ role: 'member' }), fakeReq('GET', '/api/orgs/credentials/audit'));
+    expect(r.statusCode).toBe(403);
+  });
+
+  it('GET /audit with no audit sink wired → 200 with an empty list', async () => {
+    const d = deps();
+    delete (d as { audit?: unknown }).audit;
+    const r = await run(d, fakeReq('GET', '/api/orgs/credentials/audit'));
+    expect(r.statusCode).toBe(200);
+    expect(r.json.events).toEqual([]);
   });
 });
