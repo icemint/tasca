@@ -228,6 +228,37 @@ describe('coordination HTTP entry (node:http handler)', () => {
     expect(res.body).toBe('ok');
   });
 
+  it('GET /version → 200 with the baked build SHA (the CD deploy gate verifies the live container against this)', async () => {
+    const prev = process.env.TASCA_GIT_SHA;
+    process.env.TASCA_GIT_SHA = 'abc1234';
+    try {
+      const store = new CountingStore();
+      const handle = createRequestHandler(makeServerDeps(store, verifierFor('e1'), (w) => void w()));
+      const res = fakeRes();
+      await handle(fakeReq('GET', '/version', ''), res.res);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe('abc1234');
+    } finally {
+      if (prev === undefined) delete process.env.TASCA_GIT_SHA;
+      else process.env.TASCA_GIT_SHA = prev;
+    }
+  });
+
+  it('GET /version → "unknown" when no build SHA is baked in (local/dev image)', async () => {
+    const prev = process.env.TASCA_GIT_SHA;
+    delete process.env.TASCA_GIT_SHA;
+    try {
+      const store = new CountingStore();
+      const handle = createRequestHandler(makeServerDeps(store, verifierFor('e1'), (w) => void w()));
+      const res = fakeRes();
+      await handle(fakeReq('GET', '/version', ''), res.res);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe('unknown');
+    } finally {
+      if (prev !== undefined) process.env.TASCA_GIT_SHA = prev;
+    }
+  });
+
   it('rejects an unverifiable webhook with 401 and creates no task', async () => {
     const store = new CountingStore();
     const handle = createRequestHandler(makeServerDeps(store, verifierFor('e1'), (w) => void w()));

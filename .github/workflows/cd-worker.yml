@@ -52,7 +52,10 @@ jobs:
 
       - name: Compute image tag
         id: vars
-        run: echo "sha_tag=sha-$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        run: |
+          short="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "sha_tag=sha-${short}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -89,6 +92,7 @@ jobs:
           push: true
           build-args: |
             TASCA_BASE_IMAGE=${{ env.IMAGE_BASE }}:${{ steps.vars.outputs.sha_tag }}
+            GIT_SHA=${{ steps.vars.outputs.short_sha }}
           tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_tag }}
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
@@ -103,4 +107,10 @@ jobs:
           IMAGE: ${{ env.IMAGE }}
           SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
           COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_WORKER_RESOURCE_UUID }}
+          # Opt in to live-SHA verification: after Coolify reports a finished rollout,
+          # poll the worker's public /version until it equals EXPECT_SHA, else fail the
+          # job (catches a Coolify redeploy that silently re-served the old image). The
+          # app/site deploys share this script but don't set these, so they skip the check.
+          VERIFY_SHA_URL: https://api.tasca.dev/version
+          EXPECT_SHA: ${{ steps.vars.outputs.short_sha }}
         run: bash scripts/coolify-deploy.sh

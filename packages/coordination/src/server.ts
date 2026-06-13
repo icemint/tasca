@@ -293,6 +293,17 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       return;
     }
 
+    // The deployed build SHA (baked into the image at build time as TASCA_GIT_SHA).
+    // The CD deploy script polls this AFTER Coolify reports a finished rollout and
+    // fails the job unless it matches the pushed tag — so a rollout that silently
+    // re-served the OLD image (Coolify mutable-tag #5318) can't pass as success.
+    // no-store: the verify must read the live container, never a cached value.
+    if (req.method === 'GET' && req.url === '/version') {
+      res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+      res.end(process.env.TASCA_GIT_SHA ?? 'unknown');
+      return;
+    }
+
     if (req.method === 'POST' && req.url !== undefined && req.url in webhookRoutes) {
       const verifier = webhookRoutes[req.url];
       if (!verifier) {
