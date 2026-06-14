@@ -54,12 +54,14 @@ class CountingStore implements CoordinationStore {
   async markWebhookProcessed(_orgId: string, input: { platform: string; externalEventId: string }) {
     this.ledger.set(`${input.platform}:${input.externalEventId}`, 'processed');
   }
-  async getOrCreateTask(_orgId: string, input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }): Promise<Task> {
+  createdTaskOrgs: string[] = []; // the org each task was created under (regression: connection-scoped → connection's org)
+  async getOrCreateTask(orgId: string, input: { externalStoryId: string; platform: Task['platform']; repoRef?: string | null }): Promise<Task> {
     if (this.failCreateOnce) {
       this.failCreateOnce = false;
       throw new Error('db blip mid-orchestration');
     }
     const key = `${input.platform}:${input.externalStoryId}`;
+    this.createdTaskOrgs.push(orgId);
     const existing = this.tasksByStory.get(key);
     if (existing) return existing;
     this.createdTasks += 1;
@@ -624,7 +626,11 @@ describe('connection-scoped Shortcut intake (slice SC-1)', () => {
     expect(task).toBeDefined();
     // repo-link: the connection's project repo_ref is stamped onto the task (Shortcut carries none).
     expect(task!.repoRef).toBe('eltexsoft/widget-api');
-    // the delivery's org is the connection's org, NOT the default-tenant fallback.
+    // org-link (regression): the TASK is created under the CONNECTION's org, NOT the grandfather
+    // default tenant. A Shortcut event carries no workspace, so orchestrate must NOT re-resolve the
+    // org from the event (which would fall to org_default and orphan the task from the org's roster) —
+    // it uses the edge-resolved connection org that the ledger row also used.
+    expect(store.createdTaskOrgs).toEqual(['org-eltexsoft']);
     expect(store.ledgerStatus('shortcut', 'evt-sc1')).toBe('processed');
   });
 

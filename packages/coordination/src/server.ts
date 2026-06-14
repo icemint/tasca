@@ -340,7 +340,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     runAsync(async () => {
       try {
         for (const event of events) {
-          const outcome = await orchestrateTaskAssigned(event, deps);
+          // Thread the EDGE-resolved org (the connection's org for connection-scoped intake) so the
+          // task is created in the SAME tenant as the ledger row above — not re-resolved from the
+          // event, which for Shortcut has no workspace and would fall to the grandfather default org.
+          const outcome = await orchestrateTaskAssigned(event, deps, orgId);
           // Surface every NON-throwing terminal (no_candidate / lost_claim /
           // not_routable / failed / needs_attention / dispatched) at the boundary;
           // without this only the throw path below is observable.
