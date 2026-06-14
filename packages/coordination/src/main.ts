@@ -55,6 +55,7 @@ import { makeGitHubContentSource } from './github-content-source';
 import { makeShortcutContentSource } from './shortcut-content-source';
 import { shortcutVerifier } from './shortcut-verifier';
 import { githubVerifier } from './github-verifier';
+import { makeGitHubMergeHandler } from './github-merge';
 
 /** Minimal console logger with structured context (JSON line per event). */
 const logger: Logger = {
@@ -216,6 +217,21 @@ async function main(): Promise<void> {
   const ghVerifier = githubSecret ? githubVerifier(githubSecret, registeredGitHubIds, logger) : undefined;
   if (!githubSecret) {
     logger.info?.('GITHUB_WEBHOOK_SECRET unset — /webhooks/github disabled');
+  }
+
+  // GitHub PR-merge → task-done side-handler (board states). Gated on the SAME
+  // intake secret as the verifier (it is intake-side, not write-back): only the
+  // webhook secret + the store are needed. A merge auto-advances the linked task to
+  // `done` — best-effort, fail-closed, idempotent (see makeGitHubMergeHandler). The
+  // parse-only adapter needs no App creds, just the webhook secret.
+  let githubMergeHandler: ((rawBody: string) => Promise<void>) | undefined;
+  if (githubSecret) {
+    const mergeParser = new GitHubAdapter({ webhookSecret: githubSecret });
+    githubMergeHandler = makeGitHubMergeHandler({
+      store: new PgCoordinationStore(pool),
+      parser: mergeParser,
+      logger,
+    });
   }
 
   // GitHub write-back. Feature flag OFF by default: only when the App id AND the
@@ -522,6 +538,7 @@ async function main(): Promise<void> {
     logger,
     ...(ghVerifier ? { githubVerifier: ghVerifier } : {}),
     ...(githubInstallationHandler ? { githubInstallationHandler } : {}),
+    ...(githubMergeHandler ? { githubMergeHandler } : {}),
     ...(provisioner ? { provisioner } : {}),
     // Split dispatch: enqueue jobs for an agent-runner (NO in-process fallback — if no
     // runner claims within the wait bound, the task is retired to needs_attention). OFF by

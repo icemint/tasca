@@ -145,7 +145,12 @@ CREATE INDEX IF NOT EXISTS pull_request_task_idx ON pull_request (task_id);
 -- Makes recordPullRequest idempotent at the storage layer (ON CONFLICT DO NOTHING):
 -- the reaper's at-least-once finalize, or two reapers in a lease-overrun window, can
 -- re-record the SAME (task, url) without inserting a duplicate PR row.
-CREATE UNIQUE INDEX IF NOT EXISTS pull_request_task_url_uidx ON pull_request (task_id, url);`;
+CREATE UNIQUE INDEX IF NOT EXISTS pull_request_task_url_uidx ON pull_request (task_id, url);
+-- Backs getTaskIdByPullRequestUrl: the GitHub merge webhook arrives with only the PR
+-- html_url (globally unique per GitHub) and must resolve the owning org/task by it.
+-- Non-unique (the table's only uniqueness is (task_id, url)); the url is effectively
+-- unique in practice, so the lookup returns at most one row.
+CREATE INDEX IF NOT EXISTS pull_request_url_idx ON pull_request (url);`;
 
 /**
  * Multi-tenancy (Wave 2, slice 3a): the `organization` table + an `org_id` column on the

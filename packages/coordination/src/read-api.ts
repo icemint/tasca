@@ -164,6 +164,7 @@ function taskSummaryJson(t: TaskSummary) {
     repoRef: t.repoRef,
     claimedBy: t.claimedBy,
     failureCount: t.failureCount,
+    lastError: t.lastError,
   };
 }
 

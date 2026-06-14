@@ -47,6 +47,7 @@ function summary(t: Task): TaskSummary {
     repoRef: t.repoRef,
     claimedBy: t.claimedBy,
     failureCount: t.failureCount,
+    lastError: t.lastError,
   };
 }
 
@@ -260,6 +261,16 @@ describe('read-api handler', () => {
     expect(body).toHaveLength(1);
     expect(body[0].id).toBe('t1');
     expect(body[0].tierEstimate).toBe('hard');
+  });
+
+  it('GET /api/tasks includes lastError on each summary (the board’s Blocked reason)', async () => {
+    const store = new FakeStore();
+    store.tasks = [task('t1', { status: 'needs_attention', lastError: 'human needed' })];
+    const id = new FakeIdentity();
+    const r = fakeRes();
+    await readApiHandler(fakeReq('GET', '/api/tasks'), r.res, deps(store, id));
+    expect(r.statusCode).toBe(200);
+    expect(json(r)[0].lastError).toBe('human needed');
   });
 
   // The active-project filter is keyed on the SESSION user, so these run with a session wired

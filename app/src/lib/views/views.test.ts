@@ -29,6 +29,7 @@ import {
   SESSION_OK,
   htmlOf,
 } from '../test-support';
+import type { TaskSummary } from '../contract';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -127,20 +128,68 @@ describe('defaultTierForModel — client mirror of the backend model→tier tabl
 });
 
 describe('monitoring', () => {
-  it('boards real tasks, surfaces the needs-attention rail, and offers a live Refresh', async () => {
+  /** A TaskSummary fixture for one status (covering the 5-column remap). */
+  const taskAt = (status: TaskSummary['status'], id: string, lastError: string | null = null): TaskSummary => ({
+    id,
+    externalStoryId: `roadhero/agentic-playground#${id}`,
+    platform: 'github',
+    status,
+    tierEstimate: 'medium',
+    repoRef: 'roadhero/agentic-playground',
+    claimedBy: null,
+    failureCount: 0,
+    lastError,
+  });
+
+  it('boards real tasks across five operator columns and offers a live Refresh', async () => {
     stubFetch({ '/api/tasks': { body: [TASK_LRU, TASK_RETRY_ATTN] } });
     const r = await loadMonitoring();
     expect(r.kind).toBe('ok');
     // the done LRU task and the needs-attention retry task both show
     expect(htmlOf(r)).toContain('roadhero/agentic-playground#5');
     expect(htmlOf(r)).toContain('roadhero/agentic-playground#6');
-    expect(htmlOf(r)).toContain('2 failed attempts');
+    // the five operator columns
+    for (const label of ['Backlog', 'Blocked', 'In Progress', 'PR Opened', 'Completed']) {
+      expect(htmlOf(r)).toContain(label);
+    }
     // "Live" is honest: a real Refresh re-fetch, not a fake realtime claim
     expect(htmlOf(r)).toContain('data-act="refresh"');
-    expect(htmlOf(r)).toContain('data-ro="soon"'); // Re-tier / Escalate
     expect(htmlOf(r)).not.toContain('Coming soon');
     // scope indicator: with no active project the board reads "All projects"
     expect(htmlOf(r)).toContain('class="scope-tag">All projects');
+  });
+
+  it('the Blocked column shows each task’s why-blocked reason (lastError)', async () => {
+    const reason = 'no execution capacity: no agent-runner claimed within 30000ms';
+    stubFetch({ '/api/tasks': { body: [taskAt('needs_attention', 'blk', reason)] } });
+    const r = await loadMonitoring();
+    expect(r.kind).toBe('ok');
+    expect(htmlOf(r)).toContain('Blocked');
+    expect(htmlOf(r)).toContain('class="mt-reason"');
+    expect(htmlOf(r)).toContain(reason);
+  });
+
+  it('covers all eight statuses — every task lands in exactly one column, none orphaned', async () => {
+    const all: TaskSummary[] = [
+      taskAt('ingested', 'a'),
+      taskAt('routable', 'b'),
+      taskAt('needs_attention', 'c', 'human needed'),
+      taskAt('failed', 'd', 'execution failed'),
+      taskAt('claimed', 'e'),
+      taskAt('executing', 'f'),
+      taskAt('in_review', 'g'),
+      taskAt('done', 'h'),
+    ];
+    stubFetch({ '/api/tasks': { body: all } });
+    const r = await loadMonitoring();
+    expect(r.kind).toBe('ok');
+    // Every one of the eight tasks is rendered (none dropped by the status→column map).
+    for (const t of all) {
+      expect(htmlOf(r)).toContain(`roadhero/agentic-playground#${t.id}`);
+    }
+    // Column counts: Backlog 2, Blocked 2, In Progress 2, PR Opened 1, Completed 1.
+    const counts = (htmlOf(r).match(/class="moncol-ct">(\d+)</g) ?? []).map((m) => Number(m.match(/(\d+)/)![1]));
+    expect(counts).toEqual([2, 2, 2, 1, 1]);
   });
 
   it('names the active project in the board scope indicator (slice Project-B)', async () => {

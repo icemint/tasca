@@ -124,6 +124,15 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    */
   githubInstallationHandler?: (rawBody: string) => Promise<void>;
   /**
+   * Handles a GitHub `pull_request` merge event off the verified raw body: resolves
+   * the PR url back to its org/task and auto-advances that task to `done` (the board's
+   * PR Opened → Completed transition). Called on the github path only, AFTER a
+   * successful verify, BEFORE parse — best-effort and pure-additive (a merge event
+   * yields no AdapterEvents, so parse is unaffected; its own failure must NOT fail the
+   * webhook). Absent (github intake unconfigured) → not called.
+   */
+  githubMergeHandler?: (rawBody: string) => Promise<void>;
+  /**
    * The auth handler (GET/POST /api/auth/*). Consulted before the 404; returns
    * `true` when it owned the request. Absent (OAuth env unset) → /api/auth/*
    * falls through to a 404, keeping the feature flag OFF by default.
@@ -251,6 +260,22 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
         await handler(rawBody);
       } catch (err) {
         safeLog('coordination: github install handler failed', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // GitHub PR-merge events auto-advance the linked task to `done` (the board's
+    // PR Opened → Completed transition). Handle it on the verified body here, with
+    // the same best-effort discipline as the install handler: a merge event yields no
+    // AdapterEvents, so the ledger/parse path is unaffected, and the handler's own
+    // failure (or a duplicate redelivery) must NEVER fail the webhook.
+    if (verified.platform === 'github' && deps.githubMergeHandler) {
+      const handler = deps.githubMergeHandler;
+      try {
+        await handler(rawBody);
+      } catch (err) {
+        safeLog('coordination: github merge handler failed', {
           err: err instanceof Error ? err.message : String(err),
         });
       }

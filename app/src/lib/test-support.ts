@@ -83,6 +83,7 @@ export const TASK_LRU: TaskSummary = {
   repoRef: 'roadhero/agentic-playground',
   claimedBy: 'agent-elvis',
   failureCount: 0,
+  lastError: null,
 };
 
 export const TASK_RETRY_ATTN: TaskSummary = {
@@ -94,6 +95,7 @@ export const TASK_RETRY_ATTN: TaskSummary = {
   repoRef: 'roadhero/agentic-playground',
   claimedBy: 'agent-elvis',
   failureCount: 2,
+  lastError: 'no execution capacity: no agent-runner claimed within 30000ms',
 };
 
 export const TASK_LRU_DETAIL: TaskDetail = {

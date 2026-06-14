@@ -274,6 +274,31 @@ export const GitHubInstallationSchema = z
   })
   .passthrough();
 
+// ── GitHub pull_request merge events (board auto-complete) ────────────────────
+// When an agent's PR is merged, GitHub delivers a `pull_request` event with action
+// `closed` and `pull_request.merged === true`. That is the signal to auto-advance
+// the linked task to `done` (the board's PR Opened → Completed transition). Only the
+// fields the merge detector needs are modeled — the merged flag + the PR's html_url,
+// the globally-unique key the store resolves back to an org/task. Distinct from the
+// issues/issue_comment intake schema (this is an OUTPUT signal, not a work source).
+
+/** The pull_request object on a `closed` event: was it merged, and its canonical url. */
+export const GitHubPullRequestSchema = z
+  .object({
+    merged: z.boolean().optional(),
+    html_url: z.string().optional(),
+  })
+  .passthrough();
+
+/** The `pull_request` event envelope: top-level `action` + the `pull_request` object. */
+export const GitHubPullRequestEventSchema = z
+  .object({
+    action: z.string(),
+    pull_request: GitHubPullRequestSchema,
+  })
+  .passthrough();
+export type GitHubPullRequestEvent = z.infer<typeof GitHubPullRequestEventSchema>;
+
 /** The install-event envelope: top-level `action` + the `installation` object. */
 export const GitHubInstallationEventSchema = z
   .object({

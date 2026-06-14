@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
+  GitHubPullRequestEventSchema,
   GitHubWebhookSchema,
   type AdapterEvent,
   type PlatformAdapter,
@@ -290,6 +291,34 @@ export class GitHubAdapter implements PlatformAdapter {
   }
 
   /**
+   * Parse a verified webhook into a PR-merge signal, or null when it is not one.
+   * SEPARATE from `parseEvent` (the task-assignment AdapterEvent path): a merge is an
+   * OUTPUT signal that auto-advances the linked task to `done`, not a work source, so
+   * it does not produce an AdapterEvent. Recognizes ONLY `pull_request` action `closed`
+   * with `pull_request.merged === true`, and returns that PR's `html_url` (the globally
+   * unique key the store resolves back to an org/task). Validates the (untrusted)
+   * payload with the Zod schema FIRST; a non-PR / closed-but-not-merged / merged-without-
+   * a-url / malformed body returns null (never throws), so the server can call it
+   * unconditionally and act only on a non-null result.
+   */
+  parseMergedPr(verified: VerifiedEvent): { prUrl: string } | null {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(verified.rawBody);
+    } catch {
+      return null;
+    }
+    const parsed = GitHubPullRequestEventSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    const payload = parsed.data;
+    if (payload.action !== 'closed') return null;
+    if (payload.pull_request.merged !== true) return null;
+    const prUrl = payload.pull_request.html_url;
+    if (!prUrl) return null;
+    return { prUrl };
+  }
+
+  /**
    * Self-register a repository webhook at install:
    * `POST /repos/{owner}/{repo}/hooks` with the bearer `token` (REST v3).
    * Resolves to the created hook id (a string). Uses node:fetch — no new deps.
@@ -319,7 +348,10 @@ export class GitHubAdapter implements PlatformAdapter {
       body: JSON.stringify({
         name: 'web',
         active: true,
-        events: ['issues', 'issue_comment'],
+        // `pull_request` drives the board's merge auto-complete (parseMergedPr). An
+        // EXISTING GitHub App must also subscribe to the "Pull requests" event in its
+        // app settings — self-registration here only covers the REST repo-hook path.
+        events: ['issues', 'issue_comment', 'pull_request'],
         config: { url: input.webhookUrl, content_type: 'json', secret: input.secret },
       }),
     });

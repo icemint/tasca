@@ -62,6 +62,10 @@ export interface TaskSummary {
   repoRef: string | null;
   claimedBy: string | null;
   failureCount: number;
+  /** Human-readable reason for the current state (e.g. why it's blocked / needs a human).
+   *  Null unless set — the no-execution-capacity / failure paths write it. Surfaced on the
+   *  board's Blocked column. */
+  lastError: string | null;
 }
 
 export interface AgentDetail extends Agent {
@@ -91,9 +95,6 @@ export interface PullRequest {
 }
 
 export interface TaskDetail extends TaskSummary {
-  /** Human-readable reason for the current state (e.g. why it's in needs_attention).
-   *  Null unless set — today the no-execution-capacity path writes it. */
-  lastError: string | null;
   routingDecision: RoutingDecision | null;
   pullRequests: PullRequest[];
 }
