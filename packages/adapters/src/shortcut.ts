@@ -137,15 +137,17 @@ export class ShortcutAdapter implements PlatformAdapter {
    *     matching owner-add UUID (the assignment signal).
    *   - a story-comment CREATE (`entity_type` `'story-comment'` or `'story_comment'`
    *     — accepted both spellings defensively — && `action:'create'`) → one
-   *     `task.clarification_reply` (EM v1 slice 3). The parent story is the action's
-   *     `primary_id` (else the envelope's). The commenter is the envelope `member_id`
-   *     (the actor), carried as `replierMemberId` so the resume handler can drop the
-   *     EM's OWN round-tripped questions (replier == the project manager's member id).
+   *     `task.clarification_reply` (EM v1 slice 3). The parent story is the id of the
+   *     COMPANION `entity_type:'story', action:'update'` action (Shortcut pairs the
+   *     comment-create with a story update linking it via `changes.comment_ids.adds`)
+   *     — NOT `primary_id`, which on a comment webhook is the COMMENT id. The commenter
+   *     is the comment action's own `author_id`, carried as `replierMemberId` so the
+   *     resume handler drops the EM's OWN round-tripped questions (replier == the
+   *     project manager's member id) and re-triggers only on a real human reply.
    *
    * The top-level `member_id` is the ACTOR. For `task.assigned` it is the assignER,
    * never the assignee, so it is not consulted there (self-dedupe is a SEPARATE
-   * concern; see `dedupeBySelf`). For `task.clarification_reply` it IS the datum we
-   * want (who replied), so it rides the event as `replierMemberId`.
+   * concern; see `dedupeBySelf`).
    */
   parseEvent(verified: VerifiedEvent, agentExternalIds: ReadonlySet<string>): AdapterEvent[] {
     let raw: unknown;
@@ -164,6 +166,14 @@ export class ShortcutAdapter implements PlatformAdapter {
     // one event per pair so the coordination loop never double-dispatches.
     const seen = new Set<string>();
     const envelopeStoryId = payload.primary_id !== undefined ? String(payload.primary_id) : undefined;
+    // The PARENT story of a comment is NOT the envelope/comment `primary_id` (on a comment webhook that is
+    // the COMMENT id), and the comment action carries no story id of its own. Shortcut pairs the
+    // story-comment CREATE with a companion `entity_type:'story', action:'update'` whose `id` IS the story
+    // (its `changes.comment_ids.adds` link the two). So resolve the reply's story from that story action.
+    const commentParentStoryId = payload.actions.find(
+      (a) => a.entity_type === 'story' && a.id !== undefined
+    )?.id;
+    const replyStoryId = commentParentStoryId !== undefined ? String(commentParentStoryId) : undefined;
     // Emit at most one clarification-reply per story per envelope (a single comment
     // create can recur if Shortcut splits an envelope) so the resume isn't re-triggered twice.
     const seenReplyStories = new Set<string>();
@@ -175,16 +185,19 @@ export class ShortcutAdapter implements PlatformAdapter {
         (action.entity_type === 'story-comment' || action.entity_type === 'story_comment') &&
         action.action === 'create'
       ) {
-        // The PARENT story id is the action's `primary_id` (the comment's own `id` is the comment, not the
-        // story), else the envelope's. Skip if neither resolves (no parked task to re-trigger).
-        const storyId = action.primary_id !== undefined ? String(action.primary_id) : envelopeStoryId;
-        if (!storyId || seenReplyStories.has(storyId)) continue;
-        seenReplyStories.add(storyId);
+        // The parent story is the companion story action's id (resolved above) — never the comment's own
+        // id / the envelope primary_id. Skip if no story action is present (nothing to re-trigger).
+        if (!replyStoryId || seenReplyStories.has(replyStoryId)) continue;
+        seenReplyStories.add(replyStoryId);
+        // The commenter is THIS comment action's `author_id` (the human's member id, or the EM's own when
+        // the EM's questions round-trip). The resume dedup compares it to the manager's Shortcut member id
+        // so the EM never re-triggers itself. Fall back to the envelope actor if author_id is absent.
+        const replier = action.author_id ?? payload.member_id;
         events.push({
           type: 'task.clarification_reply',
           platform: 'shortcut',
-          externalStoryId: storyId,
-          ...(payload.member_id !== undefined ? { replierMemberId: payload.member_id } : {}),
+          externalStoryId: replyStoryId,
+          ...(replier !== undefined ? { replierMemberId: String(replier) } : {}),
         });
         continue;
       }

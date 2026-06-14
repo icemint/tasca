@@ -275,47 +275,68 @@ describe('ShortcutAdapter.parseEvent (owner_ids.adds → AdapterEvent)', () => {
 });
 
 describe('ShortcutAdapter.parseEvent — story-comment CREATE → task.clarification_reply (EM v1 slice 3)', () => {
-  // The parent story id is the action's primary_id; the commenter is the envelope member_id (the actor),
-  // carried as replierMemberId so the resume handler can drop the EM's OWN posted questions.
-  function commentPayload(entityType: string, overrides: Record<string, unknown> = {}): string {
+  // The REAL Shortcut comment webhook (from a live workspace): the envelope/comment `primary_id` is the
+  // COMMENT id; the parent STORY is a COMPANION `entity_type:'story', action:'update'` action whose `id`
+  // is the story (linked via changes.comment_ids.adds). The commenter is the comment action's `author_id`.
+  const HUMAN = 'member-human-5e15b28a';
+  function commentPayload(entityType: string, opts: { storyId?: number; commentId?: number; authorId?: string } = {}): string {
+    const storyId = opts.storyId ?? 90;
+    const commentId = opts.commentId ?? 92;
     return JSON.stringify(
       samplePayload({
-        actions: [{ id: 9001, entity_type: entityType, action: 'create', primary_id: 5001 }],
-        ...overrides,
+        primary_id: commentId, // envelope primary_id IS the comment id on a comment webhook
+        actions: [
+          { id: commentId, entity_type: entityType, action: 'create', author_id: opts.authorId ?? HUMAN },
+          { id: storyId, entity_type: 'story', action: 'update', changes: { comment_ids: { adds: [commentId] } } },
+        ],
       })
     );
   }
 
-  it("recognizes entity_type 'story-comment'", () => {
+  it("recognizes entity_type 'story-comment' — story from the companion story action, replier from author_id", () => {
     const events = adapter().parseEvent({ ok: true, rawBody: commentPayload('story-comment') }, REGISTERED);
     expect(events).toEqual([
-      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '5001', replierMemberId: ACTOR },
+      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '90', replierMemberId: HUMAN },
     ]);
   });
 
   it("recognizes the alternate spelling 'story_comment'", () => {
     const events = adapter().parseEvent({ ok: true, rawBody: commentPayload('story_comment') }, REGISTERED);
     expect(events).toEqual([
-      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '5001', replierMemberId: ACTOR },
+      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '90', replierMemberId: HUMAN },
     ]);
   });
 
-  it('falls back to the envelope primary_id when the action carries no primary_id', () => {
-    const body = JSON.stringify(
-      samplePayload({ primary_id: 7777, actions: [{ id: 9001, entity_type: 'story-comment', action: 'create' }] })
+  it('carries the comment author_id (not the envelope member_id) so the resume can drop the EM’s own questions', () => {
+    const events = adapter().parseEvent(
+      { ok: true, rawBody: commentPayload('story-comment', { authorId: 'member-em-johnny' }) },
+      REGISTERED
     );
-    const events = adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED);
-    expect(events).toEqual([
-      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '7777', replierMemberId: ACTOR },
-    ]);
+    expect(events[0]).toMatchObject({ type: 'task.clarification_reply', externalStoryId: '90', replierMemberId: 'member-em-johnny' });
+  });
+
+  it('does NOT use the envelope/comment primary_id as the story id', () => {
+    // The comment id (92) must never become the externalStoryId — that was the live bug.
+    const events = adapter().parseEvent({ ok: true, rawBody: commentPayload('story-comment', { storyId: 90, commentId: 92 }) }, REGISTERED);
+    expect(events[0]!.externalStoryId).toBe('90');
+    expect(events[0]!.externalStoryId).not.toBe('92');
+  });
+
+  it('skips when no companion story action resolves the parent story', () => {
+    const body = JSON.stringify(
+      samplePayload({ primary_id: 92, actions: [{ id: 92, entity_type: 'story-comment', action: 'create', author_id: HUMAN }] })
+    );
+    expect(adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED)).toEqual([]);
   });
 
   it('emits at most one reply per story across a split envelope', () => {
     const body = JSON.stringify(
       samplePayload({
+        primary_id: 92,
         actions: [
-          { id: 9001, entity_type: 'story-comment', action: 'create', primary_id: 5001 },
-          { id: 9002, entity_type: 'story-comment', action: 'create', primary_id: 5001 },
+          { id: 92, entity_type: 'story-comment', action: 'create', author_id: HUMAN },
+          { id: 93, entity_type: 'story-comment', action: 'create', author_id: HUMAN },
+          { id: 90, entity_type: 'story', action: 'update', changes: { comment_ids: { adds: [92, 93] } } },
         ],
       })
     );
@@ -324,7 +345,13 @@ describe('ShortcutAdapter.parseEvent — story-comment CREATE → task.clarifica
 
   it('does NOT emit a reply for a comment UPDATE (only create)', () => {
     const body = JSON.stringify(
-      samplePayload({ actions: [{ id: 9001, entity_type: 'story-comment', action: 'update', primary_id: 5001 }] })
+      samplePayload({
+        primary_id: 92,
+        actions: [
+          { id: 92, entity_type: 'story-comment', action: 'update', author_id: HUMAN },
+          { id: 90, entity_type: 'story', action: 'update', changes: { comment_ids: {} } },
+        ],
+      })
     );
     expect(adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED)).toEqual([]);
   });
