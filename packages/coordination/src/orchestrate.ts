@@ -310,17 +310,30 @@ export function workspaceForEvent(
  */
 export async function orchestrateTaskAssigned(
   event: AdapterEvent,
-  deps: OrchestrationDeps
+  deps: OrchestrationDeps,
+  // The org this delivery acts in, when the webhook EDGE already resolved it authoritatively — for
+  // connection-scoped intake that is the CONNECTION's org (a Shortcut event carries no workspace, so
+  // re-resolving it here via workspaceForEvent would wrongly fall to the grandfather default org and
+  // create the task in the wrong tenant — orphaning it from the org's hired roster). The caller
+  // (handleWebhook) computes this once and threads it so the ledger and the task share ONE org.
+  //
+  // SAFETY: the `?? resolveWebhookOrg(...)` fallback below MUST NOT serve connection-scoped intake —
+  // for a Shortcut connection it would resurrect the org_default grandfather and re-introduce exactly
+  // the tenant-isolation bug this parameter fixes. The only production caller (handleWebhook) ALWAYS
+  // threads the edge org; the fallback exists solely for the legacy single-secret route + tests, which
+  // deliberately exercise resolveWebhookOrg's own fail-closed (github) / grandfather (legacy) logic. A
+  // new connection-scoped caller must pass this — never rely on the fallback.
+  resolvedOrgId?: string
 ): Promise<OrchestrationOutcome> {
   const breakerThreshold = deps.breakerThreshold ?? 2;
   const perProjectLimit = deps.perProjectLimit ?? 1;
   const agentTimeoutMs = deps.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
 
-  // Resolve the org this event acts in (the webhook EDGE) from the workspace's connection. A
-  // GitHub event for an UNCONNECTED workspace fails CLOSED (slice 5c) — the App is installed but
-  // not bound to an org, so it must not run in the default tenant. Other platforms keep the
-  // grandfather default. Past this point every store call carries an explicit, real org.
-  const orgId = await resolveWebhookOrg(deps.store, event.platform, workspaceForEvent(event));
+  // Use the edge-resolved org when given; otherwise resolve from the event's workspace (GitHub +
+  // the legacy single-secret Shortcut route). A GitHub event for an UNCONNECTED workspace fails
+  // CLOSED (slice 5c) — the App is installed but not bound to an org, so it must not run in the
+  // default tenant. Past this point every store call carries an explicit, real org.
+  const orgId = resolvedOrgId ?? (await resolveWebhookOrg(deps.store, event.platform, workspaceForEvent(event)));
   if (orgId === null) {
     deps.logger?.info?.('coordination: github event for an unconnected workspace — fail closed', {
       platform: event.platform,
