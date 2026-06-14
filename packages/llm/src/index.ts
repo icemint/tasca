@@ -181,18 +181,30 @@ export interface EmClarityReview {
   questions: string[];
 }
 
-/** The EM clarity-judge port — given a story's title+body, decide whether requirements are clear enough
- *  to implement. The consumer (coordination's emReviewGate) wraps the call so ANY throw fails OPEN
- *  (skip → proceed): the EM must never block the pipeline. */
+/** One comment in a story's clarification thread (EM v1 slice 3): an author label + the comment text.
+ *  The EM re-review sees these (its own questions + the human's answer) so a satisfactory reply can clear
+ *  the story, instead of re-judging the unchanged title/body and looping to the cap. */
+export interface ClarificationComment {
+  author?: string;
+  text: string;
+}
+
+/** The EM clarity-judge port — given a story's title+body AND the clarification thread so far, decide
+ *  whether requirements are clear enough to implement. `thread` is empty on the first review (no comments
+ *  yet → judge on the story alone, unchanged behavior); after a reply it carries the Q&A so the judge can
+ *  clear. The consumer (coordination's emReviewGate) wraps the call so ANY throw fails OPEN (skip →
+ *  proceed): the EM must never block the pipeline. */
 export interface EmReviewerPort {
-  review(input: { title: string; body: string }): Promise<EmClarityReview>;
+  review(input: { title: string; body: string; thread?: ClarificationComment[] }): Promise<EmClarityReview>;
 }
 
 const EM_REVIEWER_SYSTEM =
   'You are an engineering manager reviewing a story before an engineer starts. Judge whether the ' +
-  'requirements are clear enough to implement without guessing. Respond with ONLY a JSON object: ' +
-  '{"clear": <boolean>, "questions": [<string>]}. If the story is clear, set "clear" true and ' +
-  '"questions" to []. If not, set "clear" false and list 1 to 4 specific clarifying questions. No prose.';
+  'requirements are clear enough to implement without guessing, given the story AND any clarification ' +
+  'thread (your earlier questions and the answers so far). A satisfactory answer to your questions makes ' +
+  'the story clear. Respond with ONLY a JSON object: {"clear": <boolean>, "questions": [<string>]}. If ' +
+  'the story is clear, set "clear" true and "questions" to []. If not, set "clear" false and list 1 to 4 ' +
+  'specific clarifying questions. No prose.';
 
 /** EmReviewerPort over AnthropicChat — the EM runs on the LATEST Anthropic model (Sonnet, deliberately
  *  stronger than the routing classifier's Haiku). The consumer's gate fails OPEN on any throw, so a bad
@@ -206,10 +218,20 @@ export class AnthropicEmReviewer implements EmReviewerPort {
     private readonly sink?: UsageSink
   ) {}
 
-  async review(input: { title: string; body: string }): Promise<EmClarityReview> {
+  async review(input: { title: string; body: string; thread?: ClarificationComment[] }): Promise<EmClarityReview> {
+    // The clarification thread (the EM's questions + the human's answers) is appended only when present, so
+    // the first review (no comments) judges on the story alone exactly as before. Each comment is rendered
+    // author-prefixed when the author is known, so the judge can tell its own questions from the reply.
+    const thread = input.thread ?? [];
+    const threadBlock =
+      thread.length > 0
+        ? `\n\nClarification thread so far:\n${thread
+            .map((c) => (c.author ? `${c.author}: ${c.text}` : c.text))
+            .join('\n')}`
+        : '';
     const { text, usage } = await this.chat.complete({
       system: EM_REVIEWER_SYSTEM,
-      prompt: `Title: ${input.title}\n\nBody: ${input.body}`,
+      prompt: `Story:\nTitle: ${input.title}\n\nBody: ${input.body}${threadBlock}`,
       maxTokens: 512,
     });
     if (usage) this.sink?.record(usage); // meter BEFORE parsing — a parse failure must not lose the spend

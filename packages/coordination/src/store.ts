@@ -412,6 +412,22 @@ export interface CoordinationStore {
    *  acted. */
   parkAwaitingClarification(orgId: string, taskId: string, round: number): Promise<boolean>;
 
+  /** EM reply-resume (EM v1 slice 3): the org-scoped task currently parked at `awaiting_clarification` for
+   *  a source story, or null. A reply comment on a story with no parked task (already routable / cleared /
+   *  dispatched / done, or never parked) returns null → the resume handler no-ops. Status-filtered so a
+   *  redelivered or late reply can't re-trigger a task that has already moved on. */
+  getAwaitingClarificationTask(
+    orgId: string,
+    platform: 'shortcut' | 'github' | 'linear',
+    externalStoryId: string
+  ): Promise<Task | null>;
+
+  /** EM reply-resume (EM v1 slice 3): transition a parked task back to `routable` so the orchestration
+   *  re-runs the EM gate. Guarded to `awaiting_clarification` (so a concurrent move wins and this no-ops).
+   *  Leaves `em_cleared` false (the gate must re-judge) AND `em_clarification_round` intact (the cap still
+   *  counts across resumes). Bumps version. Returns true if it acted. */
+  resumeFromClarification(orgId: string, taskId: string): Promise<boolean>;
+
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
   recordRoutingDecision(
     orgId: string,
@@ -1868,6 +1884,37 @@ export class PgCoordinationStore
           SET status = 'awaiting_clarification', em_clarification_round = $3, version = version + 1, updated_at = now()
         WHERE org_id = $1 AND id = $2 AND status = 'routable'`,
       [orgId, taskId, round]
+    );
+    return res.rowCount === 1;
+  }
+
+  async getAwaitingClarificationTask(
+    orgId: string,
+    platform: 'shortcut' | 'github' | 'linear',
+    externalStoryId: string
+  ): Promise<Task | null> {
+    // ORG-SCOPED + status-filtered: only a task PARKED at awaiting_clarification for this org's story
+    // matches. A reply on a story whose task already moved on (routable/cleared/dispatched/done) → no row
+    // → the resume no-ops. (platform, external_story_id) is the same key getOrCreateTask uses.
+    const res = await this.db.query<TaskRow>(
+      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round
+         FROM task
+        WHERE org_id = $1 AND platform = $2 AND external_story_id = $3 AND status = 'awaiting_clarification'`,
+      [orgId, platform, externalStoryId]
+    );
+    const row = res.rows[0];
+    return row ? mapTask(row) : null;
+  }
+
+  async resumeFromClarification(orgId: string, taskId: string): Promise<boolean> {
+    // awaiting_clarification → routable so the gate re-runs. em_cleared stays false (re-judge) and
+    // em_clarification_round is UNTOUCHED (the cap counts across resumes). Guarded to
+    // `awaiting_clarification` so a concurrent move wins and this no-ops. Breaker untouched.
+    const res = await this.db.query(
+      `UPDATE task
+          SET status = 'routable', version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status = 'awaiting_clarification'`,
+      [orgId, taskId]
     );
     return res.rowCount === 1;
   }

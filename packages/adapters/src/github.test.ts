@@ -207,7 +207,9 @@ describe('GitHubAdapter.parseEvent (issue_comment.created @-mention)', () => {
     );
     const events = adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED);
     expect(events).toHaveLength(1);
-    expect(events[0]!.agentExternalId).toBe(ELVIS_LOGIN);
+    const event = events[0]!;
+    // The GitHub adapter only emits task.assigned; narrow so `agentExternalId` is readable on the union.
+    expect(event.type === 'task.assigned' && event.agentExternalId).toBe(ELVIS_LOGIN);
   });
 
   it('returns [] for malformed / non-JSON bodies', () => {

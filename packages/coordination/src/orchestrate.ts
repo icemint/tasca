@@ -29,7 +29,7 @@ import {
   type ClaimPort,
   type LlmClassifierPort,
 } from '@tasca/routing';
-import type { AdapterEvent } from '@tasca/contracts';
+import type { AdapterEvent, TaskAssignedEvent } from '@tasca/contracts';
 import type { Task, TaskStatus } from '@tasca/domain';
 import type { DispatchQueue } from '@tasca/db';
 import { ExecutionError, type ExecutionPort } from '@tasca/execution';
@@ -84,9 +84,10 @@ export interface AuditSink {
   }): Promise<void>;
 }
 
-/** Resolves the task's title/body/labels for tier estimation from the event. */
+/** Resolves the task's title/body/labels for tier estimation from the event. Only the assignment path
+ *  fetches content (the clarification-reply path re-orchestrates through a synthetic task.assigned). */
 export interface TaskContentSource {
-  fetch(event: AdapterEvent): Promise<TaskInput>;
+  fetch(event: TaskAssignedEvent): Promise<TaskInput>;
 }
 
 /** A provisioned local checkout: the filesystem path + the repo's default branch. */
@@ -154,7 +155,7 @@ export interface OrchestrationDeps {
     orgId: string,
     task: Task,
     content: TaskInput,
-    event: AdapterEvent
+    event: TaskAssignedEvent
   ) => Promise<{ clear: boolean }>;
   /** Resolve the org's OWN Anthropic vault key for an agent run (BYOK agent execution, slice 3.5-A.2b).
    *  null → the org has NO key → the in-process spawn FAILS CLOSED (needs_attention, no agent). Present
@@ -321,7 +322,7 @@ export async function resolveWebhookOrg(
  * workspace as the orchestration path, keeping a delivery's ledger + tasks on one org.
  */
 export function workspaceForEvent(
-  event: Pick<AdapterEvent, 'platform' | 'externalStoryId' | 'repoHint'>
+  event: Pick<TaskAssignedEvent, 'platform' | 'externalStoryId' | 'repoHint'>
 ): string | null {
   if (event.platform !== 'github') return null;
   const fromHint = event.repoHint?.split('/')[0];
@@ -335,7 +336,7 @@ export function workspaceForEvent(
  * outcome so the caller (HTTP entry / tests) can assert on what happened.
  */
 export async function orchestrateTaskAssigned(
-  event: AdapterEvent,
+  event: TaskAssignedEvent,
   deps: OrchestrationDeps,
   // The org this delivery acts in, when the webhook EDGE already resolved it authoritatively — for
   // connection-scoped intake that is the CONNECTION's org (a Shortcut event carries no workspace, so

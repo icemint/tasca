@@ -7,7 +7,7 @@
 // the stub rather than crashing orchestration. The token is NEVER logged.
 
 import type { TaskInput } from '@tasca/routing';
-import type { AdapterEvent } from '@tasca/contracts';
+import type { TaskAssignedEvent } from '@tasca/contracts';
 import type { TaskContentSource } from './orchestrate';
 import type { CoordinationStore } from './store';
 import type { ConnectionCredentialResolver } from './vendor-credential';
@@ -30,7 +30,7 @@ export function makeShortcutContentSource(deps: {
   logger?: Logger;
 }): TaskContentSource {
   return {
-    async fetch(event: AdapterEvent): Promise<TaskInput> {
+    async fetch(event: TaskAssignedEvent): Promise<TaskInput> {
       // Non-shortcut, or a shortcut event with no stamped connection id (e.g. the legacy env-secret route,
       // or a re-driven task reconstructed without it) → fall back to the stub (safe/degraded).
       if (event.platform !== 'shortcut' || !event.shortcutConnectionId) {

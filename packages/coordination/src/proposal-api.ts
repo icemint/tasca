@@ -16,7 +16,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Task } from '@tasca/domain';
-import type { AdapterEvent } from '@tasca/contracts';
+import type { TaskAssignedEvent } from '@tasca/contracts';
 import { RoutingProposalSchema, TriageProposalSchema, DecompositionProposalSchema } from '@tasca/contracts';
 import {
   proposeRoutingFailSoft,
@@ -291,7 +291,7 @@ async function fetchContent(
   task: Task
 ): Promise<{ title: string; body: string; labels?: string[] } | null> {
   if (!deps.content) return null;
-  const event: AdapterEvent = {
+  const event: TaskAssignedEvent = {
     type: 'task.assigned',
     platform: task.platform,
     externalStoryId: task.externalStoryId,

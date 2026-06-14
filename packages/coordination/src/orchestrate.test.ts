@@ -201,6 +201,21 @@ class FakeStore implements CoordinationStore {
     t.version += 1; // breaker/failure_count deliberately untouched
     return true;
   }
+  async getAwaitingClarificationTask(_orgId: string, platform: Task['platform'], externalStoryId: string): Promise<Task | null> {
+    for (const t of this.tasks.values()) {
+      if (t.platform === platform && t.externalStoryId === externalStoryId && t.status === 'awaiting_clarification') return t;
+    }
+    return null;
+  }
+  resumeCalls: string[] = [];
+  async resumeFromClarification(_orgId: string, taskId: string): Promise<boolean> {
+    this.resumeCalls.push(taskId);
+    const t = this.tasks.get(taskId);
+    if (!t || t.status !== 'awaiting_clarification') return false;
+    t.status = 'routable'; // em_cleared + em_clarification_round untouched
+    t.version += 1;
+    return true;
+  }
   async recordRoutingDecision(_orgId: string, input: { taskId: string; winnerAgentId: string | null }) {
     this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
   }

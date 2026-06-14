@@ -130,14 +130,22 @@ export class ShortcutAdapter implements PlatformAdapter {
 
   /**
    * Parse a verified webhook into normalized `AdapterEvent`s. Validates the
-   * payload with the Zod schema FIRST (malformed → []), then scans `actions[]`
-   * for `entity_type:'story'` && `action:'update'` whose
-   * `changes.owner_ids.adds` intersects the registered `agentExternalIds` set.
-   * Each matching owner-add UUID yields one `task.assigned` event.
+   * payload with the Zod schema FIRST (malformed → []), then scans `actions[]`:
    *
-   * Critically: the top-level `member_id` is the ACTOR, never the assignee — it
-   * is NOT consulted here. Self-dedupe (dropping our own round-tripped writes by
-   * actor) is a SEPARATE concern; see `dedupeBySelf`.
+   *   - `entity_type:'story'` && `action:'update'` whose `changes.owner_ids.adds`
+   *     intersects the registered `agentExternalIds` set → one `task.assigned` per
+   *     matching owner-add UUID (the assignment signal).
+   *   - a story-comment CREATE (`entity_type` `'story-comment'` or `'story_comment'`
+   *     — accepted both spellings defensively — && `action:'create'`) → one
+   *     `task.clarification_reply` (EM v1 slice 3). The parent story is the action's
+   *     `primary_id` (else the envelope's). The commenter is the envelope `member_id`
+   *     (the actor), carried as `replierMemberId` so the resume handler can drop the
+   *     EM's OWN round-tripped questions (replier == the project manager's member id).
+   *
+   * The top-level `member_id` is the ACTOR. For `task.assigned` it is the assignER,
+   * never the assignee, so it is not consulted there (self-dedupe is a SEPARATE
+   * concern; see `dedupeBySelf`). For `task.clarification_reply` it IS the datum we
+   * want (who replied), so it rides the event as `replierMemberId`.
    */
   parseEvent(verified: VerifiedEvent, agentExternalIds: ReadonlySet<string>): AdapterEvent[] {
     let raw: unknown;
@@ -155,16 +163,40 @@ export class ShortcutAdapter implements PlatformAdapter {
     // across multiple story.update actions in a single envelope — emit at most
     // one event per pair so the coordination loop never double-dispatches.
     const seen = new Set<string>();
-    const externalStoryId = payload.primary_id !== undefined ? String(payload.primary_id) : undefined;
+    const envelopeStoryId = payload.primary_id !== undefined ? String(payload.primary_id) : undefined;
+    // Emit at most one clarification-reply per story per envelope (a single comment
+    // create can recur if Shortcut splits an envelope) so the resume isn't re-triggered twice.
+    const seenReplyStories = new Set<string>();
 
     for (const action of payload.actions) {
+      // (2) Story-comment CREATE → a clarification reply (EM v1 slice 3). Both `story-comment` and
+      // `story_comment` spellings are accepted (the outgoing-webhook docs are not explicit on which).
+      if (
+        (action.entity_type === 'story-comment' || action.entity_type === 'story_comment') &&
+        action.action === 'create'
+      ) {
+        // The PARENT story id is the action's `primary_id` (the comment's own `id` is the comment, not the
+        // story), else the envelope's. Skip if neither resolves (no parked task to re-trigger).
+        const storyId = action.primary_id !== undefined ? String(action.primary_id) : envelopeStoryId;
+        if (!storyId || seenReplyStories.has(storyId)) continue;
+        seenReplyStories.add(storyId);
+        events.push({
+          type: 'task.clarification_reply',
+          platform: 'shortcut',
+          externalStoryId: storyId,
+          ...(payload.member_id !== undefined ? { replierMemberId: payload.member_id } : {}),
+        });
+        continue;
+      }
+
+      // (1) Story UPDATE owner_ids.adds ∩ registered agents → task.assigned.
       if (action.entity_type !== 'story' || action.action !== 'update') continue;
       const adds = action.changes?.owner_ids?.adds;
       if (!adds || adds.length === 0) continue;
 
       // The story id is the action's own id when present, else the envelope's
       // primary_id. Skip if neither is resolvable (no story to route to).
-      const storyId = action.id !== undefined ? String(action.id) : externalStoryId;
+      const storyId = action.id !== undefined ? String(action.id) : envelopeStoryId;
       if (!storyId) continue;
 
       for (const ownerId of adds) {
@@ -311,6 +343,43 @@ export class ShortcutAdapter implements PlatformAdapter {
       name: json.name,
       description: typeof json.description === 'string' ? json.description : null,
     };
+  }
+
+  /**
+   * Read a story's comment thread (EM v1 slice 3) for the EM's conversation-aware re-review:
+   * `GET /api/v3/stories/:storyId` returns the story WITH its `comments` array, each `{ text, author_id }`.
+   * Returns the comments in document order as `{ author?, text }` (the author is the commenter's member id
+   * when present — names aren't on the story object). Throws on a non-2xx so the gate can fall back to
+   * judging on the story alone (fail-soft). The token rides ONLY in the header — never logged. The shape
+   * is external input: each comment is minimally validated (a non-string/empty `text` is skipped), so a
+   * malformed entry degrades to fewer comments rather than throwing.
+   */
+  async fetchStoryComments(input: { token: string; storyId: string }): Promise<
+    Array<{ author?: string; text: string }>
+  > {
+    const res = await this.fetchImpl(
+      `${this.apiBase}/api/v3/stories/${encodeURIComponent(input.storyId)}`,
+      {
+        method: 'GET',
+        headers: { 'Shortcut-Token': input.token },
+      }
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`shortcut fetchStoryComments failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+    const json = (await res.json()) as { comments?: unknown };
+    if (!Array.isArray(json.comments)) return [];
+    const out: Array<{ author?: string; text: string }> = [];
+    for (const raw of json.comments) {
+      const c = raw as { text?: unknown; author_id?: unknown };
+      if (typeof c.text !== 'string' || c.text.trim().length === 0) continue;
+      out.push({
+        text: c.text,
+        ...(typeof c.author_id === 'string' && c.author_id.length > 0 ? { author: c.author_id } : {}),
+      });
+    }
+    return out;
   }
 
   /**

@@ -19,6 +19,7 @@ import { AdapterEventSchema, type AdapterEvent } from '@tasca/contracts';
 import type { CoordinationStore } from './store';
 import type { WebhookVerifier, Logger } from './ports';
 import { orchestrateTaskAssigned, workspaceForEvent, resolveWebhookOrg, type OrchestrationDeps } from './orchestrate';
+import { handleClarificationReply } from './em-resume';
 import { readApiHandler, type ReadApiDeps } from './read-api';
 import { writeApiHandler, type WriteApiDeps } from './write-api';
 import { orgApiHandler, type OrgApiDeps } from './org-api';
@@ -300,11 +301,12 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     for (const candidate of verifier.parse(verified)) {
       const parsed = AdapterEventSchema.safeParse(candidate);
       if (parsed.success) {
-        // Connection-scoped delivery (slice SC-1/SC-2): stamp the connection's project repo (so the task
-        // gets the right repo — Shortcut events carry no repoHint of their own) AND the connection id (so
-        // the content source can resolve THIS connection's read token to fetch the story title/body).
+        // Connection-scoped delivery (slice SC-1/SC-2): for a task.assigned, stamp the connection's project
+        // repo (so the task gets the right repo — Shortcut events carry no repoHint of their own) AND the
+        // connection id (so the content source can resolve THIS connection's read token). A clarification
+        // reply (slice 3) carries no such fields — the resume handler reads the connection scope directly.
         events.push(
-          connectionContext
+          connectionContext && parsed.data.type === 'task.assigned'
             ? {
                 ...parsed.data,
                 repoHint: connectionContext.repoRef ?? undefined,
@@ -320,7 +322,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // fallback. For the legacy env-secret route, resolve at the webhook EDGE from the first event's
     // workspace (its connection's org, or the default org for an unconnected workspace). A zero-event
     // delivery (a non-task webhook) has no workspace → default org, sufficient to dedup its redeliveries.
-    const ledgerWorkspace = events[0] ? workspaceForEvent(events[0]) : null;
+    // Only a task.assigned carries a resolvable workspace (a reply is Shortcut-only → null anyway). The
+    // workspace scopes the legacy env-secret route's org; connection-scoped deliveries use connectionContext.
+    const firstAssigned = events.find((e) => e.type === 'task.assigned');
+    const ledgerWorkspace = firstAssigned ? workspaceForEvent(firstAssigned) : null;
     const orgId = connectionContext
       ? connectionContext.orgId
       : await resolveWebhookOrg(deps.store, verified.platform, ledgerWorkspace);
@@ -376,6 +381,24 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
           // Thread the EDGE-resolved org (the connection's org for connection-scoped intake) so the
           // task is created in the SAME tenant as the ledger row above — not re-resolved from the
           // event, which for Shortcut has no workspace and would fall to the grandfather default org.
+          if (event.type === 'task.clarification_reply') {
+            // EM reply-resume (slice 3): re-trigger the EM review on the parked story. It is a side path off
+            // the CONNECTION-scoped intake (the resume needs the connection's repo + id to re-orchestrate);
+            // a reply on the legacy env-secret route has no connection scope, so it is ignored.
+            if (!connectionContext) {
+              safeInfo('coordination: clarification reply on the legacy route — ignored (no connection scope)', {
+                externalStoryId: event.externalStoryId,
+              });
+              continue;
+            }
+            const outcome = await handleClarificationReply(event, deps, orgId, connectionContext, logger);
+            logger.info?.('coordination: clarification-reply outcome', {
+              platform: event.platform,
+              externalEventId: verified.externalEventId,
+              kind: outcome.kind,
+            });
+            continue;
+          }
           const outcome = await orchestrateTaskAssigned(event, deps, orgId);
           // Surface every NON-throwing terminal (no_candidate / lost_claim /
           // not_routable / failed / needs_attention / dispatched) at the boundary;

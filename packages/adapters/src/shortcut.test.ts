@@ -1,7 +1,13 @@
 import { createHmac } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
-import { ShortcutWebhookV1Schema } from '@tasca/contracts';
+import { ShortcutWebhookV1Schema, type AdapterEvent, type TaskAssignedEvent } from '@tasca/contracts';
 import { ShortcutAdapter } from './index';
+
+/** Narrow the parsed union to the task.assigned events (the owner-add path) so a test can read
+ *  `agentExternalId`. A clarification-reply event would be filtered out. */
+function assigned(events: AdapterEvent[]): TaskAssignedEvent[] {
+  return events.filter((e): e is TaskAssignedEvent => e.type === 'task.assigned');
+}
 
 // Pure unit tests for the ungated Shortcut intake — no live Shortcut. Covers:
 //   - HMAC verify: valid passes, tampered body fails, missing/!= sig rejects
@@ -170,7 +176,7 @@ describe('ShortcutAdapter.parseEvent (owner_ids.adds → AdapterEvent)', () => {
         ],
       })
     );
-    const events = adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED);
+    const events = assigned(adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED));
     expect(events.map((e) => e.agentExternalId)).toEqual([ELVIS, MONA]);
     expect(events.every((e) => e.externalStoryId === '5001')).toBe(true);
   });
@@ -188,7 +194,7 @@ describe('ShortcutAdapter.parseEvent (owner_ids.adds → AdapterEvent)', () => {
         ],
       })
     );
-    const events = adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED);
+    const events = assigned(adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED));
     expect(events.map((e) => e.agentExternalId)).toEqual([ELVIS]);
   });
 
@@ -265,6 +271,68 @@ describe('ShortcutAdapter.parseEvent (owner_ids.adds → AdapterEvent)', () => {
     expect(events).toEqual([
       { type: 'task.assigned', platform: 'shortcut', externalStoryId: '5001', agentExternalId: ELVIS },
     ]);
+  });
+});
+
+describe('ShortcutAdapter.parseEvent — story-comment CREATE → task.clarification_reply (EM v1 slice 3)', () => {
+  // The parent story id is the action's primary_id; the commenter is the envelope member_id (the actor),
+  // carried as replierMemberId so the resume handler can drop the EM's OWN posted questions.
+  function commentPayload(entityType: string, overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify(
+      samplePayload({
+        actions: [{ id: 9001, entity_type: entityType, action: 'create', primary_id: 5001 }],
+        ...overrides,
+      })
+    );
+  }
+
+  it("recognizes entity_type 'story-comment'", () => {
+    const events = adapter().parseEvent({ ok: true, rawBody: commentPayload('story-comment') }, REGISTERED);
+    expect(events).toEqual([
+      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '5001', replierMemberId: ACTOR },
+    ]);
+  });
+
+  it("recognizes the alternate spelling 'story_comment'", () => {
+    const events = adapter().parseEvent({ ok: true, rawBody: commentPayload('story_comment') }, REGISTERED);
+    expect(events).toEqual([
+      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '5001', replierMemberId: ACTOR },
+    ]);
+  });
+
+  it('falls back to the envelope primary_id when the action carries no primary_id', () => {
+    const body = JSON.stringify(
+      samplePayload({ primary_id: 7777, actions: [{ id: 9001, entity_type: 'story-comment', action: 'create' }] })
+    );
+    const events = adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED);
+    expect(events).toEqual([
+      { type: 'task.clarification_reply', platform: 'shortcut', externalStoryId: '7777', replierMemberId: ACTOR },
+    ]);
+  });
+
+  it('emits at most one reply per story across a split envelope', () => {
+    const body = JSON.stringify(
+      samplePayload({
+        actions: [
+          { id: 9001, entity_type: 'story-comment', action: 'create', primary_id: 5001 },
+          { id: 9002, entity_type: 'story-comment', action: 'create', primary_id: 5001 },
+        ],
+      })
+    );
+    expect(adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED)).toHaveLength(1);
+  });
+
+  it('does NOT emit a reply for a comment UPDATE (only create)', () => {
+    const body = JSON.stringify(
+      samplePayload({ actions: [{ id: 9001, entity_type: 'story-comment', action: 'update', primary_id: 5001 }] })
+    );
+    expect(adapter().parseEvent({ ok: true, rawBody: body }, REGISTERED)).toEqual([]);
+  });
+
+  it('does NOT emit a reply for a story update (the owner-add path is unaffected)', () => {
+    // The default sample is a story update → a task.assigned, never a clarification reply.
+    const events = adapter().parseEvent({ ok: true, rawBody: JSON.stringify(samplePayload()) }, REGISTERED);
+    expect(events.every((e) => e.type === 'task.assigned')).toBe(true);
   });
 });
 
@@ -478,6 +546,58 @@ describe('ShortcutAdapter.fetchStory (REST v3, injected fetch — slice SC-2)', 
       new Response(JSON.stringify({ description: 'no name' }), { status: 200 })) as unknown as typeof fetch;
     const a = adapter({ fetchImpl: fakeFetch });
     await expect(a.fetchStory({ token: 't', storyId: '1' })).rejects.toThrow(/missing story name/i);
+  });
+});
+
+describe('ShortcutAdapter.fetchStoryComments (REST v3, injected fetch — slice 3)', () => {
+  it('reads the story comments (text + author_id), in order, with the token in the header', async () => {
+    let captured: { url: string; init: RequestInit } | undefined;
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init: init ?? {} };
+      return new Response(
+        JSON.stringify({
+          name: 'Story',
+          comments: [
+            { text: 'Which service?', author_id: 'em-id' },
+            { text: 'The billing service.', author_id: 'human-id' },
+          ],
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+    const a = adapter({ apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+    const out = await a.fetchStoryComments({ token: 'tok_em_SECRET', storyId: '5001' });
+    expect(out).toEqual([
+      { text: 'Which service?', author: 'em-id' },
+      { text: 'The billing service.', author: 'human-id' },
+    ]);
+    expect(captured?.url).toBe('https://api.example.test/api/v3/stories/5001');
+    const headers = captured?.init.headers as Record<string, string>;
+    expect(headers['Shortcut-Token']).toBe('tok_em_SECRET');
+  });
+
+  it('skips malformed comments (non-string/empty text) and tolerates a missing author', async () => {
+    const fakeFetch = (async () =>
+      new Response(
+        JSON.stringify({ comments: [{ text: '' }, { text: 42 }, { text: 'ok, no author' }] }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    expect(await a.fetchStoryComments({ token: 't', storyId: '1' })).toEqual([{ text: 'ok, no author' }]);
+  });
+
+  it('returns [] when the story has no comments array', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ name: 'no comments' }), { status: 200 })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    expect(await a.fetchStoryComments({ token: 't', storyId: '1' })).toEqual([]);
+  });
+
+  it('throws on a non-2xx (the gate falls back to the story alone)', async () => {
+    const fakeFetch = (async () =>
+      new Response('boom', { status: 500, statusText: 'Server Error' })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    await expect(a.fetchStoryComments({ token: 't', storyId: '1' })).rejects.toThrow(/500/);
   });
 });
 
