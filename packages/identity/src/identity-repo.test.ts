@@ -383,6 +383,68 @@ run('PgIdentityRepository — versioned agent writes (optimistic concurrency)', 
     expect(got!.agent.version).toBe(1);
   });
 
+  it('updateCapabilityProfile persists the tier range + structured specialties when provided', async () => {
+    const { agent } = await make();
+    const out = await repo.updateCapabilityProfile(
+      agent.id,
+      {
+        maxTier: 'hard',
+        concurrencyLimit: 2,
+        costCeiling: null,
+        tiersCovered: ['low', 'medium', 'hard'],
+        languageSpecialties: ['typescript', 'python'],
+        frameworkSpecialties: ['react'],
+      },
+      0
+    );
+    expect(out).toEqual({ ok: true, version: 1 });
+    const prof = await repo.getCapabilityProfile(agent.id);
+    expect(prof).toMatchObject({
+      maxTier: 'hard',
+      tiersCovered: ['low', 'medium', 'hard'],
+      languageSpecialties: ['typescript', 'python'],
+      frameworkSpecialties: ['react'],
+    });
+  });
+
+  it('updateCapabilityProfile PRESERVES specialties when the patch omits them (edit the three numerics alone)', async () => {
+    const { agent } = await make();
+    // First set specialties…
+    await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'medium', concurrencyLimit: 1, costCeiling: null, languageSpecialties: ['go'], frameworkSpecialties: ['fastify'] },
+      0
+    );
+    // …then edit only maxTier/concurrency/cost — the omitted specialty fields must NOT be wiped.
+    const out = await repo.updateCapabilityProfile(agent.id, { maxTier: 'hard', concurrencyLimit: 3, costCeiling: 10 }, 1);
+    expect(out).toEqual({ ok: true, version: 2 });
+    const prof = await repo.getCapabilityProfile(agent.id);
+    expect(prof).toMatchObject({
+      maxTier: 'hard',
+      concurrencyLimit: 3,
+      languageSpecialties: ['go'], // preserved, not wiped to []
+      frameworkSpecialties: ['fastify'],
+    });
+  });
+
+  it('a PRESENT empty specialty array CLEARS it (absent=preserve, []=clear — the other half of the contract)', async () => {
+    const { agent } = await make();
+    await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'medium', concurrencyLimit: 1, costCeiling: null, languageSpecialties: ['go', 'rust'] },
+      0
+    );
+    // A present [] is a deliberate clear (distinct from omitting the field, which preserves).
+    const out = await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'medium', concurrencyLimit: 1, costCeiling: null, languageSpecialties: [] },
+      1
+    );
+    expect(out).toEqual({ ok: true, version: 2 });
+    const prof = await repo.getCapabilityProfile(agent.id);
+    expect(prof!.languageSpecialties).toEqual([]); // cleared, not preserved
+  });
+
   it('editing an agent that has NO profile row creates+persists it (no false success)', async () => {
     const { agent } = await make(); // createAgent does not seed a capability_profile
     expect(await repo.getCapabilityProfile(agent.id)).toBeNull(); // none yet

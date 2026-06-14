@@ -131,6 +131,22 @@ export interface CapabilityProfile {
   avgLatencyMs: number | null;
 }
 
+// Specialty taxonomy — the canonical, STRUCTURED vocabulary the capability editor offers and the
+// (future) EM router matches against. Specialties are not free text: both the editor and the router
+// import these constants, so they agree on the same terms. Extend the lists here (the one source).
+export const LANGUAGE_SPECIALTIES = [
+  'typescript', 'javascript', 'python', 'go', 'rust', 'java', 'kotlin', 'swift', 'ruby', 'csharp', 'cpp', 'php', 'sql',
+] as const;
+export type LanguageSpecialty = (typeof LANGUAGE_SPECIALTIES)[number];
+export const FRAMEWORK_SPECIALTIES = [
+  'react', 'vue', 'svelte', 'astro', 'node', 'express', 'fastify', 'nest', 'next', 'django', 'flask', 'rails', 'spring', 'dotnet',
+] as const;
+export type FrameworkSpecialty = (typeof FRAMEWORK_SPECIALTIES)[number];
+export const isLanguageSpecialty = (s: string): s is LanguageSpecialty =>
+  (LANGUAGE_SPECIALTIES as readonly string[]).includes(s);
+export const isFrameworkSpecialty = (s: string): s is FrameworkSpecialty =>
+  (FRAMEWORK_SPECIALTIES as readonly string[]).includes(s);
+
 export interface Agent {
   id: string;
   name: string;

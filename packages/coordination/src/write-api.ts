@@ -15,7 +15,7 @@
 // (503) — never silently accept a mutation without authentication.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { TIERS, type Tier, type AgentStatus } from '@tasca/domain';
+import { TIERS, isLanguageSpecialty, isFrameworkSpecialty, type Tier, type AgentStatus } from '@tasca/domain';
 import type { AgentWriteOutcome, CapabilityProfilePatch } from '@tasca/identity';
 import type { CoordinationStore, TaskWriteOutcome } from './store';
 import type { SessionInfo } from './read-api';
@@ -295,7 +295,10 @@ async function handleWrite(
         sendJson(res, 503, { error: 'agent writes not configured' });
         return;
       }
-      let body: { version?: unknown; maxTier?: unknown; concurrencyLimit?: unknown; costCeiling?: unknown };
+      let body: {
+        version?: unknown; maxTier?: unknown; concurrencyLimit?: unknown; costCeiling?: unknown;
+        tiersCovered?: unknown; languageSpecialties?: unknown; frameworkSpecialties?: unknown;
+      };
       try {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
@@ -321,12 +324,37 @@ async function handleWrite(
           await audit('agent.profile', 'bad_request');
           return;
         }
+        // Optional capability fields (the editor's tier-range + structured specialties). The server
+        // is the authority: specialties MUST come from the @tasca/domain taxonomy (not free text),
+        // and a covered tier may not exceed maxTier. Absent fields are left unchanged downstream.
+        const langs = cleanSpecialties(body.languageSpecialties, isLanguageSpecialty);
+        const frameworks = cleanSpecialties(body.frameworkSpecialties, isFrameworkSpecialty);
+        const tiers = cleanTiersCovered(body.tiersCovered, maxTier as Tier);
+        if (langs === 'invalid' || frameworks === 'invalid' || tiers === 'invalid') {
+          sendJson(res, 400, { error: 'specialties must come from the known taxonomy; tiersCovered must be valid tiers ≤ maxTier' });
+          await audit('agent.profile', 'bad_request');
+          return;
+        }
         const outcome = await deps.identity.updateCapabilityProfile(
           route.id,
-          { maxTier: maxTier as Tier, concurrencyLimit, costCeiling },
+          {
+            maxTier: maxTier as Tier,
+            concurrencyLimit,
+            costCeiling,
+            ...(tiers !== undefined ? { tiersCovered: tiers } : {}),
+            ...(langs !== undefined ? { languageSpecialties: langs } : {}),
+            ...(frameworks !== undefined ? { frameworkSpecialties: frameworks } : {}),
+          },
           body.version
         );
-        await audit('agent.profile', sendAgentOutcome(res, outcome), { maxTier, concurrencyLimit, costCeiling });
+        await audit('agent.profile', sendAgentOutcome(res, outcome), {
+          maxTier,
+          concurrencyLimit,
+          costCeiling,
+          ...(tiers !== undefined ? { tiersCovered: tiers } : {}),
+          ...(langs !== undefined ? { languageSpecialties: langs } : {}),
+          ...(frameworks !== undefined ? { frameworkSpecialties: frameworks } : {}),
+        });
         return;
       }
       const status: AgentStatus = route.kind === 'pause' ? 'paused' : 'active';
@@ -340,4 +368,31 @@ async function handleWrite(
 /** True for an integer or explicit null (the editable numeric profile fields). */
 function isIntOrNull(v: unknown): v is number | null {
   return v === null || (typeof v === 'number' && Number.isInteger(v));
+}
+
+/** Validate an optional specialty array against a domain-taxonomy guard. Returns undefined when the
+ *  field was absent (→ leave unchanged), 'invalid' on any non-taxonomy entry, else the deduped list. */
+function cleanSpecialties(v: unknown, guard: (s: string) => boolean): string[] | undefined | 'invalid' {
+  if (v === undefined) return undefined;
+  // Bound the work before walking/stringifying: a valid set can't exceed the taxonomy size, so a
+  // long array is malformed (dupes/garbage) — reject it rather than process an unbounded payload.
+  if (!Array.isArray(v) || v.length > 64) return 'invalid';
+  if (v.some((x) => typeof x !== 'string' || !guard(x))) return 'invalid';
+  return [...new Set(v as string[])];
+}
+
+/** Validate an optional tiers-covered array. Each entry must be a known tier and not exceed maxTier
+ *  (a covered tier above the cap is incoherent). Returns undefined when absent, 'invalid' on a bad
+ *  entry, else the deduped list. */
+function cleanTiersCovered(v: unknown, maxTier: Tier): Tier[] | undefined | 'invalid' {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || v.length > TIERS.length) return 'invalid';
+  const maxIdx = TIERS.indexOf(maxTier);
+  const out: Tier[] = [];
+  for (const t of v) {
+    if (typeof t !== 'string' || !(TIERS as readonly string[]).includes(t)) return 'invalid';
+    if (TIERS.indexOf(t as Tier) > maxIdx) return 'invalid';
+    out.push(t as Tier);
+  }
+  return [...new Set(out)];
 }
