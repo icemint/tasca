@@ -280,6 +280,40 @@ export class ShortcutAdapter implements PlatformAdapter {
   }
 
   /**
+   * Read a story's title + body for tier estimation (slice SC-2):
+   * `GET /api/v3/stories/:storyId` with the connection's workspace READ token in
+   * the `Shortcut-Token` header. Returns the story `name` (title) + `description`
+   * (body, null when empty). Throws on a non-2xx so the content source can fall
+   * back to the stub. The token rides ONLY in the header — never logged here. The
+   * response shape is minimally validated (it is external input): a missing/wrong-
+   * typed `name` is a malformed story → throw.
+   */
+  async fetchStory(input: { token: string; storyId: string }): Promise<{
+    name: string;
+    description: string | null;
+  }> {
+    const res = await this.fetchImpl(
+      `${this.apiBase}/api/v3/stories/${encodeURIComponent(input.storyId)}`,
+      {
+        method: 'GET',
+        headers: { 'Shortcut-Token': input.token },
+      }
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`shortcut fetchStory failed: ${res.status} ${res.statusText} ${detail}`.trim());
+    }
+    const json = (await res.json()) as { name?: unknown; description?: unknown };
+    if (typeof json.name !== 'string') {
+      throw new Error('shortcut fetchStory: response missing story name');
+    }
+    return {
+      name: json.name,
+      description: typeof json.description === 'string' ? json.description : null,
+    };
+  }
+
+  /**
    * GATED — write-back identity / provisioning. Throws until the token-issuance
    * model (Shortcut-side token vs Devin-style partner trust) is confirmed. Do
    * NOT implement here; see docs/Tasca-Shortcut-Kickoff-Brief.md item 2.

@@ -72,6 +72,11 @@ export const AdapterEventSchema = z.object({
   externalStoryId: z.string().min(1),
   agentExternalId: z.string().min(1),
   repoHint: z.string().optional(),
+  // Stamped (post-parse, like repoHint) by the connection-scoped Shortcut route (slice SC-1/SC-2) so the
+  // content source can resolve THIS connection's read token to fetch the story. Optional + adapter-internal:
+  // adapters never emit it; it rides the validated event from the route to content.fetch. A re-driven task
+  // that reconstructs the event without it falls back to the stub content (safe/degraded).
+  shortcutConnectionId: z.string().optional(),
 });
 export type AdapterEvent = z.infer<typeof AdapterEventSchema>;
 

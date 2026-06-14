@@ -425,6 +425,62 @@ describe('ShortcutAdapter.postStoryComment (REST v3, injected fetch — slice SC
   });
 });
 
+describe('ShortcutAdapter.fetchStory (REST v3, injected fetch — slice SC-2)', () => {
+  it('GETs /api/v3/stories/:id with the read token and maps name/description', async () => {
+    let captured: { url: string; init: RequestInit } | undefined;
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init: init ?? {} };
+      return new Response(
+        JSON.stringify({ name: 'Fix the parser', description: 'It crashes on empty input.' }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const a = adapter({ apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+    const story = await a.fetchStory({ token: 'tok_read_workspace', storyId: '778899' });
+
+    expect(story).toEqual({ name: 'Fix the parser', description: 'It crashes on empty input.' });
+    expect(captured?.url).toBe('https://api.example.test/api/v3/stories/778899');
+    expect(captured?.init.method).toBe('GET');
+    const headers = captured?.init.headers as Record<string, string>;
+    expect(headers['Shortcut-Token']).toBe('tok_read_workspace');
+    expect(captured?.init.body).toBeUndefined(); // a read carries no body
+  });
+
+  it('url-encodes the story id', async () => {
+    let captured: string | undefined;
+    const fakeFetch = (async (url: string | URL | Request) => {
+      captured = String(url);
+      return new Response(JSON.stringify({ name: 'x', description: null }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const a = adapter({ apiBase: 'https://api.example.test', fetchImpl: fakeFetch });
+    await a.fetchStory({ token: 't', storyId: 'a/b' });
+    expect(captured).toBe('https://api.example.test/api/v3/stories/a%2Fb');
+  });
+
+  it('maps a missing/null description to null', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ name: 'No body story' }), { status: 200 })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    const story = await a.fetchStory({ token: 't', storyId: '1' });
+    expect(story).toEqual({ name: 'No body story', description: null });
+  });
+
+  it('throws on a non-2xx response (the content source falls back)', async () => {
+    const fakeFetch = (async () =>
+      new Response('not found', { status: 404, statusText: 'Not Found' })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    await expect(a.fetchStory({ token: 't', storyId: '1' })).rejects.toThrow(/404/);
+  });
+
+  it('throws on a 2xx response missing the story name (malformed external input)', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ description: 'no name' }), { status: 200 })) as unknown as typeof fetch;
+    const a = adapter({ fetchImpl: fakeFetch });
+    await expect(a.fetchStory({ token: 't', storyId: '1' })).rejects.toThrow(/missing story name/i);
+  });
+});
+
 describe('ShortcutAdapter gated halves (stubbed)', () => {
   it('provisionIdentity throws the gated error citing the brief', async () => {
     await expect(adapter().provisionIdentity('agent_elvis', {})).rejects.toThrow(

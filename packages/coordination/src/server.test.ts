@@ -723,4 +723,34 @@ describe('connection-scoped Shortcut intake (slice SC-1)', () => {
     await flush();
     expect(store.createdTasks).toBe(1);
   });
+
+  it('stamps the connection id + repoHint onto the event that reaches content.fetch (slice SC-2)', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: 'eltexsoft/widget-api' };
+    const work: Array<() => Promise<void>> = [];
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    // Capture the event the content source is handed — it must carry the connection id (so the shortcut
+    // content source can resolve the read token) AND the connection's repoHint, stamped post-parse.
+    const seen: AdapterEvent[] = [];
+    const capturingContent: TaskContentSource = {
+      async fetch(event) {
+        seen.push(event);
+        return { title: event.externalStoryId, body: '' };
+      },
+    };
+    const deps = makeServerDeps(store, verifierFor('unused'), (w) => work.push(w), undefined, undefined, undefined, {
+      resolver,
+      registeredShortcutIds: ids,
+    });
+    const handle = createRequestHandler({ ...deps, content: capturingContent });
+    const r = fakeRes();
+    await handle(signedShortcutReq('conn-1', 'story-42', CONN_WEBHOOK_SECRET, 'evt-stamp'), r.res);
+    expect(r.statusCode).toBe(202);
+    for (const w of work) await w();
+    await flush();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.shortcutConnectionId).toBe('conn-1');
+    expect(seen[0]!.repoHint).toBe('eltexsoft/widget-api');
+  });
 });
