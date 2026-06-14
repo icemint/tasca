@@ -329,6 +329,37 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect((await store.getTask(ORG, task.id))?.failureCount).toBe(1); // not double-counted
   });
 
+  it('EM gate columns (EM v1 slice 2): default false/0 and round-trip through getOrCreateTask/getTask', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-cols', platform: 'shortcut', repoRef: '/r' });
+    expect(task.emCleared).toBe(false);
+    expect(task.emClarificationRound).toBe(0);
+    const read = await store.getTask(ORG, task.id);
+    expect(read).toMatchObject({ emCleared: false, emClarificationRound: 0 });
+  });
+
+  it('markEmCleared flips em_cleared WITHOUT changing status (orthogonal to the lifecycle), org-scoped', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-clear', platform: 'shortcut', repoRef: '/r' });
+    await store.markEmCleared(ORG, task.id);
+    const read = await store.getTask(ORG, task.id);
+    expect(read?.emCleared).toBe(true);
+    expect(read?.status).toBe('routable'); // status untouched
+    // a foreign org cannot flip this task's flag
+    await store.markEmCleared('org_other', task.id);
+    expect((await store.getTask(ORG, task.id))?.emCleared).toBe(true); // still true; no cross-org write
+  });
+
+  it('parkAwaitingClarification: routable → awaiting_clarification + records the round; guarded to routable', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-park', platform: 'shortcut', repoRef: '/r' });
+    expect(await store.parkAwaitingClarification(ORG, task.id, 1)).toBe(true);
+    const parked = await store.getTask(ORG, task.id);
+    expect(parked?.status).toBe('awaiting_clarification');
+    expect(parked?.emClarificationRound).toBe(1);
+
+    // a second park from awaiting_clarification (not routable) no-ops — the guard holds.
+    expect(await store.parkAwaitingClarification(ORG, task.id, 2)).toBe(false);
+    expect((await store.getTask(ORG, task.id))?.emClarificationRound).toBe(1); // unchanged
+  });
+
   it('recordPullRequest is idempotent on (task_id, url): a re-finalize does not duplicate the PR', async () => {
     const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-pr-idem', platform: 'shortcut', repoRef: '/r' });
     const url = 'https://github.com/icemint/tasca/pull/123';

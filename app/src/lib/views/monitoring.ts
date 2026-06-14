@@ -1,5 +1,5 @@
 // Monitoring (C7) — mission control. An operator-facing board of tasks grouped into
-// five workflow columns (each mapping a SET of internal statuses, covering all eight),
+// five workflow columns (each mapping a SET of internal statuses, covering all nine),
 // from GET /api/tasks. The Blocked column shows each task's why-blocked reason
 // (lastError) so a human sees what needs attention inline. KPI tiles report honest
 // counts only (no throughput / cost-burn / success-over-time aggregates — those
@@ -12,7 +12,7 @@ import { I, platTag, tierTag, taskRef, esc } from '../ui';
 import type { TaskStatus, TaskSummary } from '../contract';
 
 // Operator columns, in flow order. Each maps a SET of internal statuses; together the
-// sets partition all eight statuses, so no task orphans. `blocked` flags the column
+// sets partition all nine statuses, so no task orphans. `blocked` flags the column
 // that surfaces the why-blocked reason (lastError) under each task.
 interface BoardColumn {
   label: string;
@@ -23,7 +23,9 @@ interface BoardColumn {
 }
 const COLUMNS: BoardColumn[] = [
   { label: 'Backlog', statuses: ['ingested', 'routable'], glyph: 'var(--fg-faint)' },
-  { label: 'Blocked', statuses: ['needs_attention', 'failed'], blocked: true, glyph: 'var(--state-blocked)' },
+  // `awaiting_clarification` is the EM-gate park (EM v1 slice 2) — the EM has asked clarifying questions
+  // and the task waits for a human reply; it belongs in Blocked (needs a human) alongside needs_attention.
+  { label: 'Blocked', statuses: ['awaiting_clarification', 'needs_attention', 'failed'], blocked: true, glyph: 'var(--state-blocked)' },
   { label: 'In Progress', statuses: ['claimed', 'executing'], glyph: 'var(--state-working)' },
   { label: 'PR Opened', statuses: ['in_review'], glyph: 'var(--state-awaiting)' },
   { label: 'Completed', statuses: ['done'], glyph: 'var(--state-shipped)' },

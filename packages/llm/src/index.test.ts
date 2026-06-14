@@ -3,6 +3,7 @@ import {
   AnthropicChat,
   AnthropicClassifier,
   AnthropicDecomposer,
+  AnthropicEmReviewer,
   extractJson,
   type FetchLike,
   type UsageSink,
@@ -120,6 +121,38 @@ describe('AnthropicDecomposer — surfaces failures as throws (the proposer retu
     const fetch: FetchLike = async () => ({ ok: false, status: 500, async text() { return 'err'; } });
     const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch });
     await expect(new AnthropicDecomposer(chat).decompose({ title: 't', body: 'b' })).rejects.toBeTruthy();
+  });
+});
+
+describe('AnthropicEmReviewer (EM v1 slice 2) — parses the clarity verdict', () => {
+  it('CLEAR verdict → {clear:true, questions:[]}', async () => {
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch: okWith('{"clear":true,"questions":[]}').fetch });
+    expect(await new AnthropicEmReviewer(chat).review({ title: 't', body: 'b' })).toEqual({ clear: true, questions: [] });
+  });
+
+  it('UNCLEAR verdict → {clear:false, questions:[...]} (questions kept, capped at 4)', async () => {
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch: okWith('{"clear":false,"questions":["a?","b?","c?","d?","e?"]}').fetch });
+    const out = await new AnthropicEmReviewer(chat).review({ title: 't', body: 'b' });
+    expect(out.clear).toBe(false);
+    expect(out.questions).toEqual(['a?', 'b?', 'c?', 'd?']); // 5 → capped to 4
+  });
+
+  it('UNCLEAR but no usable questions → degrades to clear (nothing actionable to ask)', async () => {
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch: okWith('{"clear":false,"questions":[]}').fetch });
+    expect(await new AnthropicEmReviewer(chat).review({ title: 't', body: 'b' })).toEqual({ clear: true, questions: [] });
+  });
+
+  it('THROWS on a transport error (→ the gate fails open at the consumer)', async () => {
+    const fetch: FetchLike = async () => ({ ok: false, status: 503, async text() { return 'overloaded'; } });
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch });
+    await expect(new AnthropicEmReviewer(chat).review({ title: 't', body: 'b' })).rejects.toBeTruthy();
+  });
+
+  it('meters the call through the sink', async () => {
+    const cap = captureSink();
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'sonnet', fetch: okWith('{"clear":true,"questions":[]}', { id: 'msg_em', usage: { input_tokens: 400, output_tokens: 30 } }).fetch });
+    await new AnthropicEmReviewer(chat, cap.sink).review({ title: 't', body: 'b' });
+    expect(cap.events).toEqual([{ model: 'sonnet', inputTokens: 400, outputTokens: 30, idempotencyKey: 'msg_em' }]);
   });
 });
 

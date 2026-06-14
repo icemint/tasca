@@ -174,6 +174,60 @@ export class AnthropicClassifier implements LlmClassifierPort {
   }
 }
 
+/** The Engineering Manager's clarity judgment on a story (EM v1 slice 2): is it clear enough to build,
+ *  and if not, the specific clarifying questions to ask. `questions` is empty when `clear`. */
+export interface EmClarityReview {
+  clear: boolean;
+  questions: string[];
+}
+
+/** The EM clarity-judge port — given a story's title+body, decide whether requirements are clear enough
+ *  to implement. The consumer (coordination's emReviewGate) wraps the call so ANY throw fails OPEN
+ *  (skip → proceed): the EM must never block the pipeline. */
+export interface EmReviewerPort {
+  review(input: { title: string; body: string }): Promise<EmClarityReview>;
+}
+
+const EM_REVIEWER_SYSTEM =
+  'You are an engineering manager reviewing a story before an engineer starts. Judge whether the ' +
+  'requirements are clear enough to implement without guessing. Respond with ONLY a JSON object: ' +
+  '{"clear": <boolean>, "questions": [<string>]}. If the story is clear, set "clear" true and ' +
+  '"questions" to []. If not, set "clear" false and list 1 to 4 specific clarifying questions. No prose.';
+
+/** EmReviewerPort over AnthropicChat — the EM runs on the LATEST Anthropic model (Sonnet, deliberately
+ *  stronger than the routing classifier's Haiku). The consumer's gate fails OPEN on any throw, so a bad
+ *  model id / outage / garbage response simply skips the review (the EM never blocks dispatch). The
+ *  output is parsed loosely + normalized; an unparseable response surfaces as "clear" (the safe default
+ *  that lets the task proceed) rather than parking it on noise. */
+export class AnthropicEmReviewer implements EmReviewerPort {
+  constructor(
+    private readonly chat: AnthropicChat,
+    /** Optional usage sink — meters this call's tokens (the gate runs it under source='manager'). */
+    private readonly sink?: UsageSink
+  ) {}
+
+  async review(input: { title: string; body: string }): Promise<EmClarityReview> {
+    const { text, usage } = await this.chat.complete({
+      system: EM_REVIEWER_SYSTEM,
+      prompt: `Title: ${input.title}\n\nBody: ${input.body}`,
+      maxTokens: 512,
+    });
+    if (usage) this.sink?.record(usage); // meter BEFORE parsing — a parse failure must not lose the spend
+    const obj = extractJson(text) as { clear?: unknown; questions?: unknown };
+    // A non-boolean `clear` defaults to clear=true (proceed): an ambiguous judgment must not strand the
+    // task. Questions are only meaningful when NOT clear; normalize to a string list, capped at 4.
+    const clear = obj.clear === false ? false : true;
+    const questions = clear
+      ? []
+      : (Array.isArray(obj.questions) ? obj.questions : [])
+          .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+          .slice(0, 4);
+    // An unclear verdict with no usable questions degrades to clear (nothing actionable to ask).
+    if (!clear && questions.length === 0) return { clear: true, questions: [] };
+    return { clear, questions };
+  }
+}
+
 const DECOMPOSER_SYSTEM =
   'You split a software-engineering task into 2 to 6 smaller, independently-routable subtasks. ' +
   'Respond with ONLY a JSON object: {"children": [{"title": string, "body": string}], "why": string}. No prose.';

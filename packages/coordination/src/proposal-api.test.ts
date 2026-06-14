@@ -30,6 +30,8 @@ function fakeTask(over: Partial<Task> = {}): Task {
     tierEstimate: ESTIMATE,
     lastError: null,
     preferredAgentId: null,
+    emCleared: false,
+    emClarificationRound: 0,
     ...over,
   };
 }
