@@ -119,12 +119,12 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
       ...PAYLOAD,
       platform: 'shortcut',
       externalStoryId: '123',
-      headBranch: 'tasca/sc-123-abc123',
+      headBranch: 'tasca/sc-123/add-rot13',
       prBody: '[sc-123]',
     };
     await execute({ ...JOB, payload: shortcutPayload }, shortcutPayload, TOKEN, ctl());
     // the runner opens the PR verbatim with the payload's headBranch + body (no platform re-derivation)
-    expect(prs[0]).toMatchObject({ headBranch: 'tasca/sc-123-abc123', body: '[sc-123]' });
+    expect(prs[0]).toMatchObject({ headBranch: 'tasca/sc-123/add-rot13', body: '[sc-123]' });
   });
 
   it('omits the PR body when the payload carries none (no projection reference for the platform)', async () => {
