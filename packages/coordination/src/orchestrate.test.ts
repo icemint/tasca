@@ -544,14 +544,42 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     expect(execution.lastOpenPrInput!.headBranch).toMatch(/^tasca\/icemint-demo-42-[0-9a-f]{8}$/);
   });
 
-  it('SC-4: a SHORTCUT PR carries an sc-<id> branch + a [sc-<id>] body so its GitHub integration links + auto-moves the story', async () => {
+  it('a SHORTCUT PR uses the Git Helper convention branch tasca/sc-<id>/<story-name> + a [sc-<id>] body', async () => {
     const shortcutEvent: AdapterEvent = { ...EVENT, externalStoryId: '123' }; // a real Shortcut story id is numeric
     const outcome = await orchestrateTaskAssigned(shortcutEvent, makeDeps({ store, execution, status, audit }));
     expect(outcome.kind).toBe('dispatched');
-    // Shortcut links a PR to its story by the sc-<id> token in the branch (its [owner]/sc-<id>/[name]
-    // convention) + the [sc-<id>] body reference; the actual move is the operator's Shortcut Event Handler.
-    expect(execution.lastOpenPrInput!.headBranch).toMatch(/^tasca\/sc-123-[0-9a-f]{8}$/);
+    // [owner]/sc-<id>/[story-name]: owner is a fixed 'tasca' (NOT the routing winner — it varies across
+    // re-drives, which would break the deterministic head); sc-<id> is the link token + stable anchor;
+    // the story name ('Fix the thing') is slugged. Plus the [sc-<id>] body; the move is the operator's
+    // Shortcut Event Handler.
+    expect(execution.lastOpenPrInput!.headBranch).toBe('tasca/sc-123/fix-the-thing');
     expect(execution.lastOpenPrInput!.body).toBe('[sc-123]');
+  });
+
+  it('the Shortcut branch story-name slug is GitHub-safe: lowercased, non-alnum collapsed to -, length-capped, no trailing -', async () => {
+    const ev: AdapterEvent = { ...EVENT, externalStoryId: '88' };
+    const longTitle = 'Add a ROT13 cipher utility!! (with spaces, símböls & a very very very very long tail that exceeds the cap)';
+    const outcome = await orchestrateTaskAssigned(
+      ev,
+      makeDeps({ store, execution, status, audit, content: { async fetch() { return { title: longTitle, body: '' }; } } })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    const head = execution.lastOpenPrInput!.headBranch!;
+    expect(head).toMatch(/^tasca\/sc-88\/[a-z0-9-]+$/); // only GitHub-safe chars, no '..' possible
+    expect(head.startsWith('tasca/sc-88/add-a-rot13-cipher-utility')).toBe(true);
+    const slug = head.split('/')[2]!;
+    expect(slug.length).toBeLessThanOrEqual(60);
+    expect(slug.endsWith('-')).toBe(false);
+  });
+
+  it('a Shortcut story with an empty title → tasca/sc-<id>/task (never an empty trailing segment)', async () => {
+    const ev: AdapterEvent = { ...EVENT, externalStoryId: '7' };
+    const outcome = await orchestrateTaskAssigned(
+      ev,
+      makeDeps({ store, execution, status, audit, content: { async fetch() { return { title: '', body: '' }; } } })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    expect(execution.lastOpenPrInput!.headBranch).toBe('tasca/sc-7/task');
   });
 
   it('FAIL-CLOSED: a github event for an UNCONNECTED workspace → unconnected, no task, no agent run', async () => {

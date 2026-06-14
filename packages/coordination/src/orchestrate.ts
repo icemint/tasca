@@ -562,7 +562,7 @@ export async function orchestrateTaskAssigned(
         externalStoryId: event.externalStoryId,
         agentId: winner.agentId,
         prompt,
-        headBranch: deterministicHeadBranch(event.platform, event.externalStoryId),
+        headBranch: deterministicHeadBranch(event.platform, event.externalStoryId, content.title),
         ...(prBodyReference(event) ? { prBody: prBodyReference(event)! } : {}),
       };
       const { id: jobId } = await deps.dispatchQueue.enqueue({
@@ -765,7 +765,7 @@ export async function orchestrateTaskAssigned(
     const pr = await deps.execution.openPr({
       cwd: worktree.path,
       branch: worktree.branch,
-      headBranch: deterministicHeadBranch(event.platform, event.externalStoryId),
+      headBranch: deterministicHeadBranch(event.platform, event.externalStoryId, content.title),
       title: `Tasca: ${event.externalStoryId}`,
       // PROJECTION model (roadmap D8): Tasca never writes issue/story state — the platform's own
       // integration does the transition off the PR. GitHub: a `Closes #N` link + native PR-merge→close.
@@ -884,25 +884,41 @@ function prBodyReference(event: { platform: string; externalStoryId: string }): 
   return null;
 }
 
+/** A GitHub-safe branch path segment: lowercase, every non-alphanumeric run collapsed to one dash,
+ *  no leading/trailing dash, length-capped. Yields only [a-z0-9-] so it can never contain `..` or any
+ *  char the open-pr SAFE_REF guard rejects. Empty input → '' (callers default to 'task'). */
+function slugifyBranchSegment(s: string | undefined, maxLen: number): string {
+  return (s ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLen)
+    .replace(/-+$/g, ''); // a trailing dash the slice may have left mid-word
+}
+
 /**
- * A stable PR head branch for a story, identical across re-drives so a repeated
- * `openPr` reuses (and is recognized against) the same head — and INJECTIVE so two
- * different stories never collide onto one head (a collision would make story B
- * adopt story A's PR and get none of its own). The readable slug is for humans;
- * the appended short hash of the RAW id guarantees uniqueness even when the slug
- * is lossy (the GitHub id `owner/repo#number` sanitizes to a legal ref, but
- * `owner/repo#42` and `owner-repo#42` would otherwise both slug to the same thing).
- * Starts with a letter so it satisfies the open-pr SAFE_REF guard.
+ * A stable PR head branch for a story, identical across re-drives so a repeated `openPr` reuses (and is
+ * recognized against) the same head — and INJECTIVE so two different stories never collide onto one head
+ * (a collision would make story B adopt story A's PR). Starts with a letter to satisfy the open-pr
+ * SAFE_REF guard. The GitHub path appends a short hash of the RAW id for injectivity when the slug is
+ * lossy; the Shortcut path anchors on the unique `sc-<id>` token instead (see inline).
  */
-function deterministicHeadBranch(platform: string, externalStoryId: string): string {
-  const hash = createHash('sha256').update(externalStoryId).digest('hex').slice(0, 8);
-  // Shortcut's GitHub integration links a PR to its story by an `sc-<id>` token in the branch name
-  // (its convention is [owner]/sc-<id>/[name]); without that token the story never links and never
-  // auto-moves. A Shortcut externalStoryId is the bare numeric story id, so `sc-<id>` is exactly the
-  // token Shortcut scans for. The hash keeps the branch unique + deterministic (same as below).
+function deterministicHeadBranch(platform: string, externalStoryId: string, storyName?: string): string {
+  // Shortcut: conform to the workspace's Git Helper convention [owner]/sc-<id>/[story-name] so the
+  // branch matches the team's format AND links via the `sc-<id>` token (Shortcut scans for sc-<digits>).
+  // The owner segment is a fixed `tasca`, NOT the routing winner: the winner is re-picked per
+  // orchestration and can differ across re-drives (availability / escalation), so a winner-dependent
+  // branch would break the deterministic-head idempotency and open a DUPLICATE PR. `sc-<id>` is the
+  // unique, stable anchor — the numeric story id already disambiguates every story, so no hash is needed.
+  // The story-name slug is cosmetic: a mid-task title edit re-drives to a different slug, but the
+  // duplicate-PR window is bounded by the recordPullRequest row check (an existing PR row skips dispatch
+  // entirely), so this only widens the narrow openPr-landed-but-row-uncommitted gap. Acceptable.
   if (platform === 'shortcut' && /^\d+$/.test(externalStoryId)) {
-    return `tasca/sc-${externalStoryId}-${hash}`;
+    return `tasca/sc-${externalStoryId}/${slugifyBranchSegment(storyName, 60) || 'task'}`;
   }
+  // GitHub + any other platform: UNCHANGED. A readable slug of the raw id plus a short hash of that id
+  // for injectivity (so `owner/repo#42` and `owner-repo#42` never collide onto one head).
+  const hash = createHash('sha256').update(externalStoryId).digest('hex').slice(0, 8);
   const slug = externalStoryId
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
