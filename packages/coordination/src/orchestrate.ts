@@ -141,6 +141,21 @@ export interface OrchestrationDeps {
   /** Resolve the tier classifier for an org, on the org's OWN vault key (BYOK, slice 3.5-A.2a). Returns
    *  null when the org has no key (→ heuristic routing). Absent → no LLM classifier at all (heuristic). */
   classifierFor?: (orgId: string) => Promise<LlmClassifierPort | null>;
+  /**
+   * The EM (Engineering Manager) requirements gate (EM v1 slice 2). Before a story is routed, the EM for
+   * the task's project LLM-judges "is this clear enough to build?". Unclear → it posts clarifying
+   * questions on the story AS ITSELF and the orchestration parks the task in `awaiting_clarification`;
+   * clear → the task proceeds. FAIL-OPEN by contract: the gate NEVER throws — no manager / no key / LLM
+   * error all resolve `{clear:true}` (skip → proceed), so the EM is an enhancement that can never block
+   * the pipeline. Absent (tests / EM disabled / no vault master key) → no gate at all. The gate runs
+   * only for a `routable` task that is not yet `emCleared`.
+   */
+  emReviewGate?: (
+    orgId: string,
+    task: Task,
+    content: TaskInput,
+    event: AdapterEvent
+  ) => Promise<{ clear: boolean }>;
   /** Resolve the org's OWN Anthropic vault key for an agent run (BYOK agent execution, slice 3.5-A.2b).
    *  null → the org has NO key → the in-process spawn FAILS CLOSED (needs_attention, no agent). Present
    *  ONLY with startAgentProxy (both come from the credential vault wiring); absent (tests / fakes) →
@@ -188,6 +203,10 @@ const PROMPT_TRUNCATE_THRESHOLD = 60_000;
 const DEFAULT_RUNNER_WAIT_MS = 30_000;
 /** Default poll interval while waiting for a runner to claim. */
 const DEFAULT_RUNNER_POLL_MS = 500;
+/** EM requirements gate (EM v1 slice 2): max times the EM may park a task for clarification before it is
+ *  escalated to needs_attention for a human. A perpetually-unclear story (the EM keeps asking, the human
+ *  keeps not-clarifying-enough) must terminate, not loop forever. */
+const EM_CLARIFICATION_CAP = 3;
 
 /** What coordination enqueues for an agent-runner — everything the runner needs to
  *  execute the task. Mirrors @tasca/agent-runner's DispatchPayload (jsonb on the wire). */
@@ -256,7 +275,14 @@ export type OrchestrationOutcome =
   | { kind: 'key_unavailable'; taskId: string }
   // An `agent:<name>` label named an agent the org has NOT hired (slice 5d) → needs_attention. The
   // label is a preference within the hired set, not a bypass — so an unhired name fails closed.
-  | { kind: 'agent_not_hired'; taskId: string };
+  | { kind: 'agent_not_hired'; taskId: string }
+  // The EM requirements gate (EM v1 slice 2) judged the story UNCLEAR → it posted clarifying questions
+  // on the story AS the EM and parked the task in `awaiting_clarification`. The reply-resume (a human
+  // reply re-driving the task) is a later slice; this slice parks + posts only.
+  | { kind: 'awaiting_clarification'; taskId: string }
+  // The EM gate has parked this task EM_CLARIFICATION_CAP times and it is STILL unclear → retired to
+  // needs_attention for an operator (the EM stops asking — a perpetually-unclear story needs a human).
+  | { kind: 'needs_clarification_capped'; taskId: string };
 
 /**
  * Resolve the org a webhook event acts in (slice 5c). A CONNECTED workspace resolves to its real
@@ -380,6 +406,34 @@ export async function orchestrateTaskAssigned(
     // for a synthetic child; a NORMAL task (no stored content) fetches from its platform adapter.
     const origin = await deps.store.getTaskOrigin(orgId, task.id);
     const content: TaskInput = origin?.content ?? (await deps.content.fetch(event));
+
+    // §EM v1 slice 2 — the requirements gate. Before routing, the EM for the task's project LLM-judges
+    // whether the story is clear enough to build. Runs only when wired AND the task isn't already
+    // EM-cleared (so an execution-failure re-drive of a cleared task is NOT re-reviewed). The gate is
+    // FAIL-OPEN by contract (it never throws): a problem resolves clear=true and we proceed. Unclear →
+    // the EM has posted clarifying questions on the story AS ITSELF; we park the task (capped) so a human
+    // can reply, and bow out of this pass — the reply-resume re-drive is a later slice.
+    if (deps.emReviewGate && !task.emCleared) {
+      const review = await deps.emReviewGate(orgId, task, content, event);
+      if (!review.clear) {
+        const round = task.emClarificationRound + 1;
+        if (round >= EM_CLARIFICATION_CAP) {
+          // The EM has asked EM_CLARIFICATION_CAP times and the story is still unclear — stop asking and
+          // escalate to a human. Breaker untouched (an unclear story is not an agent failure).
+          await deps.store.retireUnroutable(
+            orgId,
+            task.id,
+            `EM: requirements still unclear after ${EM_CLARIFICATION_CAP} clarification rounds — needs an operator`
+          );
+          return { kind: 'needs_clarification_capped', taskId: task.id };
+        }
+        await deps.store.parkAwaitingClarification(orgId, task.id, round);
+        return { kind: 'awaiting_clarification', taskId: task.id };
+      }
+      // Clear → mark the task EM-cleared so a later re-drive skips the gate, then proceed to routing.
+      await deps.store.markEmCleared(orgId, task.id);
+    }
+
     // Attribute the classifier's LLM call (if any) to this task/org (slice W3-S4a). estimateTier may
     // call the classifier; the usage context tags its spend as source='classifier' for this task.
     // BYOK (slice 3.5-A.2a): the classifier resolves THIS org's (= the instance's) own vault key per

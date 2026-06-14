@@ -26,6 +26,10 @@ export function tierRank(t: Tier): number {
 export const TASK_STATUSES = [
   'ingested',
   'routable',
+  // The EM (Engineering Manager) requirements gate parks an unclear story here BEFORE routing (EM v1
+  // slice 2): the EM has posted clarifying questions on the story and the task waits for a human reply
+  // (the reply-resume → `routable` is a later slice). Surfaced in the board's Blocked column.
+  'awaiting_clarification',
   'claimed',
   'executing',
   'in_review',
@@ -48,7 +52,12 @@ export const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   // (content fetch / tier estimate / match) runs the breaker while the task is
   // still routable → reset stays `routable` (a version-bumping self-loop) below
   // the threshold, or trips to `needs_attention` (§6.14).
-  routable: ['claimed', 'routable', 'needs_attention'],
+  // `awaiting_clarification` is the EM-gate park (EM v1 slice 2): an unclear story is held here before
+  // a claim. `needs_attention` is the loop-cap escalation (still-unclear after N rounds → a human).
+  routable: ['claimed', 'routable', 'awaiting_clarification', 'needs_attention'],
+  // The EM gate parks → awaiting_clarification; a human reply re-drives it back to `routable` (the
+  // reply-resume slice); the loop-cap trips it to `needs_attention`.
+  awaiting_clarification: ['routable', 'needs_attention'],
   claimed: ['executing', 'routable', 'needs_attention'],
   executing: ['in_review', 'routable', 'needs_attention'],
   in_review: ['done'],
@@ -81,6 +90,13 @@ export interface Task {
    *  candidate set (fail-closed if unhired), never as a binding assignment. Null = no
    *  preference (route by the engine). */
   preferredAgentId: string | null;
+  /** EM requirements gate (EM v1 slice 2): true once the Engineering Manager has judged the story
+   *  clear enough to build (or the gate was skipped). The gate runs only when this is FALSE, so an
+   *  execution-failure re-drive of an already-cleared task is NOT re-reviewed. */
+  emCleared: boolean;
+  /** EM requirements gate (EM v1 slice 2): how many times the EM has parked this task for clarification.
+   *  Incremented on each park; the loop-cap reads it to escalate a perpetually-unclear story to a human. */
+  emClarificationRound: number;
 }
 
 // ── Tier estimation ─────────────────────────────────────────────────────────

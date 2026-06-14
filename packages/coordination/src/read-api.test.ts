@@ -33,6 +33,8 @@ function task(id: string, over: Partial<Task> = {}): Task {
     tierEstimate: null,
     lastError: null,
     preferredAgentId: null,
+    emCleared: false,
+    emClarificationRound: 0,
     ...over,
   };
 }

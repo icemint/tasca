@@ -77,6 +77,8 @@ class CountingStore implements CoordinationStore {
       tierEstimate: null,
       lastError: null,
       preferredAgentId: null,
+      emCleared: false,
+      emClarificationRound: 0,
     };
     this.tasksByStory.set(key, task);
     return task;
@@ -126,6 +128,8 @@ class CountingStore implements CoordinationStore {
     return this.tasksByStory.get(`${platform}:${externalStoryId}`);
   }
   async retireUnroutable() { return false; }
+  async markEmCleared() {}
+  async parkAwaitingClarification() { return false; }
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
   async getTaskStatusCounts() { return {}; }

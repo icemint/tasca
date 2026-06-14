@@ -586,6 +586,21 @@ async function main(): Promise<void> {
     // entity. Gated on the vault master key (the identity route seals the EM's Shortcut token); absent →
     // the manager API is not wired (those routes 404).
     ...(agentMasterKey ? { managerCredential: { masterKey: agentMasterKey } } : {}),
+    // The EM requirements gate (EM v1 slice 2): a pre-dispatch clarity review that parks unclear stories
+    // and posts clarifying questions AS the EM. OFF by default (set TASCA_EM_ENABLED=on); the factory
+    // additionally requires the vault master key (for the org LLM key + the EM's Shortcut token). The
+    // gate is fail-open — it can never block dispatch. Its Shortcut write-back is a dedicated adapter
+    // (postStoryComment only; webhookSecret is unused for that path).
+    ...(agentMasterKey
+      ? {
+          emGate: {
+            enabled: process.env.TASCA_EM_ENABLED === 'on',
+            masterKey: agentMasterKey,
+            shortcut: new ShortcutAdapter({ webhookSecret: webhookSecret || 'em-gate-adapter' }),
+            ...(process.env.TASCA_EM_MODEL ? { model: process.env.TASCA_EM_MODEL } : {}),
+          },
+        }
+      : {}),
   });
 
   const server = coordination.createServer();

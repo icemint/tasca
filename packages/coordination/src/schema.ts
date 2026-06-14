@@ -46,11 +46,26 @@ ALTER TABLE task ADD COLUMN IF NOT EXISTS preferred_agent_id text;
 ALTER TABLE task ADD COLUMN IF NOT EXISTS content jsonb;
 ALTER TABLE task ADD COLUMN IF NOT EXISTS parent_task_id text REFERENCES task(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS task_parent_idx ON task (parent_task_id);
-DO $$ BEGIN
-  ALTER TABLE task ADD CONSTRAINT task_status_chk CHECK (
-    status IN ('ingested','routable','claimed','executing','in_review','done','failed','needs_attention')
-  );
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- EM requirements gate (EM v1 slice 2). em_cleared flips true once the Engineering Manager has
+-- judged the story clear (or the gate was skipped) — the gate runs only while NOT cleared, so it
+-- reviews a fresh assignment + a future reply-resume but NOT an execution-failure re-drive of an
+-- already-cleared task. em_clarification_round counts how many times the EM parked the task; the
+-- loop-cap reads it to escalate a perpetually-unclear story to a human.
+ALTER TABLE task ADD COLUMN IF NOT EXISTS em_cleared boolean NOT NULL DEFAULT false;
+ALTER TABLE task ADD COLUMN IF NOT EXISTS em_clarification_round int NOT NULL DEFAULT 0;
+-- WIDEN task_status_chk to include 'awaiting_clarification' (EM v1 slice 2). The @tasca/db base
+-- TASK_TABLE_DDL creates task_status_chk INLINE from TASK_STATUSES, so a prod table that migrated before
+-- this slice carries the OLD 8-status constraint — an UPDATE to status='awaiting_clarification' would
+-- VIOLATE it and fail. A plain duplicate-catch ADD can't widen an EXISTING constraint (it no-ops once the
+-- name exists); only DROP+ADD re-applies the wider set. DROP ... IF EXISTS then a named ADD is idempotent
+-- across boots (mirrors the dispatch_job widening in @tasca/db). The new set is a strict SUPERSET of the
+-- old (all 8 retained + awaiting_clarification), so dropping+re-adding never rejects an existing row.
+-- Applied within TASK_COORDINATION_COLUMNS_DDL, which runs AFTER the base task table (applySchema orders
+-- TASK_TABLE_DDL first), so task + task_status_chk always exist here.
+ALTER TABLE task DROP CONSTRAINT IF EXISTS task_status_chk;
+ALTER TABLE task ADD CONSTRAINT task_status_chk CHECK (
+  status IN ('ingested','routable','awaiting_clarification','claimed','executing','in_review','done','failed','needs_attention')
+);
 DO $$ BEGIN
   ALTER TABLE task ADD CONSTRAINT task_platform_chk CHECK (
     platform IN ('shortcut','github','linear')

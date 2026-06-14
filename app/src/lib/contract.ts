@@ -9,6 +9,7 @@ export type Tier = (typeof TIERS)[number];
 export type TaskStatus =
   | 'ingested'
   | 'routable'
+  | 'awaiting_clarification'
   | 'claimed'
   | 'executing'
   | 'in_review'

@@ -11,13 +11,15 @@ import { PgIdentityRepository } from '@tasca/identity';
 import type { ExecutionPort } from '@tasca/execution';
 import type { Task } from '@tasca/domain';
 import { DefaultPmProposer, type LlmClassifierPort } from '@tasca/routing';
-import { AnthropicChat, AnthropicClassifier } from '@tasca/llm';
+import { AnthropicChat, AnthropicClassifier, AnthropicEmReviewer, LATEST_ANTHROPIC_MODEL } from '@tasca/llm';
 import { serveAnthropicProxy, type AgentUsageSink } from '@tasca/anthropic-proxy';
 import { makeUsageSink } from './usage-context';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
-import { VendorKeyResolver, type VendorValidator, type AgentCredentialResolver, type ConnectionCredentialResolver } from './vendor-credential';
+import { VendorKeyResolver, ManagerCredentialResolver, type VendorValidator, type AgentCredentialResolver, type ConnectionCredentialResolver } from './vendor-credential';
+import { makeEmReviewGate } from './em-review-gate';
+import type { ShortcutWriteBack } from './shortcut-status-reporter';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import { PgAgentCreator } from './agent-creator';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -80,6 +82,15 @@ export interface CreateCoordinationDeps {
    *  .../projects/:projectId/manager (all admin-gated; the identity route is write-only). Absent → the
    *  manager API is not wired. Gated on the same master-key presence as the other credential surfaces. */
   managerCredential?: { masterKey: Buffer | null };
+  /**
+   * The EM (Engineering Manager) requirements gate (EM v1 slice 2). When `enabled` AND the vault master
+   * key is present, the orchestration loop runs a pre-dispatch clarity review: the EM for the task's
+   * project LLM-judges whether a story is clear enough to build, posting clarifying questions AS ITSELF
+   * (via `shortcut.postStoryComment`, under its own vault token) and parking the task when not. FAIL-OPEN
+   * by construction — no manager / no key / LLM error all skip the review and proceed. `model` defaults
+   * to the latest Anthropic model (LATEST_ANTHROPIC_MODEL). Absent / disabled / no master key → no gate.
+   */
+  emGate?: { enabled: boolean; model?: string; shortcut: ShortcutWriteBack; masterKey: Buffer | null };
   /** Window to wait (polling) for a runner to claim before retiring the task to
    *  needs_attention. Default 30000ms. */
   runnerWaitMs?: number;
@@ -218,6 +229,28 @@ export function createCoordination(
           if (!key) return null;
           return new AnthropicClassifier(new AnthropicChat({ apiKey: key, model: coordinationModel }), coordinationUsageSink);
         }
+      : undefined;
+
+  // The EM (Engineering Manager) requirements gate (EM v1 slice 2). Wired only when enabled AND a vendor
+  // resolver exists (the vault master key is set): both the org vault key (the EM's LLM) and the manager's
+  // Shortcut token (to post AS the EM) need the master key. The gate is FAIL-OPEN by construction — no
+  // manager / no key / LLM error all skip the review and proceed; it never blocks dispatch. The EM runs on
+  // the LATEST Anthropic model (deliberately stronger than the classifier's Haiku); its spend meters as
+  // source='manager' via the shared coordination usage sink (the gate sets the ambient usage context).
+  const emReviewGate =
+    input.emGate?.enabled && vendorResolver
+      ? makeEmReviewGate({
+          store,
+          managerCredentials: new ManagerCredentialResolver(store, input.emGate.masterKey),
+          vendorKeyFor: (orgId: string) => vendorResolver.resolve(orgId, 'anthropic'),
+          reviewerFor: (apiKey: string) =>
+            new AnthropicEmReviewer(
+              new AnthropicChat({ apiKey, model: input.emGate!.model ?? LATEST_ANTHROPIC_MODEL }),
+              coordinationUsageSink
+            ),
+          shortcut: input.emGate.shortcut,
+          ...(input.logger !== undefined ? { logger: input.logger } : {}),
+        })
       : undefined;
 
   // BYOK agent execution (slice 3.5-A.2b): the in-process agent runs on the ORG'S OWN vault key — never a
@@ -444,6 +477,7 @@ export function createCoordination(
       : {}),
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(classifierFor ? { classifierFor } : {}),
+    ...(emReviewGate ? { emReviewGate } : {}),
     ...(agentVendorResolver ? { agentVendorResolver } : {}),
     ...(startAgentProxy ? { startAgentProxy } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),

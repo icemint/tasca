@@ -76,6 +76,8 @@ class FakeStore implements CoordinationStore {
       tierEstimate: null,
       lastError: null,
       preferredAgentId: null,
+      emCleared: false,
+      emClarificationRound: 0,
     };
     this.tasks.set(task.id, task);
     return task;
@@ -181,6 +183,22 @@ class FakeStore implements CoordinationStore {
     t.status = 'needs_attention';
     t.lastError = reason;
     t.version += 1;
+    return true;
+  }
+  emClearedCalls: string[] = [];
+  async markEmCleared(_orgId: string, taskId: string): Promise<void> {
+    this.emClearedCalls.push(taskId);
+    const t = this.tasks.get(taskId);
+    if (t) t.emCleared = true; // status/version untouched (orthogonal to the lifecycle)
+  }
+  parkCalls: Array<{ taskId: string; round: number }> = [];
+  async parkAwaitingClarification(_orgId: string, taskId: string, round: number): Promise<boolean> {
+    this.parkCalls.push({ taskId, round });
+    const t = this.tasks.get(taskId);
+    if (!t || t.status !== 'routable') return false;
+    t.status = 'awaiting_clarification';
+    t.emClarificationRound = round;
+    t.version += 1; // breaker/failure_count deliberately untouched
     return true;
   }
   async recordRoutingDecision(_orgId: string, input: { taskId: string; winnerAgentId: string | null }) {
@@ -429,6 +447,7 @@ function makeDeps(opts: {
   classifierFor?: OrchestrationDeps['classifierFor'];
   agentVendorResolver?: OrchestrationDeps['agentVendorResolver'];
   startAgentProxy?: OrchestrationDeps['startAgentProxy'];
+  emReviewGate?: OrchestrationDeps['emReviewGate'];
 }): OrchestrationDeps {
   const candidates = opts.candidates ?? [{ profile: elvisProfile(), state: 'idle', activeCount: 0 }];
   return {
@@ -440,6 +459,7 @@ function makeDeps(opts: {
     audit: opts.audit,
     content: opts.content ?? content,
     ...(opts.classifierFor ? { classifierFor: opts.classifierFor } : {}),
+    ...(opts.emReviewGate ? { emReviewGate: opts.emReviewGate } : {}),
     ...(opts.agentVendorResolver ? { agentVendorResolver: opts.agentVendorResolver } : {}),
     ...(opts.startAgentProxy ? { startAgentProxy: opts.startAgentProxy } : {}),
   };
@@ -749,6 +769,8 @@ describe('orchestrateTaskAssigned — preferred-agent routing (accepted PM propo
       tierEstimate: null,
       lastError: null,
       preferredAgentId,
+      emCleared: false,
+      emClarificationRound: 0,
     });
     return id;
   }
@@ -981,6 +1003,7 @@ describe('orchestrateTaskAssigned — decomposition child (synthetic, W3-S1c)', 
     store.tasks.set(id, {
       id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
       claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null, preferredAgentId: null,
+      emCleared: false, emClarificationRound: 0,
     });
     store.origins.set(id, {
       content: { title: 'Subtask: schema migration', body: 'add the tables' },
@@ -1576,5 +1599,87 @@ describe('orchestrateTaskAssigned — agent output observability', () => {
     expect(runLog, 'the agent run output should be logged before the no-changes retire').toBeDefined();
     expect(runLog!.context).toMatchObject({ exitCode: 0 });
     expect(String(runLog!.context!.outputTail)).toContain('no typo');
+  });
+});
+
+describe('orchestrateTaskAssigned — EM requirements gate (EM v1 slice 2)', () => {
+  let store: FakeStore;
+  let execution: FakeExecution;
+  let status: FakeStatus;
+  let audit: FakeAudit;
+  beforeEach(() => {
+    store = new FakeStore();
+    execution = new FakeExecution();
+    status = new FakeStatus();
+    audit = new FakeAudit();
+  });
+
+  it('CLEAR → marks the task em_cleared and proceeds to dispatch', async () => {
+    const calls: Array<{ taskId: string }> = [];
+    const emReviewGate: OrchestrationDeps['emReviewGate'] = async (_org, task) => {
+      calls.push({ taskId: task.id });
+      return { clear: true };
+    };
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, emReviewGate }));
+    // proceeds the whole forward path (dispatched), having run the gate once and cleared the task
+    expect(outcome.kind).toBe('dispatched');
+    expect(calls).toHaveLength(1);
+    const t = [...store.tasks.values()][0]!;
+    expect(t.emCleared).toBe(true);
+    expect(store.emClearedCalls).toContain(t.id);
+  });
+
+  it('UNCLEAR (first round) → parks the task at awaiting_clarification and bumps the round', async () => {
+    const emReviewGate: OrchestrationDeps['emReviewGate'] = async () => ({ clear: false });
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, emReviewGate }));
+    expect(outcome.kind).toBe('awaiting_clarification');
+    const t = [...store.tasks.values()][0]!;
+    expect(t.status).toBe('awaiting_clarification');
+    expect(t.emClarificationRound).toBe(1); // 0 → 1
+    expect(store.parkCalls).toEqual([{ taskId: t.id, round: 1 }]);
+    // no dispatch happened
+    expect(execution.spawnCalls).toBe(0);
+    expect(store.emClearedCalls).toHaveLength(0);
+  });
+
+  it('UNCLEAR at the loop-cap → retires to needs_attention (no further parking)', async () => {
+    // Seed a task already at round = CAP-1 (2): the next unclear verdict hits round 3 = the cap.
+    const id = randomUUID();
+    store.tasks.set(id, {
+      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
+      preferredAgentId: null, emCleared: false, emClarificationRound: 2,
+    });
+    const emReviewGate: OrchestrationDeps['emReviewGate'] = async () => ({ clear: false });
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, emReviewGate }));
+    expect(outcome.kind).toBe('needs_clarification_capped');
+    const t = store.tasks.get(id)!;
+    expect(t.status).toBe('needs_attention');
+    expect(store.parkCalls).toHaveLength(0); // it did NOT park — it escalated
+    expect(store.retireCalls[0]!.reason).toMatch(/still unclear after 3/i);
+  });
+
+  it('em_cleared task → the gate is SKIPPED on a re-drive (proceeds straight to dispatch)', async () => {
+    const id = randomUUID();
+    store.tasks.set(id, {
+      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
+      preferredAgentId: null, emCleared: true, emClarificationRound: 0,
+    });
+    let gateRan = false;
+    const emReviewGate: OrchestrationDeps['emReviewGate'] = async () => { gateRan = true; return { clear: false }; };
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, emReviewGate }));
+    expect(gateRan).toBe(false); // already cleared → gate not invoked
+    expect(outcome.kind).toBe('dispatched');
+  });
+
+  it('no emReviewGate wired (EM disabled) → orchestration proceeds normally', async () => {
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit }));
+    expect(outcome.kind).toBe('dispatched');
+    // the task is not touched by any EM bookkeeping
+    const t = [...store.tasks.values()][0]!;
+    expect(t.emCleared).toBe(false);
+    expect(store.parkCalls).toHaveLength(0);
+    expect(store.emClearedCalls).toHaveLength(0);
   });
 });

@@ -399,6 +399,19 @@ export interface CoordinationStore {
    */
   retireUnroutable(orgId: string, taskId: string, reason: string): Promise<boolean>;
 
+  /** EM requirements gate (EM v1 slice 2): mark a task EM-cleared (em_cleared=true) so the gate is
+   *  skipped on any later re-drive of the SAME row (e.g. an execution-failure auto-recover). Does NOT
+   *  touch status/version — clearing is orthogonal to the lifecycle; the task proceeds to routing in
+   *  the same orchestration pass. org-scoped. */
+  markEmCleared(orgId: string, taskId: string): Promise<void>;
+
+  /** EM requirements gate (EM v1 slice 2): park a still-`routable` task at `awaiting_clarification`
+   *  (the EM posted clarifying questions on the story) and record the clarification round. Guarded to
+   *  `routable` (mirrors retireUnroutable) so a concurrent claim that already moved the task wins and
+   *  this no-ops. Breaker untouched — an unclear story is not an agent failure. Returns true if it
+   *  acted. */
+  parkAwaitingClarification(orgId: string, taskId: string, round: number): Promise<boolean>;
+
   /** Persist the routing decision (estimate + candidates + winner) for the inspector. */
   recordRoutingDecision(
     orgId: string,
@@ -660,6 +673,8 @@ interface TaskRow {
   tier_estimate: TierEstimate | null;
   last_error: string | null;
   preferred_agent_id: string | null;
+  em_cleared: boolean;
+  em_clarification_round: number;
 }
 
 function mapTask(row: TaskRow): Task {
@@ -675,6 +690,8 @@ function mapTask(row: TaskRow): Task {
     tierEstimate: row.tier_estimate,
     lastError: row.last_error ?? null,
     preferredAgentId: row.preferred_agent_id ?? null,
+    emCleared: row.em_cleared ?? false,
+    emClarificationRound: row.em_clarification_round ?? 0,
   };
 }
 
@@ -1026,7 +1043,7 @@ export class PgCoordinationStore
        VALUES ($1,$2,$3,$4,'routable',0,0,$5,$6,$7::jsonb,$8)
        ON CONFLICT (org_id, platform, external_story_id)
          DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
-       RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id`,
+       RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round`,
       [
         randomUUID(),
         orgId,
@@ -1295,7 +1312,7 @@ export class PgCoordinationStore
 
   async getTask(orgId: string, taskId: string): Promise<Task | null> {
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id
+      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round
          FROM task WHERE org_id = $1 AND id = $2`,
       [orgId, taskId]
     );
@@ -1829,6 +1846,28 @@ export class PgCoordinationStore
           SET status = 'needs_attention', last_error = $3, version = version + 1, updated_at = now()
         WHERE org_id = $1 AND id = $2 AND status = 'routable'`,
       [orgId, taskId, reason]
+    );
+    return res.rowCount === 1;
+  }
+
+  async markEmCleared(orgId: string, taskId: string): Promise<void> {
+    // Orthogonal to the lifecycle (status/version untouched): clearing only flips the gate flag so a
+    // later re-drive of the SAME row isn't re-reviewed. org-scoped.
+    await this.db.query(
+      `UPDATE task SET em_cleared = true, updated_at = now() WHERE org_id = $1 AND id = $2`,
+      [orgId, taskId]
+    );
+  }
+
+  async parkAwaitingClarification(orgId: string, taskId: string, round: number): Promise<boolean> {
+    // → awaiting_clarification, recording the clarification round, WITHOUT touching the breaker (an
+    // unclear story is not an agent failure). Guarded to `routable` so a concurrent claim that already
+    // moved the task wins and this no-ops.
+    const res = await this.db.query(
+      `UPDATE task
+          SET status = 'awaiting_clarification', em_clarification_round = $3, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status = 'routable'`,
+      [orgId, taskId, round]
     );
     return res.rowCount === 1;
   }
