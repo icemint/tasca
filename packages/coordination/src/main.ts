@@ -40,7 +40,7 @@ import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
-import { loadMasterKey, liveVendorValidator, AgentCredentialResolver } from './vendor-credential';
+import { loadMasterKey, liveVendorValidator, AgentCredentialResolver, ConnectionCredentialResolver } from './vendor-credential';
 import { ShortcutStatusReporter } from './shortcut-status-reporter';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
 import { singleTenantEnabled, resolveInstanceOrgId } from './instance';
@@ -258,6 +258,18 @@ async function main(): Promise<void> {
     logger.info?.('shortcut write-back enabled (per-agent identity vault)');
   } else {
     logger.info?.('shortcut write-back disabled (needs TASCA_SECRET_STORE_KEY + SHORTCUT_WEBHOOK_SECRET)');
+  }
+
+  // Connection-scoped Shortcut intake (slice SC-1): a Shortcut workspace binds to a project (→ repo) and
+  // carries its OWN sealed webhook secret. Enabled whenever the vault master key is present — independent
+  // of SHORTCUT_WEBHOOK_SECRET (the legacy single-secret route), since each connection brings its own
+  // secret. Wires the admin set-API + the per-connection webhook route POST /webhooks/shortcut/:id.
+  let connectionCredentialResolver: ConnectionCredentialResolver | undefined;
+  if (agentMasterKey) {
+    connectionCredentialResolver = new ConnectionCredentialResolver(new PgCoordinationStore(pool), agentMasterKey);
+    logger.info?.('shortcut connections enabled (per-connection secret vault)');
+  } else {
+    logger.info?.('shortcut connections disabled (needs TASCA_SECRET_STORE_KEY)');
   }
 
   // Shortcut write-back routes via routingStatusReporter even when github is off — start from a
@@ -514,6 +526,18 @@ async function main(): Promise<void> {
     // resolver was built (master key + shortcut secret present), sharing that resolver for cache-bust.
     ...(agentCredentialResolver
       ? { agentCredential: { masterKey: agentMasterKey, resolver: agentCredentialResolver } }
+      : {}),
+    // Per-connection secrets (slice SC-1): wire the connection set-API + the connection-scoped webhook
+    // route when the vault master key is present, sharing the resolver (so a set busts its cache) and
+    // the boot-time Shortcut binding snapshot (the per-request verifier's assignee/self set).
+    ...(connectionCredentialResolver
+      ? {
+          connectionCredential: {
+            masterKey: agentMasterKey,
+            resolver: connectionCredentialResolver,
+            registeredShortcutIds,
+          },
+        }
       : {}),
   });
 

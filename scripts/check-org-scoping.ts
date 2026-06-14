@@ -29,6 +29,7 @@ export const TENANT_TABLES = [
   'usage_event',
   'org_vendor_credential',
   'org_agent_credential',
+  'connection_credential',
   'governance_audit_event',
   'org_invite',
   'project',
