@@ -157,6 +157,21 @@ export interface OrchestrationDeps {
     content: TaskInput,
     event: TaskAssignedEvent
   ) => Promise<{ clear: boolean }>;
+  /**
+   * The EM block-explanation (EM v1 slice 4). After a task is retired to a blocked state with a RAW
+   * internal reason, the EM for the task's project LLM-rephrases it into one calm operator-facing sentence
+   * and writes it back to `last_error`. BEST-EFFORT + FAIL-OPEN by contract: it NEVER throws and never
+   * changes the task lifecycle — no manager / no key / LLM error all leave the raw reason in place. The
+   * write is guarded to a still-blocked status, so a task that resumed / re-drove between the block and the
+   * rephrase is not overwritten. Absent (tests / EM disabled / no vault master key) → no rephrase; the raw
+   * reason stands. Not invoked for the already-human EM-cap retire.
+   */
+  emBlockExplainer?: (
+    orgId: string,
+    task: Task,
+    content: { title: string },
+    rawReason: string
+  ) => Promise<void>;
   /** Resolve the org's OWN Anthropic vault key for an agent run (BYOK agent execution, slice 3.5-A.2b).
    *  null → the org has NO key → the in-process spawn FAILS CLOSED (needs_attention, no agent). Present
    *  ONLY with startAgentProxy (both come from the credential vault wiring); absent (tests / fakes) →
@@ -474,8 +489,10 @@ export async function orchestrateTaskAssigned(
         candidates: [],
         winnerAgentId: null,
       });
-      await deps.store.retireUnroutable(orgId, task.id, 'no agents hired');
+      const noRosterReason = 'no agents hired';
+      await deps.store.retireUnroutable(orgId, task.id, noRosterReason);
       deps.logger?.info?.('coordination: org has hired no agents — task → needs_attention', { taskId: task.id });
+      await explainBlock(deps, orgId, task, content, noRosterReason);
       return { kind: 'no_roster', taskId: task.id };
     }
 
@@ -521,8 +538,10 @@ export async function orchestrateTaskAssigned(
     });
 
     if (unhiredPreference) {
-      await deps.store.retireUnroutable(orgId, task.id, `requested agent '${requestedAgent}' is not hired`);
+      const notHiredReason = `requested agent '${requestedAgent}' is not hired`;
+      await deps.store.retireUnroutable(orgId, task.id, notHiredReason);
       deps.logger?.info?.('coordination: requested agent not hired — task → needs_attention', { taskId: task.id, requested: requestedAgent });
+      await explainBlock(deps, orgId, task, content, notHiredReason);
       return { kind: 'agent_not_hired', taskId: task.id };
     }
     if (winnerId === null) {
@@ -667,6 +686,7 @@ export async function orchestrateTaskAssigned(
         jobId,
         waitMs,
       });
+      await explainBlock(deps, orgId, task, content, reason);
       return { kind: 'no_capacity', taskId: task.id, agentId: winner.agentId };
     }
 
@@ -726,6 +746,7 @@ export async function orchestrateTaskAssigned(
         if (!acted) {
           return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
         }
+        await explainBlock(deps, orgId, task, content, reason);
         return { kind: 'key_unavailable', taskId: task.id };
       }
       if (orgKey === null) {
@@ -740,6 +761,7 @@ export async function orchestrateTaskAssigned(
           });
           return { kind: 'preempted', taskId: task.id, agentId: winner.agentId };
         }
+        await explainBlock(deps, orgId, task, content, reason);
         return { kind: 'no_agent_key', taskId: task.id };
       }
       agentProxy = await deps.startAgentProxy({ apiKey: orgKey, usageContext: { orgId, taskId: task.id } });
@@ -860,6 +882,9 @@ export async function orchestrateTaskAssigned(
         target: task.id,
         payload: { reason },
       });
+      // content is the try-scoped story content, not in scope here — fall back to the story id (the rephrase
+      // degrades gracefully on a minimal title).
+      await explainBlock(deps, orgId, task, { title: event.externalStoryId }, reason);
       return { kind: 'no_changes', taskId: task.id };
     }
 
@@ -904,6 +929,11 @@ export async function orchestrateTaskAssigned(
     });
 
     if (tripped) {
+      // Breaker tripped → the task is in needs_attention. recordFailureAndTransition flips status only, so
+      // last_error is unset here; hand the raw error (with its failing stage) to the EM to rephrase into a
+      // human one-liner. content isn't in scope in the catch — fall back to the story id.
+      const rawReason = err instanceof Error ? err.message : String(err);
+      await explainBlock(deps, orgId, task, { title: event.externalStoryId }, rawReason);
       return { kind: 'needs_attention', taskId: task.id, failureCount };
     }
     return { kind: 'failed', taskId: task.id, failureCount };
@@ -919,6 +949,28 @@ export async function orchestrateTaskAssigned(
         provisionedWorktree.branch
       );
     }
+  }
+}
+
+/** EM block-explanation post-step (EM v1 slice 4): hand a freshly-blocked task's RAW reason to the EM so it
+ *  rephrases it into a human one-liner in last_error. A pure text upgrade — it never changes the lifecycle
+ *  or the outcome, and the explainer is best-effort (never throws). No-op when the explainer isn't wired.
+ *  Defensively wrapped so even a programming error in the explainer can't disturb the block outcome. */
+async function explainBlock(
+  deps: OrchestrationDeps,
+  orgId: string,
+  task: Task,
+  content: { title: string },
+  rawReason: string
+): Promise<void> {
+  if (!deps.emBlockExplainer) return;
+  try {
+    await deps.emBlockExplainer(orgId, task, content, rawReason);
+  } catch (err) {
+    deps.logger?.error?.('coordination: em block-explainer threw (block outcome unaffected)', {
+      taskId: task.id,
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

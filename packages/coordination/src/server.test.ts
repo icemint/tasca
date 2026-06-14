@@ -130,6 +130,7 @@ class CountingStore implements CoordinationStore {
   async retireUnroutable() { return false; }
   async markEmCleared() {}
   async parkAwaitingClarification() { return false; }
+  async updateBlockReason() { return false; }
   // EM reply-resume (slice 3): a settable parked task lets the connection-route test exercise the resume
   // path; awaitClarificationCalls / resumeCalls record the org-scoped calls the handler made.
   parkedTask: Task | null = null;

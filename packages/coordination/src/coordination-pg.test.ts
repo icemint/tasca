@@ -389,6 +389,33 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect((await store.getTask(ORG, task.id))?.status).toBe('awaiting_clarification');
   });
 
+  it('updateBlockReason (EM v1 slice 4): writes last_error ONLY in a blocked status; guarded + org-scoped', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-block', platform: 'shortcut', repoRef: '/r' });
+    // Move the task into a blocked status with a RAW reason (as a retire site would).
+    await pool.query(`UPDATE task SET status='needs_attention', last_error=$2 WHERE id=$1`, [task.id, 'no execution capacity: raw']);
+
+    // The rephrase upgrades last_error WITHOUT changing status.
+    expect(await store.updateBlockReason(ORG, task.id, 'No runner picked this up — check capacity.')).toBe(true);
+    const blocked = await store.getTask(ORG, task.id);
+    expect(blocked?.status).toBe('needs_attention'); // status untouched
+    expect(blocked?.lastError).toBe('No runner picked this up — check capacity.');
+
+    // GUARD: a task that moved on (e.g. resumed → routable) is NOT overwritten with a stale reason.
+    await pool.query(`UPDATE task SET status='routable' WHERE id=$1`, [task.id]);
+    expect(await store.updateBlockReason(ORG, task.id, 'stale')).toBe(false);
+    expect((await store.getTask(ORG, task.id))?.lastError).toBe('No runner picked this up — check capacity.'); // unchanged
+
+    // ALSO fires for the `failed` blocked status.
+    await pool.query(`UPDATE task SET status='failed', last_error='raw2' WHERE id=$1`, [task.id]);
+    expect(await store.updateBlockReason(ORG, task.id, 'A human reason for the failure.')).toBe(true);
+    expect((await store.getTask(ORG, task.id))?.lastError).toBe('A human reason for the failure.');
+
+    // ORG-SCOPED: a foreign org cannot rephrase this task's reason.
+    await pool.query(`UPDATE task SET status='needs_attention' WHERE id=$1`, [task.id]);
+    expect(await store.updateBlockReason('org_other', task.id, 'cross-org')).toBe(false);
+    expect((await store.getTask(ORG, task.id))?.lastError).toBe('A human reason for the failure.'); // no cross-org write
+  });
+
   it('recordPullRequest is idempotent on (task_id, url): a re-finalize does not duplicate the PR', async () => {
     const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-pr-idem', platform: 'shortcut', repoRef: '/r' });
     const url = 'https://github.com/icemint/tasca/pull/123';

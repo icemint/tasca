@@ -19,6 +19,7 @@ import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
 import { VendorKeyResolver, ManagerCredentialResolver, type VendorValidator, type AgentCredentialResolver, type ConnectionCredentialResolver } from './vendor-credential';
 import { makeEmReviewGate, type ShortcutCommentReader } from './em-review-gate';
+import { makeEmBlockExplainer } from './em-block-explainer';
 import type { ShortcutWriteBack } from './shortcut-status-reporter';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import { PgAgentCreator } from './agent-creator';
@@ -257,6 +258,26 @@ export function createCoordination(
         })
       : undefined;
 
+  // The EM block-explanation (EM v1 slice 4) — the thin fast-follow that completes EM v1. When a task is
+  // retired to a blocked state with a RAW internal reason, the EM rephrases it into a human one-liner in
+  // last_error. Wired under the SAME gate as the review gate (enabled AND a vendor resolver / master key):
+  // it needs the org vault key for the LLM. BEST-EFFORT + FAIL-OPEN by construction — no manager / no key /
+  // LLM error all leave the raw reason. Runs on the LATEST Anthropic model (the EM's model, reusing
+  // AnthropicEmReviewer's explainBlock); its spend meters as source='manager' via the shared usage sink.
+  const emBlockExplainer =
+    input.emGate?.enabled && vendorResolver
+      ? makeEmBlockExplainer({
+          store,
+          vendorKeyFor: (orgId: string) => vendorResolver.resolve(orgId, 'anthropic'),
+          explainerFor: (apiKey: string) =>
+            new AnthropicEmReviewer(
+              new AnthropicChat({ apiKey, model: input.emGate!.model ?? LATEST_ANTHROPIC_MODEL }),
+              coordinationUsageSink
+            ),
+          ...(input.logger !== undefined ? { logger: input.logger } : {}),
+        })
+      : undefined;
+
   // BYOK agent execution (slice 3.5-A.2b): the in-process agent runs on the ORG'S OWN vault key — never a
   // server key (there is none). The orchestration loop, before each spawn, resolves the org key (null →
   // fail closed, no spawn) and starts an EPHEMERAL per-task proxy baked with that key + the {org,task} for
@@ -482,6 +503,7 @@ export function createCoordination(
     ...(input.authHandler !== undefined ? { authHandler: input.authHandler } : {}),
     ...(classifierFor ? { classifierFor } : {}),
     ...(emReviewGate ? { emReviewGate } : {}),
+    ...(emBlockExplainer ? { emBlockExplainer } : {}),
     ...(agentVendorResolver ? { agentVendorResolver } : {}),
     ...(startAgentProxy ? { startAgentProxy } : {}),
     ...(input.provisioner !== undefined ? { provisioner: input.provisioner } : {}),

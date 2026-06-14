@@ -206,12 +206,23 @@ const EM_REVIEWER_SYSTEM =
   'the story is clear, set "clear" true and "questions" to []. If not, set "clear" false and list 1 to 4 ' +
   'specific clarifying questions. No prose.';
 
-/** EmReviewerPort over AnthropicChat — the EM runs on the LATEST Anthropic model (Sonnet, deliberately
- *  stronger than the routing classifier's Haiku). The consumer's gate fails OPEN on any throw, so a bad
- *  model id / outage / garbage response simply skips the review (the EM never blocks dispatch). The
- *  output is parsed loosely + normalized; an unparseable response surfaces as "clear" (the safe default
- *  that lets the task proceed) rather than parking it on noise. */
-export class AnthropicEmReviewer implements EmReviewerPort {
+/** The EM block-explanation port (EM v1 slice 4): rephrase a raw internal blocker reason into ONE calm,
+ *  operator-facing sentence. Best-effort by contract — the consumer (coordination's emBlockExplainer)
+ *  wraps the call so ANY throw is swallowed and the RAW reason is kept. */
+export interface EmBlockExplainerPort {
+  explainBlock(input: { rawReason: string; title: string }): Promise<string>;
+}
+
+const EM_BLOCK_EXPLAINER_SYSTEM =
+  'You are an engineering manager. A task is blocked and needs a human operator. Rewrite the internal ' +
+  'blocker reason as ONE clear, calm sentence the operator can act on. Plain text only — no JSON, no ' +
+  'preamble, no quotes, just the one sentence.';
+
+/** EmBlockExplainerPort over AnthropicChat — runs on the LATEST Anthropic model (the EM's model). The
+ *  consumer swallows any throw and keeps the raw reason, so a bad model id / outage / empty response just
+ *  leaves the original text. `maxTokens` is small (one sentence). The model text is trimmed; the consumer
+ *  bounds its length. */
+export class AnthropicEmReviewer implements EmReviewerPort, EmBlockExplainerPort {
   constructor(
     private readonly chat: AnthropicChat,
     /** Optional usage sink — meters this call's tokens (the gate runs it under source='manager'). */
@@ -247,6 +258,16 @@ export class AnthropicEmReviewer implements EmReviewerPort {
     // An unclear verdict with no usable questions degrades to clear (nothing actionable to ask).
     if (!clear && questions.length === 0) return { clear: true, questions: [] };
     return { clear, questions };
+  }
+
+  async explainBlock(input: { rawReason: string; title: string }): Promise<string> {
+    const { text, usage } = await this.chat.complete({
+      system: EM_BLOCK_EXPLAINER_SYSTEM,
+      prompt: `Internal blocker reason: ${input.rawReason}\n\nTask: ${input.title}`,
+      maxTokens: 120,
+    });
+    if (usage) this.sink?.record(usage); // meter the spend regardless of how the text is used downstream
+    return text.trim();
   }
 }
 
