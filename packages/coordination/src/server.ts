@@ -29,6 +29,9 @@ import { agentIdentityApiHandler, type AgentIdentityApiDeps } from './agent-iden
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
 import { inviteApiHandler, type InviteApiDeps } from './invite-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
+import { connectionApiHandler, type ConnectionApiDeps } from './connection-api';
+import { shortcutVerifier } from './shortcut-verifier';
+import type { ConnectionCredentialResolver } from './vendor-credential';
 
 export interface CoordinationServerDeps extends OrchestrationDeps {
   /**
@@ -89,8 +92,27 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * binds a customer's GitHub install to their org. Absent → those paths fall through to 404.
    */
   connectApi?: GitHubConnectDeps;
-  /** The Shortcut webhook verifier (POST /webhooks/shortcut). */
+  /**
+   * The connection set API (slice SC-1: POST /api/orgs/:orgId/connections/shortcut). Session-gated;
+   * CSRF + admin-gated; binds a Shortcut workspace to a project + seals the connection's secrets.
+   * Absent → that path falls through to 404 (additive).
+   */
+  connectionApi?: ConnectionApiDeps;
+  /** The Shortcut webhook verifier (POST /webhooks/shortcut — the legacy env-secret route). */
   verifier: WebhookVerifier;
+  /**
+   * Connection-scoped Shortcut intake (slice SC-1: POST /webhooks/shortcut/:connectionId). Resolves the
+   * connection's sealed `webhook_secret` to build a PER-REQUEST verifier, so a multi-workspace org routes
+   * each delivery to the right connection → project → repo. Absent (no master key / vault) → that path
+   * 404s; the legacy `/webhooks/shortcut` env-secret route is unaffected.
+   */
+  connectionCredentialResolver?: ConnectionCredentialResolver;
+  /**
+   * Boot-time snapshot of the active Shortcut identity bindings, used to build the per-request
+   * connection-scoped verifier (the registered assignee/self set). Same snapshot the legacy verifier
+   * uses; a roster change needs a worker restart (the documented Stage-1 reload caveat).
+   */
+  registeredShortcutIds?: ReadonlySet<string>;
   /** The GitHub webhook verifier (POST /webhooks/github). Absent → that path 404s. */
   githubVerifier?: WebhookVerifier;
   /**
@@ -189,10 +211,19 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     '/webhooks/github': deps.githubVerifier,
   };
 
+  // A resolved connection-scoped delivery (slice SC-1): the connection already determines the org and
+  // the repo, so handleWebhook uses these directly instead of resolving the org from the event's
+  // workspace, and stamps `repoHint` onto every event so the task lands on the connection's repo.
+  interface ConnectionContext {
+    orgId: string;
+    repoRef: string | null;
+  }
+
   async function handleWebhook(
     verifier: WebhookVerifier,
     req: IncomingMessage,
-    res: ServerResponse
+    res: ServerResponse,
+    connectionContext?: ConnectionContext
   ): Promise<void> {
     let rawBody: string;
     try {
@@ -234,16 +265,24 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     const events: AdapterEvent[] = [];
     for (const candidate of verifier.parse(verified)) {
       const parsed = AdapterEventSchema.safeParse(candidate);
-      if (parsed.success) events.push(parsed.data);
-      else safeLog('coordination: dropped malformed adapter event', { platform: verified.platform });
+      if (parsed.success) {
+        // Connection-scoped delivery (slice SC-1): stamp the connection's project repo onto every
+        // event, so the task gets the right repo (Shortcut events carry no repoHint of their own).
+        events.push(
+          connectionContext ? { ...parsed.data, repoHint: connectionContext.repoRef ?? undefined } : parsed.data
+        );
+      } else safeLog('coordination: dropped malformed adapter event', { platform: verified.platform });
     }
 
-    // Resolve the delivery's org at the webhook EDGE: a delivery is from one workspace, so
-    // the first event's workspace owns it; its connection's org (or the default org for an
-    // unconnected workspace) scopes the ledger. A zero-event delivery (e.g. a non-task
-    // webhook) has no workspace → default org, which is sufficient to dedup its redeliveries.
+    // Resolve the delivery's org. For a CONNECTION-SCOPED delivery (slice SC-1) the connection already
+    // determines the org — a Shortcut delivery's org is its connection's org, NOT the workspace/default
+    // fallback. For the legacy env-secret route, resolve at the webhook EDGE from the first event's
+    // workspace (its connection's org, or the default org for an unconnected workspace). A zero-event
+    // delivery (a non-task webhook) has no workspace → default org, sufficient to dedup its redeliveries.
     const ledgerWorkspace = events[0] ? workspaceForEvent(events[0]) : null;
-    const orgId = await resolveWebhookOrg(deps.store, verified.platform, ledgerWorkspace);
+    const orgId = connectionContext
+      ? connectionContext.orgId
+      : await resolveWebhookOrg(deps.store, verified.platform, ledgerWorkspace);
     if (orgId === null) {
       // GitHub delivery for an UNCONNECTED workspace (slice 5c) → fail closed: ack so GitHub doesn't
       // retry-storm, but record NO ledger and orchestrate NOTHING. An installed-but-unbound account's
@@ -314,6 +353,42 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     });
   }
 
+  /**
+   * Connection-scoped Shortcut intake (slice SC-1). Resolves the connection by id, builds a per-request
+   * verifier from its sealed webhook secret, and delegates to handleWebhook with the connection's
+   * {org, repo} context. Fail-closed: the connection surface unconfigured (no resolver / no snapshot)
+   * or an unknown connection → 404; a connection without a sealed secret → 401.
+   */
+  async function handleConnectionWebhook(
+    connectionId: string,
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<void> {
+    // The connection surface is unconfigured (no vault master key) → not routed. 404 (not-routed),
+    // never a 500 or a fall-through to the default tenant.
+    if (!deps.connectionCredentialResolver) {
+      res.writeHead(404).end('not found');
+      return;
+    }
+    const connection = await deps.store.getShortcutConnectionById(connectionId);
+    if (!connection) {
+      // Unknown / non-shortcut / revoked connection — not routed.
+      res.writeHead(404).end('not found');
+      return;
+    }
+    // Resolve the connection's sealed webhook secret (org-scoped). Absent → fail closed (401), never
+    // run unverified: a connection whose secret write didn't land 401s until a re-set adds it.
+    const secret = await deps.connectionCredentialResolver.resolve(connection.orgId, connectionId, 'webhook_secret');
+    if (secret === null) {
+      res.writeHead(401).end('invalid signature');
+      return;
+    }
+    // Build a per-request verifier with THIS connection's secret. The registered agent-id set is the
+    // boot-time snapshot (assignee/self set), shared with the legacy route.
+    const verifier = shortcutVerifier(secret, deps.registeredShortcutIds ?? new Set<string>());
+    await handleWebhook(verifier, req, res, { orgId: connection.orgId, repoRef: connection.repoRef });
+  }
+
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET' && req.url === '/healthz') {
       res.writeHead(200, { 'content-type': 'text/plain' });
@@ -340,6 +415,19 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
       }
       await handleWebhook(verifier, req, res);
       return;
+    }
+
+    // Connection-scoped Shortcut intake (slice SC-1): POST /webhooks/shortcut/:connectionId. The path
+    // carries the connection id; resolve the connection → its sealed webhook_secret → a per-request
+    // verifier, then run the SAME verify→ledger→orchestrate flow with the connection's org + repo. Fail
+    // CLOSED: an unknown/non-shortcut/revoked connection → 404; a connection with no sealed secret → 401.
+    // Never 500, never the default tenant. (The legacy `/webhooks/shortcut` route above is unchanged.)
+    if (req.method === 'POST' && req.url !== undefined) {
+      const m = /^\/webhooks\/shortcut\/([^/]+)$/.exec(new URL(req.url, 'http://localhost').pathname);
+      if (m) {
+        await handleConnectionWebhook(decodeURIComponent(m[1]!), req, res);
+        return;
+      }
     }
 
     // Auth routes (only when wired). The handler returns true if it owned the
@@ -370,6 +458,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Per-agent identity API (only when wired). Handles POST /api/orgs/:orgId/agents/:agentId/identity/shortcut
     // before the generic read API's /api/* claim.
     if (deps.agentIdentityApi && (await agentIdentityApiHandler(req, res, deps.agentIdentityApi))) return;
+
+    // Connection set API (only when wired). Handles POST /api/orgs/:orgId/connections/shortcut before
+    // the generic read API's /api/* claim.
+    if (deps.connectionApi && (await connectionApiHandler(req, res, deps.connectionApi))) return;
 
     // PM-assistant API (only when wired). Handles GET /api/proposals + the mutating POSTs.
     if (deps.proposalApi && (await proposalApiHandler(req, res, deps.proposalApi))) return;

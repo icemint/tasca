@@ -158,6 +158,15 @@ class FakeStore implements CoordinationStore {
   async revokeInstallationByAccount() {
     return false;
   }
+  async upsertShortcutConnection() {
+    return { connectionId: 'conn_x' };
+  }
+  async getShortcutConnectionById() {
+    return null;
+  }
+  async projectExistsInOrg() {
+    return true;
+  }
   retireCalls: Array<{ taskId: string; reason: string }> = [];
   async retireUnroutable(_orgId: string, taskId: string, reason: string): Promise<boolean> {
     this.retireCalls.push({ taskId, reason });

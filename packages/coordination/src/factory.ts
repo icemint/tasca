@@ -17,7 +17,7 @@ import { makeUsageSink } from './usage-context';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
-import { VendorKeyResolver, type VendorValidator, type AgentCredentialResolver } from './vendor-credential';
+import { VendorKeyResolver, type VendorValidator, type AgentCredentialResolver, type ConnectionCredentialResolver } from './vendor-credential';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import { PgAgentCreator } from './agent-creator';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
@@ -62,6 +62,17 @@ export interface CreateCoordinationDeps {
    *  the host's Shortcut status reporter reads (so a set busts the reporter's cache on this node).
    *  Absent → the agent-identity API is not wired. */
   agentCredential?: { masterKey: Buffer | null; resolver: AgentCredentialResolver };
+  /** Per-connection secrets (slice SC-1): the env-held master key (null → the set surface 503s) + the
+   *  shared ConnectionCredentialResolver. Wires POST /api/orgs/:orgId/connections/shortcut (admin-gated,
+   *  write-only set of a workspace→project binding + its sealed secrets) AND the connection-scoped
+   *  webhook route POST /webhooks/shortcut/:connectionId (which resolves the connection's webhook secret
+   *  via the same resolver, so a set busts its cache here). `registeredShortcutIds` is the boot-time
+   *  Shortcut binding snapshot the per-request verifier uses. Absent → neither surface is wired. */
+  connectionCredential?: {
+    masterKey: Buffer | null;
+    resolver: ConnectionCredentialResolver;
+    registeredShortcutIds: ReadonlySet<string>;
+  };
   /** Window to wait (polling) for a runner to claim before retiring the task to
    *  needs_attention. Default 30000ms. */
   runnerWaitMs?: number;
@@ -332,6 +343,27 @@ export function createCoordination(
             ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
             ...(input.logger !== undefined ? { logger: input.logger } : {}),
           },
+        }
+      : {}),
+    // The connection set API (slice SC-1) — wired only when the connection-credential bits (master key
+    // presence + the shared resolver) are supplied. Admin-gated, CSRF, write-only set of a Shortcut
+    // workspace→project binding + its sealed secrets; governance-audits the set.
+    ...(input.connectionCredential
+      ? {
+          connectionApi: {
+            store,
+            resolver: input.connectionCredential.resolver,
+            masterKey: input.connectionCredential.masterKey,
+            membership,
+            // Governance audit trail: the same store implements GovernanceAuditSink.
+            audit: store,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
+          // The connection-scoped webhook route reads the SAME resolver (cache-busted on a set) + the
+          // boot-time Shortcut binding snapshot to build per-request verifiers.
+          connectionCredentialResolver: input.connectionCredential.resolver,
+          registeredShortcutIds: input.connectionCredential.registeredShortcutIds,
         }
       : {}),
     // The PM-assistant API (slice W3-S1) — advisory proposals. Accept routes through the store's

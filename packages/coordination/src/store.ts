@@ -15,6 +15,8 @@ import type {
   VendorCredentialStore,
   AgentCredentialProvider,
   AgentCredentialStore,
+  ConnectionCredentialKind,
+  ConnectionCredentialStore,
 } from './vendor-credential';
 import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
 import type { CreateInviteInput, InviteSummary, AcceptInviteResult, InviteStore } from './invite';
@@ -253,6 +255,11 @@ export interface CoordinationStore {
   /** The org's projects (slice Project-A), name-ordered. Org-scoped — never another org's projects. */
   listProjects(orgId: string): Promise<ProjectSummary[]>;
 
+  /** Whether a project exists in THIS org (slice SC-1). Org-scoped: a foreign-org project id and a
+   *  nonexistent id both return false — no cross-tenant existence oracle. Used by the connection
+   *  set-API to 404 a projectId that isn't this org's. */
+  projectExistsInOrg(orgId: string, projectId: string): Promise<boolean>;
+
   /** The user's active project (slice Project-A) — the finer task-view filter WITHIN their active
    *  org — VALIDATED against that org at read time, or null (= the cross-project "all projects" view).
    *  A stale active project whose org is no longer the user's active org resolves to null, never a
@@ -489,6 +496,31 @@ export interface CoordinationStore {
    */
   revokeInstallationByAccount(account: string): Promise<boolean>;
 
+  // ── Shortcut connection ↔ project binding (slice SC-1) ────────────────────────
+
+  /**
+   * Upsert a Shortcut connection bound to a project (slice SC-1). Idempotent on the org-scoped
+   * UNIQUE(org_id, platform, workspace_id): a re-configure of the same workspace updates its
+   * project_id in place (so the operator's webhook URL stays stable). Returns the connection id.
+   * org-scoped — a connection can only land in THIS org.
+   */
+  upsertShortcutConnection(
+    orgId: string,
+    input: { workspaceId: string; projectId: string }
+  ): Promise<{ connectionId: string }>;
+
+  /**
+   * Resolve a Shortcut connection by id for the connection-scoped webhook route (slice SC-1):
+   * the connection's org + its project's repo_ref, or null when there is no LIVE shortcut connection
+   * for that id (unknown id, wrong platform, or revoked). CROSS-ORG by design — it is DISCOVERING which
+   * org/repo the inbound delivery belongs to (the connection id is the routing key), so it cannot
+   * itself be org-scoped; it joins to project IN the connection's own org. `repoRef` is null when the
+   * bound project has no repo (the Unassigned bucket) or the connection has no project bound.
+   */
+  getShortcutConnectionById(
+    connectionId: string
+  ): Promise<{ orgId: string; repoRef: string | null } | null>;
+
   // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────
   // These DISCOVER which org a request/job belongs to, so they cannot themselves be
   // org-scoped. Each returns null when nothing matches; the EDGE (orchestrate / reaper /
@@ -617,7 +649,13 @@ class RollbackProposal extends Error {
  * single connection.
  */
 export class PgCoordinationStore
-  implements CoordinationStore, VendorCredentialStore, AgentCredentialStore, GovernanceAuditSink, InviteStore
+  implements
+    CoordinationStore,
+    VendorCredentialStore,
+    AgentCredentialStore,
+    ConnectionCredentialStore,
+    GovernanceAuditSink,
+    InviteStore
 {
   constructor(private readonly db: Queryable) {}
 
@@ -816,6 +854,43 @@ export class PgCoordinationStore
     return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
   }
 
+  // ── Per-connection platform credentials (slice SC-1) — sealed at rest; no method returns plaintext ─
+  async setConnectionCredential(
+    orgId: string,
+    connectionId: string,
+    kind: ConnectionCredentialKind,
+    sealed: SealedCredential,
+    fingerprint: string,
+    createdBy: string | null
+  ): Promise<void> {
+    // Upsert (org_id, connection_id, kind): a replace overwrites the sealed secret + fingerprint and
+    // refreshes status/last_validated_at. org-scoped — a set can only land on THIS org's connection.
+    await this.db.query(
+      `INSERT INTO connection_credential (org_id, connection_id, kind, ciphertext, nonce, auth_tag, key_fingerprint, status, created_by, last_validated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8, now())
+       ON CONFLICT (org_id, connection_id, kind) DO UPDATE SET
+         ciphertext = EXCLUDED.ciphertext, nonce = EXCLUDED.nonce, auth_tag = EXCLUDED.auth_tag,
+         key_fingerprint = EXCLUDED.key_fingerprint, status = 'active', last_validated_at = now()`,
+      [orgId, connectionId, kind, sealed.ciphertext, sealed.nonce, sealed.authTag, fingerprint, createdBy]
+    );
+  }
+
+  async getSealedConnectionCredential(
+    orgId: string,
+    connectionId: string,
+    kind: ConnectionCredentialKind
+  ): Promise<SealedCredential | null> {
+    // The resolver's read — returns the SEALED blob (the master key to open it lives in env, not here).
+    // ORG-SCOPED + connection-scoped: a cross-tenant secret is unreachable from another org's context.
+    const res = await this.db.query<{ ciphertext: string; nonce: string; auth_tag: string }>(
+      `SELECT ciphertext, nonce, auth_tag FROM connection_credential
+        WHERE org_id = $1 AND connection_id = $2 AND kind = $3 AND status = 'active'`,
+      [orgId, connectionId, kind]
+    );
+    const row = res.rows[0];
+    return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
+  }
+
   async recordWebhookEvent(
     orgId: string,
     input: {
@@ -936,6 +1011,14 @@ export class PgCoordinationStore
       [orgId]
     );
     return res.rows.map((r) => ({ id: r.id, name: r.name, repoRef: r.repo_ref }));
+  }
+
+  async projectExistsInOrg(orgId: string, projectId: string): Promise<boolean> {
+    // ORG-SCOPED existence probe: a foreign-org id and a nonexistent id are INDISTINGUISHABLE (both
+    // false) — no cross-tenant existence oracle. The connection set-API uses this to 404 a projectId
+    // that isn't this org's, without leaking whether it exists in another tenant.
+    const res = await this.db.query(`SELECT 1 FROM project WHERE id = $1 AND org_id = $2`, [projectId, orgId]);
+    return (res.rowCount ?? 0) > 0;
   }
 
   async getActiveProject(userId: string): Promise<string | null> {
@@ -1637,6 +1720,44 @@ export class PgCoordinationStore
       [account]
     );
     return (res.rowCount ?? 0) > 0;
+  }
+
+  // ── Shortcut connection ↔ project binding (slice SC-1) ────────────────────────
+  async upsertShortcutConnection(
+    orgId: string,
+    input: { workspaceId: string; projectId: string }
+  ): Promise<{ connectionId: string }> {
+    // Upsert on the org-prefixed UNIQUE(org_id, platform, workspace_id) with platform='shortcut': a
+    // re-configure of the same workspace updates its project_id + un-revokes (health back to healthy)
+    // in place, keeping the existing id so the operator's webhook URL is stable. RETURNING (on both the
+    // insert and the update) yields the canonical id. org-scoped — a connection can only land here.
+    const res = await this.db.query<{ id: string }>(
+      `INSERT INTO platform_connection (id, org_id, platform, workspace_id, project_id)
+       VALUES ($1,$2,'shortcut',$3,$4)
+       ON CONFLICT (org_id, platform, workspace_id) DO UPDATE SET
+         project_id = EXCLUDED.project_id, health = 'healthy'
+       RETURNING id`,
+      [randomUUID(), orgId, input.workspaceId, input.projectId]
+    );
+    return { connectionId: res.rows[0]!.id };
+  }
+
+  async getShortcutConnectionById(
+    connectionId: string
+  ): Promise<{ orgId: string; repoRef: string | null } | null> {
+    // CROSS-ORG by design (the connection id is the routing key — see the interface note): a LEFT JOIN
+    // to project resolves the bound repo_ref within the connection's OWN org. A revoked or non-shortcut
+    // connection does not resolve (fail closed). repo_ref is null when no project is bound or the bound
+    // project is the Unassigned (null-repo) bucket.
+    const res = await this.db.query<{ org_id: string; repo_ref: string | null }>(
+      `SELECT pc.org_id, p.repo_ref
+         FROM platform_connection pc
+         LEFT JOIN project p ON p.id = pc.project_id AND p.org_id = pc.org_id
+        WHERE pc.id = $1 AND pc.platform = 'shortcut' AND pc.health <> 'revoked'`,
+      [connectionId]
+    );
+    const row = res.rows[0];
+    return row ? { orgId: row.org_id, repoRef: row.repo_ref } : null;
   }
 
   // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────

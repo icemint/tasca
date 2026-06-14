@@ -408,6 +408,47 @@ CREATE TABLE IF NOT EXISTS org_agent_credential (
 CREATE INDEX IF NOT EXISTS org_agent_credential_org_idx ON org_agent_credential (org_id);`;
 
 /**
+ * Per-connection platform credentials (slice SC-1): one row per (org, connection, kind). Stores ONLY
+ * the AEAD ciphertext + nonce + auth tag (sealed under the env-held master key — see vendor-credential.ts)
+ * + a non-reversible fingerprint + status. NO plaintext secret. This is the per-connection secret vault
+ * that lets a Shortcut workspace's inbound webhook be verified (kind 'webhook_secret') and its stories
+ * read (kind 'read_token') under THIS connection. org-scoped, in TENANT_TABLES; PK (org_id, connection_id,
+ * kind). ON DELETE CASCADE on BOTH the org and the connection — dropping either drops the credential.
+ *
+ * It FKs ONLY coordination-owned tables (organization + platform_connection), so — unlike
+ * org_agent_credential (which FKs the identity-schema `agent`) — it CAN live inside
+ * COORDINATION_SCHEMA_DDL. It is ordered AFTER PLATFORM_CONNECTION_TABLE_DDL + ORG_SCOPING_DDL so both
+ * referenced tables already exist.
+ */
+export const CONNECTION_CREDENTIAL_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS connection_credential (
+  org_id            text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  connection_id     text NOT NULL REFERENCES platform_connection(id) ON DELETE CASCADE,
+  kind              text NOT NULL CHECK (kind IN ('webhook_secret','read_token')),
+  ciphertext        text NOT NULL,
+  nonce             text NOT NULL,
+  auth_tag          text NOT NULL,
+  key_fingerprint   text NOT NULL,
+  status            text NOT NULL DEFAULT 'active' CHECK (status IN ('active','invalid')),
+  created_by        text,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  last_validated_at timestamptz,
+  PRIMARY KEY (org_id, connection_id, kind)
+);
+CREATE INDEX IF NOT EXISTS connection_credential_org_idx ON connection_credential (org_id);`;
+
+/**
+ * Bind a platform_connection to a project (slice SC-1): a Shortcut connection routes its inbound
+ * stories to ONE project, whose single repo_ref is the repo the resulting tasks execute against
+ * (EltexSoft's topology: 1 Shortcut workspace ≈ 1 repo = 1 project). NULLABLE — GitHub resolves its
+ * repo directly from the event and leaves this null. Additive ADD COLUMN IF NOT EXISTS + a deferred
+ * FK, applied AFTER PROJECT_TABLE_DDL so the referenced project table already exists.
+ */
+export const PLATFORM_CONNECTION_PROJECT_DDL = `
+ALTER TABLE platform_connection ADD COLUMN IF NOT EXISTS project_id text;
+DO $$ BEGIN ALTER TABLE platform_connection ADD CONSTRAINT platform_connection_project_fk FOREIGN KEY (project_id) REFERENCES project(id); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`;
+
+/**
  * Governance audit trail (slice 3.5-A.2c.1): an append-only, org-scoped ledger of credential
  * management actions (set / delete). A credential mutation is a HUMAN-ADMIN, ORG-SCOPED governance
  * action with no agent, so it does NOT reuse @tasca/identity's agent-centric `audit_event` (agent_id
@@ -565,7 +606,9 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   // coordination schema without identity. It is applied in main.ts after BOTH identity + coordination,
   // next to ORG_AGENT_TABLE_DDL (same cross-module org+agent FK shape).
   GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
+  CONNECTION_CREDENTIAL_TABLE_DDL, // slice SC-1: per-connection secrets (FKs organization + platform_connection — both above)
   ORG_INVITE_TABLE_DDL, // slice 3.5-B.3.1: single-use, hashed-at-rest, expiring org-join invites
   PROJECT_TABLE_DDL, // slice Project-A: the project entity (after organization exists)
   PROJECT_BACKFILL_DDL, // slice Project-A: task.project_id expand/contract (after ORG_SCOPING_DDL → task.org_id NOT NULL)
+  PLATFORM_CONNECTION_PROJECT_DDL, // slice SC-1: platform_connection.project_id + FK (after PROJECT_TABLE_DDL → project exists)
 ];

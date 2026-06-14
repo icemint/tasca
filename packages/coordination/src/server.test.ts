@@ -2,7 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { createRequestHandler, type CoordinationServerDeps } from './server';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes, createHmac } from 'node:crypto';
+import {
+  ConnectionCredentialResolver,
+  sealVendorKey,
+  type SealedCredential,
+  type SealedConnectionCredentialReader,
+  type ConnectionCredentialKind,
+} from './vendor-credential';
 import type { AdapterEvent } from '@tasca/contracts';
 import type { Task, TaskStatus, TierEstimate } from '@tasca/domain';
 import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin } from './store';
@@ -99,6 +106,15 @@ class CountingStore implements CoordinationStore {
   async getInstallationIdForOwner() { return null; }
   async updateInstallationByAccount() { return false; }
   async revokeInstallationByAccount() { return false; }
+  async upsertShortcutConnection() { return { connectionId: 'conn_x' }; }
+  // Connection-scoped intake (slice SC-1): null = unknown/revoked connection (404). Set a value to
+  // route a delivery to that connection's org + repo.
+  shortcutConnection: { orgId: string; repoRef: string | null } | null = null;
+  async getShortcutConnectionById(_connectionId: string) { return this.shortcutConnection; }
+  async projectExistsInOrg() { return true; }
+  taskFor(platform: string, externalStoryId: string) {
+    return this.tasksByStory.get(`${platform}:${externalStoryId}`);
+  }
   async retireUnroutable() { return false; }
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
@@ -166,7 +182,8 @@ function makeServerDeps(
   run: (w: () => Promise<void>) => void,
   logger?: Logger,
   githubVerifier?: WebhookVerifier,
-  authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
+  authHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>,
+  connection?: { resolver: ConnectionCredentialResolver; registeredShortcutIds: ReadonlySet<string> }
 ): CoordinationServerDeps {
   return {
     store,
@@ -181,19 +198,64 @@ function makeServerDeps(
     ...(logger ? { logger } : {}),
     ...(githubVerifier ? { githubVerifier } : {}),
     ...(authHandler ? { authHandler } : {}),
+    ...(connection
+      ? {
+          connectionCredentialResolver: connection.resolver,
+          registeredShortcutIds: connection.registeredShortcutIds,
+        }
+      : {}),
   };
+}
+
+// ── Connection-scoped Shortcut intake helpers (slice SC-1) ───────────────────
+const CONN_MASTER = randomBytes(32);
+const CONN_WEBHOOK_SECRET = 'connection-webhook-secret-do-not-leak';
+const SC_AGENT_ID = 'sc-agent-uuid';
+
+/** A reader that returns the sealed webhook secret for any connection (the resolver opens it). */
+function connReaderFor(secret: string | null): SealedConnectionCredentialReader {
+  const sealed: SealedCredential | null = secret === null ? null : sealVendorKey(secret, CONN_MASTER);
+  return {
+    async getSealedConnectionCredential(_org: string, _conn: string, _kind: ConnectionCredentialKind) {
+      return sealed;
+    },
+  };
+}
+
+/** A real signed Shortcut delivery: an `update` action adding SC_AGENT_ID as a story owner → one
+ *  task.assigned event for story `storyId`. Signed with `secret` so the real ShortcutAdapter verifies. */
+function signedShortcutReq(connectionId: string, storyId: string, secret: string, eventId: string): IncomingMessage {
+  const body = JSON.stringify({
+    id: eventId,
+    changed_at: '2026-06-14T00:00:00Z',
+    member_id: 'human-actor',
+    primary_id: storyId,
+    actions: [{ id: storyId, entity_type: 'story', action: 'update', changes: { owner_ids: { adds: [SC_AGENT_ID] } } }],
+  });
+  const signature = createHmac('sha256', secret).update(body, 'utf8').digest('hex');
+  return fakeReq('POST', `/webhooks/shortcut/${connectionId}`, body, { 'payload-signature': signature });
 }
 
 // Build a fake req/res pair driving the handler.
 function fakeReq(method: string, url: string, body: string, headers: Record<string, string> = {}): IncomingMessage {
-  const req = new EventEmitter() as unknown as IncomingMessage;
+  const emitter = new EventEmitter();
+  const req = emitter as unknown as IncomingMessage;
   (req as { method: string }).method = method;
   (req as { url: string }).url = url;
   (req as { headers: Record<string, string> }).headers = headers;
   (req as { destroy: () => void }).destroy = () => {};
-  queueMicrotask(() => {
-    if (body) req.emit('data', Buffer.from(body));
-    req.emit('end');
+  // Emit the body only once an `end` listener is attached — readRawBody may register its listeners
+  // after one or more awaits (the connection-scoped route resolves the connection + secret first), so a
+  // fixed queueMicrotask would fire before the listeners exist and the read would hang. Driving off
+  // 'newListener' makes the stream deliver regardless of how many awaits precede readRawBody.
+  let emitted = false;
+  emitter.on('newListener', (event) => {
+    if (event !== 'end' || emitted) return;
+    emitted = true;
+    queueMicrotask(() => {
+      if (body) emitter.emit('data', Buffer.from(body));
+      emitter.emit('end');
+    });
   });
   return req;
 }
@@ -533,5 +595,132 @@ describe('coordination HTTP entry (node:http handler)', () => {
     await handle(fakeReq('POST', '/webhooks/github', '{}', { 'x-bad': '1' }), res.res);
     expect(res.statusCode).toBe(401);
     expect(store.createdTasks).toBe(0);
+  });
+});
+
+describe('connection-scoped Shortcut intake (slice SC-1)', () => {
+  const ids = new Set([SC_AGENT_ID]);
+
+  it('valid connection + signature → 202; the task gets the connection’s org + repo (repo-link)', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: 'eltexsoft/widget-api' };
+    const work: Array<() => Promise<void>> = [];
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('unused'), (w) => work.push(w), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    await handle(signedShortcutReq('conn-1', 'story-42', CONN_WEBHOOK_SECRET, 'evt-sc1'), r.res);
+    expect(r.statusCode).toBe(202);
+    expect(work).toHaveLength(1);
+    for (const w of work) await w();
+    await flush();
+
+    expect(store.createdTasks).toBe(1);
+    const task = store.taskFor('shortcut', 'story-42');
+    expect(task).toBeDefined();
+    // repo-link: the connection's project repo_ref is stamped onto the task (Shortcut carries none).
+    expect(task!.repoRef).toBe('eltexsoft/widget-api');
+    // the delivery's org is the connection's org, NOT the default-tenant fallback.
+    expect(store.ledgerStatus('shortcut', 'evt-sc1')).toBe('processed');
+  });
+
+  it('an Unassigned-project connection (null repo) → task repoRef stays null (no crash)', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: null };
+    const work: Array<() => Promise<void>> = [];
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('unused'), (w) => work.push(w), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    await handle(signedShortcutReq('conn-1', 'story-7', CONN_WEBHOOK_SECRET, 'evt-sc-null'), r.res);
+    expect(r.statusCode).toBe(202);
+    for (const w of work) await w();
+    await flush();
+    expect(store.taskFor('shortcut', 'story-7')!.repoRef).toBeNull();
+  });
+
+  it('unknown / revoked connection → 404, no task, never the default tenant', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = null; // getShortcutConnectionById resolves nothing
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('unused'), (w) => void w(), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    await handle(signedShortcutReq('conn-unknown', 'story-1', CONN_WEBHOOK_SECRET, 'evt-x'), r.res);
+    expect(r.statusCode).toBe(404);
+    expect(store.createdTasks).toBe(0);
+  });
+
+  it('bad signature → 401 (fail closed), no task', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: 'eltexsoft/widget-api' };
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('unused'), (w) => void w(), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    // Signed with the WRONG secret → the per-connection verifier rejects.
+    await handle(signedShortcutReq('conn-1', 'story-1', 'the-wrong-secret', 'evt-bad'), r.res);
+    expect(r.statusCode).toBe(401);
+    expect(store.createdTasks).toBe(0);
+  });
+
+  it('connection with NO sealed webhook secret → 401 (fail closed)', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: 'eltexsoft/widget-api' };
+    const resolver = new ConnectionCredentialResolver(connReaderFor(null), CONN_MASTER); // no secret stored
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('unused'), (w) => void w(), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    await handle(signedShortcutReq('conn-1', 'story-1', CONN_WEBHOOK_SECRET, 'evt-nosecret'), r.res);
+    expect(r.statusCode).toBe(401);
+    expect(store.createdTasks).toBe(0);
+  });
+
+  it('connection surface unconfigured (no resolver) → 404 (route not wired)', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: 'eltexsoft/widget-api' };
+    const handle = createRequestHandler(makeServerDeps(store, verifierFor('unused'), (w) => void w()));
+    const r = fakeRes();
+    await handle(signedShortcutReq('conn-1', 'story-1', CONN_WEBHOOK_SECRET, 'evt-unwired'), r.res);
+    expect(r.statusCode).toBe(404);
+    expect(store.createdTasks).toBe(0);
+  });
+
+  it('the legacy /webhooks/shortcut env-secret route is unchanged (still verifies via the injected verifier)', async () => {
+    const store = new CountingStore();
+    const work: Array<() => Promise<void>> = [];
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('evt-legacy'), (w) => work.push(w), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    await handle(fakeReq('POST', '/webhooks/shortcut', '{"id":"evt-legacy"}'), r.res);
+    expect(r.statusCode).toBe(202); // the stub verifier still owns the legacy exact path
+    for (const w of work) await w();
+    await flush();
+    expect(store.createdTasks).toBe(1);
   });
 });
