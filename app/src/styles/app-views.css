@@ -69,6 +69,8 @@
 .ictl { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface-2); color: var(--fg-2); font-size: var(--fs-sm); font-weight: 600; transition: all var(--dur) var(--ease); }
 .ictl svg { width: 14px; height: 14px; }
 .ictl:hover { border-color: var(--line-3); color: var(--fg); }
+.ictl:disabled { opacity: 0.5; cursor: not-allowed; }
+.ictl:disabled:hover { border-color: var(--line-2); color: var(--fg-2); }
 .ictl.signal { border-color: color-mix(in srgb, var(--signal) 45%, transparent); color: var(--signal-2); background: color-mix(in srgb, var(--signal) 9%, transparent); }
 .ictl.amber { border-color: color-mix(in srgb, var(--amber) 45%, transparent); color: var(--amber); background: color-mix(in srgb, var(--amber) 9%, transparent); }
 .ictl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px; }

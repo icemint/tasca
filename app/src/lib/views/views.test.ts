@@ -502,6 +502,48 @@ describe('settings — Workspace panel (slice 3.5-B.2: name + members/roles)', (
     expect(html).not.toContain('Coming soon');
   });
 
+  it('sole owner (#316): own role <select> + Remove are disabled, with a hint to promote another owner first', async () => {
+    // MEMBERS_OK has exactly one owner (u1) — the lockout-prone case.
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK }, // caller is u1, the only owner
+      '/api/org': { body: ORG_INFO_OWNER },
+      '/api/orgs/members': { body: MEMBERS_OK },
+      '/api/orgs': { body: ADMIN_ORGS },
+    });
+    const html = htmlOf(await loadSettings());
+    // u1's own controls are present but disabled (server refuses with 409 last_owner; don't offer the doomed action)
+    expect(html).toMatch(/data-act="ws-role" data-user-id="u1" disabled/);
+    expect(html).toMatch(/data-act="ws-remove" data-user-id="u1" disabled/);
+    expect(html).toContain('promote another owner before changing this role or removing this member');
+    // the disabled-reason is programmatically associated (not title-only): aria-describedby → the hint id
+    expect(html).toContain('aria-describedby="ws-hint-u1"');
+    expect(html).toContain('id="ws-hint-u1"');
+    // the other members (not owners) keep enabled controls
+    expect(html).toMatch(/data-act="ws-role" data-user-id="u2" aria-label/);
+  });
+
+  it('two owners (#316): the lock lifts — no member is the last owner, controls enabled, no hint', async () => {
+    const TWO_OWNERS = {
+      members: [
+        { userId: 'u1', email: 'denny@tasca.dev', displayName: 'Denny', role: 'owner' },
+        { userId: 'u2', email: 'mona@tasca.dev', displayName: 'Mona', role: 'owner' },
+        { userId: 'u3', email: 'qwen@tasca.dev', displayName: null, role: 'member' },
+      ],
+    };
+    stubFetch({
+      ...VENDOR,
+      '/api/auth/me': { body: SESSION_OK },
+      '/api/org': { body: ORG_INFO_OWNER },
+      '/api/orgs/members': { body: TWO_OWNERS },
+      '/api/orgs': { body: ADMIN_ORGS },
+    });
+    const html = htmlOf(await loadSettings());
+    expect(html).not.toContain('promote another owner before changing this role');
+    expect(html).not.toMatch(/data-user-id="u1" disabled/);
+    expect(html).not.toMatch(/data-user-id="u2" disabled/);
+  });
+
   it('admin (not owner): can Rename, but the member list is read-only (badges, no role/remove controls)', async () => {
     stubFetch({
       ...VENDOR,

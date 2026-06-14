@@ -65,6 +65,7 @@
 .ws-role-select { padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-size: var(--fs-xs); }
 .ws-role-select:focus { outline: none; border-color: color-mix(in srgb, var(--signal) 55%, transparent); box-shadow: var(--focus-ring-soft); }
 .ws-role-select:disabled { opacity: 0.6; }
+.ws-member-hint { flex-basis: 100%; font-size: var(--fs-2xs); color: var(--fg-faint); margin-top: 2px; }
 
 .ws-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--red) 28%, transparent); background: color-mix(in srgb, var(--red) 7%, transparent); }
 .ws-confirm-q { font-size: var(--fs-sm); color: var(--fg-2); }

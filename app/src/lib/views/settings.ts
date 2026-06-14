@@ -219,24 +219,39 @@ function roleBadge(role: OrgRole): string {
   return `<span class="conn-status ${cls}">${dot}${esc(ROLE_LABEL[role] ?? role)}</span>`;
 }
 
-/** The role <select> for an owner acting on a member (owner-only). */
-function roleSelect(m: OrgMember): string {
+/** The role <select> for an owner acting on a member (owner-only). When `lock` is set (the row is
+ *  the org's only owner), the control is disabled — demoting the last owner is refused server-side
+ *  (409 last_owner), so we don't offer the doomed action; promote another owner first. */
+function roleSelect(m: OrgMember, lock: boolean): string {
   const opts = MANAGED_ROLES.map(
     (r) => `<option value="${r}"${r === m.role ? ' selected' : ''}>${esc(ROLE_LABEL[r])}</option>`
   ).join('');
-  return `<select class="ws-role-select" data-act="ws-role" data-user-id="${esc(m.userId)}" aria-label="Role for ${esc(m.displayName || m.email)}">${opts}</select>`;
+  const dis = lock
+    ? ` disabled title="Promote another owner before changing the only owner’s role." aria-describedby="ws-hint-${esc(m.userId)}"`
+    : '';
+  return `<select class="ws-role-select" data-act="ws-role" data-user-id="${esc(m.userId)}"${dis} aria-label="Role for ${esc(m.displayName || m.email)}">${opts}</select>`;
 }
 
 /** One member row: identity + a role badge (+ a `(you)` marker), and — owner-only — a role
- *  control + a two-step Remove. A non-owner sees the badge only (read-only list). */
-function memberRow(m: OrgMember, isOwner: boolean, selfUserId: string | null): string {
+ *  control + a two-step Remove. A non-owner sees the badge only (read-only list). When the member is
+ *  the org's only owner (`isLastOwner`), the role + Remove controls are disabled and a hint explains
+ *  why — the lockout guard (#316) lives in the server (atomic 409 last_owner); this just keeps the
+ *  operator from clicking into a guaranteed failure. */
+function memberRow(m: OrgMember, isOwner: boolean, selfUserId: string | null, isLastOwner: boolean): string {
   const you = m.userId === selfUserId ? ' <span class="ws-you">(you)</span>' : '';
   const name = esc(m.displayName || m.email);
-  const controls = isOwner
-    ? `<div class="ws-member-controls">${roleSelect(m)}` +
-      `<button class="ictl vk-danger" type="button" data-act="ws-remove" data-user-id="${esc(m.userId)}" aria-label="Remove ${name}">Remove</button></div>`
+  const removeDis = isLastOwner
+    ? ` disabled title="Promote another owner before removing the only owner." aria-describedby="ws-hint-${esc(m.userId)}"`
     : '';
-  const confirm = isOwner
+  const controls = isOwner
+    ? `<div class="ws-member-controls">${roleSelect(m, isLastOwner)}` +
+      `<button class="ictl vk-danger" type="button" data-act="ws-remove" data-user-id="${esc(m.userId)}"${removeDis} aria-label="Remove ${name}">Remove</button></div>`
+    : '';
+  const hint = isOwner && isLastOwner
+    ? `<div class="ws-member-hint" id="ws-hint-${esc(m.userId)}">Sole owner — promote another owner before changing this role or removing this member.</div>`
+    : '';
+  // No two-step Remove confirm for the last owner: Remove is disabled, so it can never open.
+  const confirm = isOwner && !isLastOwner
     ? `<div class="ws-confirm" data-ws-confirm="${esc(m.userId)}" hidden>
         <span class="ws-confirm-q">Remove ${name} from this workspace?</span>
         <div class="ws-confirm-actions">
@@ -252,6 +267,7 @@ function memberRow(m: OrgMember, isOwner: boolean, selfUserId: string | null): s
       </div>
       <div class="ws-member-role">${roleBadge(m.role)}</div>
       ${controls}
+      ${hint}
     </div>${confirm}`;
 }
 
@@ -307,8 +323,10 @@ function workspacePanel(
   } else if (membersRes.data.members.length === 0) {
     membersBody = empty('No members yet', 'Members appear here once they sign in.', I.roster);
   } else {
-    membersBody = `<div class="ws-members">${membersRes.data.members
-      .map((m) => memberRow(m, isOwner, selfUserId))
+    const members = membersRes.data.members;
+    const ownerCount = members.filter((m) => m.role === 'owner').length;
+    membersBody = `<div class="ws-members">${members
+      .map((m) => memberRow(m, isOwner, selfUserId, m.role === 'owner' && ownerCount <= 1))
       .join('')}</div>`;
   }
 
