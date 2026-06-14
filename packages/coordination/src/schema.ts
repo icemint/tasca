@@ -362,7 +362,7 @@ CREATE TABLE IF NOT EXISTS usage_event (
   id              text PRIMARY KEY,
   org_id          text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   task_id         text,
-  source          text NOT NULL CHECK (source IN ('classifier','triage','decomposition','agent')),
+  source          text NOT NULL CHECK (source IN ('classifier','triage','decomposition','agent','manager')),
   model           text NOT NULL,
   input_tokens    integer NOT NULL,
   output_tokens   integer NOT NULL,
@@ -371,6 +371,18 @@ CREATE TABLE IF NOT EXISTS usage_event (
 );
 CREATE INDEX IF NOT EXISTS usage_event_org_created_idx ON usage_event (org_id, created_at);
 CREATE INDEX IF NOT EXISTS usage_event_org_task_idx ON usage_event (org_id, task_id);`;
+
+/**
+ * Widen usage_event.source to include 'manager' (EM v1 slice 1) on an ALREADY-MIGRATED DB. The
+ * CREATE TABLE above only fires on a fresh DB (IF NOT EXISTS), so its inline CHECK never re-applies —
+ * an existing prod table keeps the OLD constraint (which rejects 'manager') unless we drop+recreate it
+ * here. The inline CHECK is auto-named `usage_event_source_check` by Postgres; we drop it IF EXISTS and
+ * re-add the widened set. Idempotent + safe to re-run (DROP ... IF EXISTS, then a named ADD guarded by
+ * the duplicate_object catch). Applied AFTER USAGE_EVENT_TABLE_DDL so the table exists either way.
+ */
+export const USAGE_EVENT_SOURCE_MANAGER_DDL = `
+ALTER TABLE usage_event DROP CONSTRAINT IF EXISTS usage_event_source_check;
+DO $$ BEGIN ALTER TABLE usage_event ADD CONSTRAINT usage_event_source_check CHECK (source IN ('classifier','triage','decomposition','agent','manager')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`;
 
 /** BYOK vendor credentials (slice 3.5-A): one row per (org, provider). Stores ONLY the AEAD ciphertext
  *  + nonce + auth tag (sealed under the env-held master key — see vendor-credential.ts) + a non-reversible
@@ -594,6 +606,72 @@ ALTER TABLE task ALTER COLUMN project_id SET NOT NULL;
 DO $$ BEGIN ALTER TABLE task ADD CONSTRAINT task_project_fk FOREIGN KEY (project_id) REFERENCES project(id); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS task_project_idx ON task (project_id);`;
 
+/**
+ * The Engineering Manager entity (EM v1 slice 1). A manager is a DISTINCT entity — NOT an agent and
+ * NOT a role on the agent model: it reasons + communicates (reviews stories pre-dispatch, comments AS
+ * ITSELF on the platform) but has no capability tier, no code identity, opens no PRs. It deliberately
+ * does NOT reference `agent`, so it can never leak into worker routing (the roster/listCandidates path
+ * reads `agent`/`org_agent` only — a manager is structurally invisible to it).
+ *
+ * shortcut_member_id / shortcut_handle are the manager's NATIVE Shortcut identity (set via the identity
+ * endpoint). The member id is what later slices match the EM's own comments against (self-comment dedupe).
+ *
+ * FKs ONLY `organization` (a coordination-owned table once ORG_SCOPING_DDL has run), so — like
+ * connection_credential — it is SAFE inside COORDINATION_SCHEMA_DDL, ordered AFTER ORG_SCOPING_DDL so
+ * `organization` already exists. Org-scoped tenant data → in the org-scoping CI guard's TENANT_TABLES.
+ */
+export const MANAGER_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS manager (
+  id                 text PRIMARY KEY,
+  org_id             text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  name               text NOT NULL,
+  shortcut_member_id text,
+  shortcut_handle    text,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS manager_org_idx ON manager (org_id);`;
+
+/**
+ * Per-manager platform credentials (EM v1 slice 1): one row per (org, manager, provider). Mirrors
+ * org_agent_credential but keyed by MANAGER — stores ONLY the AEAD ciphertext + nonce + auth tag (sealed
+ * under the env-held master key — see vendor-credential.ts) + a non-reversible fingerprint + status. NO
+ * plaintext token. This is the per-manager token vault that lets the EM post to a Shortcut story AS
+ * ITSELF, under its OWN credential — never the agent vault. org-scoped, in TENANT_TABLES; PK (org_id,
+ * manager_id, provider).
+ *
+ * FKs ONLY `organization` + `manager` (both coordination-owned), so — unlike org_agent_credential (which
+ * FKs the identity-schema `agent`) — it is SAFE inside COORDINATION_SCHEMA_DDL, ordered AFTER
+ * MANAGER_TABLE_DDL so the referenced manager table already exists. ON DELETE CASCADE on BOTH the org and
+ * the manager — dropping either drops the credential.
+ */
+export const MANAGER_CREDENTIAL_TABLE_DDL = `
+CREATE TABLE IF NOT EXISTS manager_credential (
+  org_id            text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  manager_id        text NOT NULL REFERENCES manager(id) ON DELETE CASCADE,
+  provider          text NOT NULL CHECK (provider IN ('shortcut')),
+  ciphertext        text NOT NULL,
+  nonce             text NOT NULL,
+  auth_tag          text NOT NULL,
+  key_fingerprint   text NOT NULL,
+  status            text NOT NULL DEFAULT 'active' CHECK (status IN ('active','invalid')),
+  created_by        text,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  last_validated_at timestamptz,
+  PRIMARY KEY (org_id, manager_id, provider)
+);
+CREATE INDEX IF NOT EXISTS manager_credential_org_idx ON manager_credential (org_id);`;
+
+/**
+ * Link a project to a manager (EM v1 slice 1): a project may have ONE Engineering Manager who reviews
+ * its stories pre-dispatch (later slice). NULLABLE — a project without an EM behaves exactly as today.
+ * Additive ADD COLUMN IF NOT EXISTS + a deferred FK (the DO-block duplicate_object pattern), applied
+ * AFTER BOTH PROJECT_TABLE_DDL (the project table) and MANAGER_TABLE_DDL (the manager table) so both
+ * sides of the FK already exist — mind that order inside COORDINATION_SCHEMA_DDL.
+ */
+export const PROJECT_MANAGER_DDL = `
+ALTER TABLE project ADD COLUMN IF NOT EXISTS manager_id text;
+DO $$ BEGIN ALTER TABLE project ADD CONSTRAINT project_manager_fk FOREIGN KEY (manager_id) REFERENCES manager(id); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`;
+
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
   PLATFORM_CONNECTION_TABLE_DDL,
@@ -605,6 +683,7 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   ORG_DISPATCH_CONTRACT_DDL,
   PROPOSAL_TABLE_DDL, // slice W3-S1: PM-assistant proposals (after organization + task exist)
   USAGE_EVENT_TABLE_DDL, // slice W3-S4a: per-task/per-org LLM usage ledger
+  USAGE_EVENT_SOURCE_MANAGER_DDL, // EM v1 slice 1: widen usage_event.source CHECK to include 'manager'
   VENDOR_CREDENTIAL_TABLE_DDL, // slice 3.5-A: BYOK per-org vendor keys (sealed)
   // NOTE: AGENT_CREDENTIAL_TABLE_DDL is intentionally NOT in this bundle — it FKs agent (the identity
   // schema), which coordination does not own; applying it here breaks any setup that applies the
@@ -613,7 +692,10 @@ export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   GOVERNANCE_AUDIT_EVENT_TABLE_DDL, // slice 3.5-A.2c.1: append-only governance audit trail (credential mgmt)
   CONNECTION_CREDENTIAL_TABLE_DDL, // slice SC-1: per-connection secrets (FKs organization + platform_connection — both above)
   ORG_INVITE_TABLE_DDL, // slice 3.5-B.3.1: single-use, hashed-at-rest, expiring org-join invites
+  MANAGER_TABLE_DDL, // EM v1 slice 1: the Engineering Manager entity (FKs organization only → after ORG_SCOPING_DDL)
+  MANAGER_CREDENTIAL_TABLE_DDL, // EM v1 slice 1: per-manager sealed Shortcut token (FKs organization + manager → after MANAGER_TABLE_DDL)
   PROJECT_TABLE_DDL, // slice Project-A: the project entity (after organization exists)
   PROJECT_BACKFILL_DDL, // slice Project-A: task.project_id expand/contract (after ORG_SCOPING_DDL → task.org_id NOT NULL)
   PLATFORM_CONNECTION_PROJECT_DDL, // slice SC-1: platform_connection.project_id + FK (after PROJECT_TABLE_DDL → project exists)
+  PROJECT_MANAGER_DDL, // EM v1 slice 1: project.manager_id + FK (after BOTH PROJECT_TABLE_DDL and MANAGER_TABLE_DDL)
 ];

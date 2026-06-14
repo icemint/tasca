@@ -74,9 +74,9 @@ describe('org-scoping guard — it MUST fire on raw tenant SQL outside the scope
     expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
   });
 
-  it('covers all fourteen tenant tables', () => {
+  it('covers all sixteen tenant tables', () => {
     expect([...TENANT_TABLES].sort()).toEqual(
-      ['dispatch_job', 'task', 'routing_decision', 'pull_request', 'platform_connection', 'webhook_event', 'proposal', 'usage_event', 'org_vendor_credential', 'org_agent_credential', 'connection_credential', 'governance_audit_event', 'org_invite', 'project'].sort()
+      ['dispatch_job', 'task', 'routing_decision', 'pull_request', 'platform_connection', 'webhook_event', 'proposal', 'usage_event', 'org_vendor_credential', 'org_agent_credential', 'connection_credential', 'governance_audit_event', 'org_invite', 'project', 'manager', 'manager_credential'].sort()
     );
   });
 });

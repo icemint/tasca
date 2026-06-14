@@ -582,6 +582,10 @@ async function main(): Promise<void> {
           },
         }
       : {}),
+    // Engineering Manager admin API (EM v1 slice 1): create + identity + project-assign for the EM
+    // entity. Gated on the vault master key (the identity route seals the EM's Shortcut token); absent →
+    // the manager API is not wired (those routes 404).
+    ...(agentMasterKey ? { managerCredential: { masterKey: agentMasterKey } } : {}),
   });
 
   const server = coordination.createServer();

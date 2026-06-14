@@ -33,6 +33,8 @@ export const TENANT_TABLES = [
   'governance_audit_event',
   'org_invite',
   'project',
+  'manager',
+  'manager_credential',
 ] as const;
 
 /**
