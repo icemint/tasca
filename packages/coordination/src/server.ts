@@ -30,6 +30,7 @@ import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
 import { inviteApiHandler, type InviteApiDeps } from './invite-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
 import { connectionApiHandler, type ConnectionApiDeps } from './connection-api';
+import { managerApiHandler, type ManagerApiDeps } from './manager-api';
 import { shortcutVerifier } from './shortcut-verifier';
 import type { ConnectionCredentialResolver } from './vendor-credential';
 
@@ -98,6 +99,13 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * Absent → that path falls through to 404 (additive).
    */
   connectionApi?: ConnectionApiDeps;
+  /**
+   * The Engineering Manager admin API (EM v1 slice 1: POST /api/orgs/:orgId/managers,
+   * .../managers/:managerId/identity/shortcut, .../projects/:projectId/manager). Session-gated; CSRF +
+   * admin-gated; the identity route is write-only (seals the manager's Shortcut token, never returns it).
+   * Absent → those paths fall through to 404 (additive).
+   */
+  managerApi?: ManagerApiDeps;
   /** The Shortcut webhook verifier (POST /webhooks/shortcut — the legacy env-secret route). */
   verifier: WebhookVerifier;
   /**
@@ -502,6 +510,10 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Connection set API (only when wired). Handles POST /api/orgs/:orgId/connections/shortcut before
     // the generic read API's /api/* claim.
     if (deps.connectionApi && (await connectionApiHandler(req, res, deps.connectionApi))) return;
+
+    // Engineering Manager admin API (only when wired). Handles the manager create/identity/assign POSTs
+    // (/api/orgs/:orgId/managers* + /api/orgs/:orgId/projects/:projectId/manager) before the read API.
+    if (deps.managerApi && (await managerApiHandler(req, res, deps.managerApi))) return;
 
     // PM-assistant API (only when wired). Handles GET /api/proposals + the mutating POSTs.
     if (deps.proposalApi && (await proposalApiHandler(req, res, deps.proposalApi))) return;

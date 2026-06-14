@@ -17,6 +17,8 @@ import type {
   AgentCredentialStore,
   ConnectionCredentialKind,
   ConnectionCredentialStore,
+  ManagerCredentialProvider,
+  ManagerCredentialStore,
 } from './vendor-credential';
 import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
 import type { CreateInviteInput, InviteSummary, AcceptInviteResult, InviteStore } from './invite';
@@ -80,7 +82,7 @@ export type ProposalWriteOutcome =
 
 // ── LLM usage metering (slice W3-S4a) ─────────────────────────────────────────
 /** Why an LLM call was made. `agent` is the agent-execution path (reserved for S4b). */
-export type UsageSource = 'classifier' | 'triage' | 'decomposition' | 'agent';
+export type UsageSource = 'classifier' | 'triage' | 'decomposition' | 'agent' | 'manager';
 
 export interface UsageRecordInput {
   taskId: string | null;
@@ -125,6 +127,16 @@ export interface ProjectSummary {
   id: string;
   name: string;
   repoRef: string | null;
+}
+
+/** An Engineering Manager as the manager list / lookup needs it (EM v1 slice 1). The Shortcut identity
+ *  fields are null until set via the identity endpoint; the member id is what later slices match the
+ *  EM's own comments against. NEVER carries any token/credential — that lives sealed in the vault. */
+export interface ManagerSummary {
+  id: string;
+  name: string;
+  shortcutMemberId: string | null;
+  shortcutHandle: string | null;
 }
 
 /** A task as the roster / monitoring lists need it (no per-attempt detail). */
@@ -278,6 +290,42 @@ export interface CoordinationStore {
    *  Idempotent: clearing when none is set is a no-op (getActiveProject then resolves null). No org
    *  validation needed — a delete narrows nothing, it widens to the org's full task set. */
   clearActiveProject(userId: string): Promise<void>;
+
+  // ── Engineering Manager entity (EM v1 slice 1) — a DISTINCT entity, never an agent. Org-scoped. ──
+
+  /** Create a manager in THIS org (EM v1 slice 1). Returns the new manager id. Org-scoped — the manager
+   *  is born owned by the caller's org and never references the agent model. */
+  createManager(orgId: string, name: string): Promise<{ managerId: string }>;
+
+  /** Get a manager by id WITHIN this org, or null (a foreign-org id is indistinguishable from a missing
+   *  one — no cross-tenant existence oracle). */
+  getManager(orgId: string, managerId: string): Promise<ManagerSummary | null>;
+
+  /** This org's managers (EM v1 slice 1), name-ordered. Org-scoped — never another org's managers. */
+  listManagers(orgId: string): Promise<ManagerSummary[]>;
+
+  /** Set the manager's NATIVE Shortcut identity (EM v1 slice 1): writes shortcut_member_id + handle onto
+   *  the manager row AND seals the token into manager_credential. The manager-row write lands FIRST (the
+   *  load-bearing projection for self-comment dedupe / lookup), then the credential — mirroring the SC-3
+   *  ordering lesson. org-scoped: both writes are scoped to THIS org's manager. NEVER stores plaintext. */
+  setManagerShortcutIdentity(
+    orgId: string,
+    managerId: string,
+    memberId: string,
+    handle: string | null,
+    sealed: SealedCredential,
+    fingerprint: string,
+    createdBy: string | null
+  ): Promise<void>;
+
+  /** Assign a project to a manager (EM v1 slice 1). VERIFIES BOTH the project and the manager are in
+   *  THIS org before linking — a foreign-org project id OR manager id yields `not_found` (no
+   *  cross-tenant existence oracle); a foreign-org entity is never linked. `ok` on success. */
+  setProjectManager(orgId: string, projectId: string, managerId: string): Promise<'ok' | 'not_found'>;
+
+  /** The manager assigned to a project WITHIN this org, or null (no manager / foreign-org / missing).
+   *  Org-scoped — never reveals another tenant's project→manager link. */
+  getManagerForProject(orgId: string, projectId: string): Promise<string | null>;
 
   getTask(orgId: string, taskId: string): Promise<Task | null>;
 
@@ -673,6 +721,7 @@ export class PgCoordinationStore
     VendorCredentialStore,
     AgentCredentialStore,
     ConnectionCredentialStore,
+    ManagerCredentialStore,
     GovernanceAuditSink,
     InviteStore
 {
@@ -1095,6 +1144,137 @@ export class PgCoordinationStore
     // view. Keyed on user_id only: a delete narrows nothing (no cross-tenant concern), and clearing
     // when none is set deletes no row — idempotent.
     await this.db.query(`DELETE FROM user_active_project WHERE user_id = $1`, [userId]);
+  }
+
+  // ── Engineering Manager entity (EM v1 slice 1) — DISTINCT entity; never the agent tables. Org-scoped ──
+  async createManager(orgId: string, name: string): Promise<{ managerId: string }> {
+    // The manager is born owned by THIS org (org_id from the caller). It does NOT reference `agent`, so
+    // it can never enter the routing roster. Shortcut identity is set later via the identity endpoint.
+    const id = randomUUID();
+    await this.db.query(`INSERT INTO manager (id, org_id, name) VALUES ($1,$2,$3)`, [id, orgId, name]);
+    return { managerId: id };
+  }
+
+  async getManager(orgId: string, managerId: string): Promise<ManagerSummary | null> {
+    // ORG-SCOPED: a foreign-org id and a missing one are INDISTINGUISHABLE (both null) — no
+    // cross-tenant existence oracle. Never returns any credential material.
+    const res = await this.db.query<{ id: string; name: string; shortcut_member_id: string | null; shortcut_handle: string | null }>(
+      `SELECT id, name, shortcut_member_id, shortcut_handle
+         FROM manager WHERE org_id = $1 AND id = $2`,
+      [orgId, managerId]
+    );
+    const row = res.rows[0];
+    return row
+      ? { id: row.id, name: row.name, shortcutMemberId: row.shortcut_member_id, shortcutHandle: row.shortcut_handle }
+      : null;
+  }
+
+  async listManagers(orgId: string): Promise<ManagerSummary[]> {
+    // ORG-SCOPED — never another org's managers. Name-ordered (then id for stability).
+    const res = await this.db.query<{ id: string; name: string; shortcut_member_id: string | null; shortcut_handle: string | null }>(
+      `SELECT id, name, shortcut_member_id, shortcut_handle
+         FROM manager WHERE org_id = $1 ORDER BY name, id`,
+      [orgId]
+    );
+    return res.rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      shortcutMemberId: r.shortcut_member_id,
+      shortcutHandle: r.shortcut_handle,
+    }));
+  }
+
+  async setManagerShortcutIdentity(
+    orgId: string,
+    managerId: string,
+    memberId: string,
+    handle: string | null,
+    sealed: SealedCredential,
+    fingerprint: string,
+    createdBy: string | null
+  ): Promise<void> {
+    // Two writes (the manager row's identity projection + the sealed credential) in ONE transaction so
+    // a partial failure can't leave a credential pointing at a manager with no identity. MANAGER ROW
+    // FIRST: shortcut_member_id is the load-bearing projection (later slices match the EM's own comments
+    // against it), so it lands before the credential — mirroring the SC-3 binding-first ordering lesson.
+    // Both writes are org-scoped (the credential carries org_id; the UPDATE filters org_id + id), so a
+    // set can only land on THIS org's manager. NEVER persists plaintext (the sealed blob only).
+    await this.withTaskTx(async (db) => {
+      await db.query(
+        `UPDATE manager SET shortcut_member_id = $3, shortcut_handle = $4 WHERE org_id = $1 AND id = $2`,
+        [orgId, managerId, memberId, handle]
+      );
+      await db.query(
+        `INSERT INTO manager_credential (org_id, manager_id, provider, ciphertext, nonce, auth_tag, key_fingerprint, status, created_by, last_validated_at)
+         VALUES ($1,$2,'shortcut',$3,$4,$5,$6,'active',$7, now())
+         ON CONFLICT (org_id, manager_id, provider) DO UPDATE SET
+           ciphertext = EXCLUDED.ciphertext, nonce = EXCLUDED.nonce, auth_tag = EXCLUDED.auth_tag,
+           key_fingerprint = EXCLUDED.key_fingerprint, status = 'active', last_validated_at = now()`,
+        [orgId, managerId, sealed.ciphertext, sealed.nonce, sealed.authTag, fingerprint, createdBy]
+      );
+    });
+  }
+
+  async getSealedManagerCredential(
+    orgId: string,
+    managerId: string,
+    provider: ManagerCredentialProvider
+  ): Promise<SealedCredential | null> {
+    // The resolver's read — returns the SEALED blob (the master key to open it lives in env, not here).
+    // ORG-SCOPED + manager-scoped: a cross-tenant token is unreachable from another org's context.
+    const res = await this.db.query<{ ciphertext: string; nonce: string; auth_tag: string }>(
+      `SELECT ciphertext, nonce, auth_tag FROM manager_credential
+        WHERE org_id = $1 AND manager_id = $2 AND provider = $3 AND status = 'active'`,
+      [orgId, managerId, provider]
+    );
+    const row = res.rows[0];
+    return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
+  }
+
+  async setManagerCredential(
+    orgId: string,
+    managerId: string,
+    provider: ManagerCredentialProvider,
+    sealed: SealedCredential,
+    fingerprint: string,
+    createdBy: string | null
+  ): Promise<void> {
+    // The ManagerCredentialStore seam (parallel to setAgentCredential). The identity endpoint uses the
+    // transactional setManagerShortcutIdentity above; this standalone setter exists for symmetry with the
+    // other credential stores + a token-only re-seal. Upsert (org_id, manager_id, provider). org-scoped.
+    await this.db.query(
+      `INSERT INTO manager_credential (org_id, manager_id, provider, ciphertext, nonce, auth_tag, key_fingerprint, status, created_by, last_validated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8, now())
+       ON CONFLICT (org_id, manager_id, provider) DO UPDATE SET
+         ciphertext = EXCLUDED.ciphertext, nonce = EXCLUDED.nonce, auth_tag = EXCLUDED.auth_tag,
+         key_fingerprint = EXCLUDED.key_fingerprint, status = 'active', last_validated_at = now()`,
+      [orgId, managerId, provider, sealed.ciphertext, sealed.nonce, sealed.authTag, fingerprint, createdBy]
+    );
+  }
+
+  async setProjectManager(orgId: string, projectId: string, managerId: string): Promise<'ok' | 'not_found'> {
+    // Link a project → manager, BOTH verified in THIS org in ONE transaction. A foreign-org project id
+    // OR manager id is INDISTINGUISHABLE from a missing one ('not_found') — no cross-tenant existence
+    // oracle, and a foreign-org entity is never linked. The UPDATE is itself org-scoped (org_id + id), so
+    // even the write can only touch this org's project.
+    return this.withTaskTx(async (db) => {
+      const proj = await db.query(`SELECT 1 FROM project WHERE org_id = $1 AND id = $2`, [orgId, projectId]);
+      if (!proj.rowCount) return 'not_found';
+      const mgr = await db.query(`SELECT 1 FROM manager WHERE org_id = $1 AND id = $2`, [orgId, managerId]);
+      if (!mgr.rowCount) return 'not_found';
+      await db.query(`UPDATE project SET manager_id = $3 WHERE org_id = $1 AND id = $2`, [orgId, projectId, managerId]);
+      return 'ok';
+    });
+  }
+
+  async getManagerForProject(orgId: string, projectId: string): Promise<string | null> {
+    // ORG-SCOPED: returns this org's project's assigned manager id, or null (no manager / foreign-org /
+    // missing project — all indistinguishable). Never reveals another tenant's link.
+    const res = await this.db.query<{ manager_id: string | null }>(
+      `SELECT manager_id FROM project WHERE org_id = $1 AND id = $2`,
+      [orgId, projectId]
+    );
+    return res.rows[0]?.manager_id ?? null;
   }
 
   async getTaskOrigin(orgId: string, taskId: string): Promise<TaskOrigin | null> {

@@ -86,6 +86,12 @@ class CountingStore implements CoordinationStore {
   async getActiveProject() { return null; }
   async setActiveProject(): Promise<'ok' | 'not_found'> { return 'ok'; }
   async clearActiveProject(): Promise<void> {}
+  async createManager(): Promise<{ managerId: string }> { return { managerId: 'mgr_x' }; }
+  async getManager() { return null; }
+  async listManagers() { return []; }
+  async setManagerShortcutIdentity(): Promise<void> {}
+  async setProjectManager(): Promise<'ok' | 'not_found'> { return 'ok'; }
+  async getManagerForProject(): Promise<string | null> { return null; }
   async getTask() { return null; }
   async getTaskOrigin(): Promise<TaskOrigin | null> { return null; }
   async setTierEstimate(_org: string, _id: string, _e: TierEstimate) {}

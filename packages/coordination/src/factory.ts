@@ -75,6 +75,11 @@ export interface CreateCoordinationDeps {
     resolver: ConnectionCredentialResolver;
     registeredShortcutIds: ReadonlySet<string>;
   };
+  /** Engineering Manager admin API (EM v1 slice 1): the env-held master key (null → the identity/seal
+   *  surface 503s). Wires POST /api/orgs/:orgId/managers, .../managers/:managerId/identity/shortcut,
+   *  .../projects/:projectId/manager (all admin-gated; the identity route is write-only). Absent → the
+   *  manager API is not wired. Gated on the same master-key presence as the other credential surfaces. */
+  managerCredential?: { masterKey: Buffer | null };
   /** Window to wait (polling) for a runner to claim before retiring the task to
    *  needs_attention. Default 30000ms. */
   runnerWaitMs?: number;
@@ -366,6 +371,22 @@ export function createCoordination(
           // boot-time Shortcut binding snapshot to build per-request verifiers.
           connectionCredentialResolver: input.connectionCredential.resolver,
           registeredShortcutIds: input.connectionCredential.registeredShortcutIds,
+        }
+      : {}),
+    // The Engineering Manager admin API (EM v1 slice 1) — wired only when the manager-credential bits
+    // (master key presence) are supplied. Admin-gated; the identity route is write-only (seals the EM's
+    // Shortcut token, never returns it); governance-audits each op. The store implements ManagerApiStore.
+    ...(input.managerCredential
+      ? {
+          managerApi: {
+            store,
+            masterKey: input.managerCredential.masterKey,
+            membership,
+            // Governance audit trail: the same store implements GovernanceAuditSink.
+            audit: store,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
         }
       : {}),
     // The PM-assistant API (slice W3-S1) — advisory proposals. Accept routes through the store's

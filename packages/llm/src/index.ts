@@ -13,6 +13,15 @@
 import type { Tier, TierFeatures, LlmClassifierPort } from '@tasca/domain';
 import type { DecomposerPort, DecompositionProposal } from '@tasca/contracts';
 
+/**
+ * The current Anthropic reasoning model the Engineering Manager (EM) runs on. The EM reasons about
+ * story requirements (a heavier task than the routing CLASSIFIER's tier guess), so it points at Sonnet
+ * — deliberately a stronger model than the classifier's Haiku. This is THE single upgrade point for the
+ * manager's model: bump this one constant to move the EM to a newer model; the classifier keeps its own
+ * (`coordinationLlm.model`, default Haiku) and is unaffected.
+ */
+export const LATEST_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+
 /** The per-call usage a model returned (input/output tokens), plus the response id used as the
  *  idempotency key so a retried report can't double-count. */
 export interface CallUsage {
