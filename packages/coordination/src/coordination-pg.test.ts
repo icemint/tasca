@@ -1114,6 +1114,54 @@ run('coordination (Postgres) — human write-API interventions', () => {
     expect(await statusOf(id)).toBe('needs_attention');
   });
 
+  it('forceResetTask clears a stuck IN-PROCESS executing task (the dead end interrupt/reassign cannot touch) → needs_attention, claim released', async () => {
+    // The exact stuck shape: executing, claimed by an agent, no runner job → interrupt + reassign
+    // both dead-end with no_inflight (see the two tests above). force-reset is the escape hatch.
+    const { id, version } = await at('executing');
+    await pool.query('UPDATE task SET claimed_by=$2, failure_count=2 WHERE id=$1', [id, 'elvis']);
+    expect(await store.interruptTask(ORG, id)).toEqual({ ok: false, reason: 'no_inflight' }); // the dead end
+    expect(await store.forceResetTask(ORG, id)).toEqual({ ok: true, status: 'needs_attention' });
+    const row = await pool.query<{ status: string; claimed_by: string | null; failure_count: number; last_error: string | null }>(
+      'SELECT status, claimed_by, failure_count, last_error FROM task WHERE id=$1',
+      [id]
+    );
+    // claimed_by cleared is what un-pins the agent (its "working" pill is derived purely from claimed_by).
+    expect(row.rows[0]).toMatchObject({ status: 'needs_attention', claimed_by: null, failure_count: 0 });
+    expect(row.rows[0]!.last_error).toContain('force-reset');
+    expect(await versionOf(id)).toBe(version + 1);
+  });
+
+  it('forceResetTask also clears a stuck CLAIMED task (never started)', async () => {
+    const { id } = await at('claimed');
+    await pool.query('UPDATE task SET claimed_by=$2 WHERE id=$1', [id, 'elvis']);
+    expect(await store.forceResetTask(ORG, id)).toEqual({ ok: true, status: 'needs_attention' });
+    const row = await pool.query<{ status: string; claimed_by: string | null }>('SELECT status, claimed_by FROM task WHERE id=$1', [id]);
+    expect(row.rows[0]).toMatchObject({ status: 'needs_attention', claimed_by: null });
+  });
+
+  it('forceResetTask is idempotent: a second call on the now-needs_attention task → conflict, no spurious version bump', async () => {
+    const { id } = await at('executing');
+    expect(await store.forceResetTask(ORG, id)).toEqual({ ok: true, status: 'needs_attention' });
+    const v = await versionOf(id);
+    expect(await store.forceResetTask(ORG, id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await versionOf(id)).toBe(v); // unchanged — only executing/claimed are resettable
+  });
+
+  it('forceResetTask refuses a task that is not executing/claimed (done/in_review/routable) and 404s when missing', async () => {
+    const done = await at('done');
+    expect(await store.forceResetTask(ORG, done.id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await statusOf(done.id)).toBe('done');
+    const review = await at('in_review');
+    expect(await store.forceResetTask(ORG, review.id)).toEqual({ ok: false, reason: 'conflict' });
+    expect(await store.forceResetTask(ORG, '00000000-0000-0000-0000-000000000000')).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('forceResetTask is tenant-scoped: another org cannot reset this org’s task (→ not_found)', async () => {
+    const { id } = await at('executing');
+    expect(await store.forceResetTask('00000000-0000-0000-0000-0000000000ff', id)).toEqual({ ok: false, reason: 'not_found' });
+    expect(await statusOf(id)).toBe('executing'); // untouched by the wrong-tenant call
+  });
+
   it('failNoCapacity: executing → needs_attention with the reason, failure_count UNTOUCHED (not the breaker)', async () => {
     const { id, version } = await at('executing');
     await pool.query('UPDATE task SET failure_count=1 WHERE id=$1', [id]); // a prior real failure

@@ -3,26 +3,33 @@
 // Reassign + Interrupt are LIVE controls (the cancel-coupled write-API); Escalate stays
 // read-only. Absent data (no decision yet, no PRs) renders honest empty rows.
 
-import { getTask, reassignTask, interruptTask, type WriteResult, type TaskWriteOk, type TaskWriteConflict } from '../api';
+import { getTask, reassignTask, interruptTask, forceResetTask, type WriteResult, type TaskWriteOk, type TaskWriteConflict } from '../api';
 import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction, describeFailure } from '../live';
 import { I, tierTag, taskRef, platTag, esc, roControl } from '../ui';
 import type { PullRequest, RoutingCandidate, RoutingDecision, TaskDetail } from '../contract';
 
-/** The two cancel-coupled controls. Interrupt only renders while a run is live (executing);
- *  Reassign renders live for any non-terminal task. Both carry just the task id — the backend
- *  cancels any live runner job atomically with the task transition (the #244 seam). */
+/** The cancel-coupled controls. Interrupt only renders while a run is live (executing); Reassign
+ *  renders live for any non-terminal task; both carry just the task id — the backend cancels any
+ *  live runner job atomically with the task transition (the #244 seam). Force reset renders on the
+ *  stuck states (executing/claimed): the operator escape hatch (issue 317) for a run that wedged
+ *  with no live job, which interrupt/reassign can't clear (they dead-end no_inflight). Admin-only
+ *  server-side — a non-admin's click 403s and surfaces honestly. */
 function taskActions(t: TaskDetail): string {
   const interrupt =
     t.status === 'executing'
       ? `<button class="ictl live-ctl amber" type="button" data-action="interrupt" data-task-id="${esc(t.id)}" aria-label="Interrupt this run">${I.pause} Interrupt</button>`
       : '';
+  const forceReset =
+    t.status === 'executing' || t.status === 'claimed'
+      ? `<button class="ictl live-ctl" type="button" data-action="force-reset" data-task-id="${esc(t.id)}" aria-label="Force-reset this stuck task">Force reset</button>`
+      : '';
   const reassign =
     t.status === 'done'
       ? roControl('Reassign')
       : `<button class="ictl live-ctl" type="button" data-action="reassign" data-task-id="${esc(t.id)}" aria-label="Reassign this task">Reassign</button>`;
-  return `${interrupt}${reassign}${roControl('Escalate', { cls: 'ictl amber' })}`;
+  return `${interrupt}${forceReset}${reassign}${roControl('Escalate', { cls: 'ictl amber' })}`;
 }
 
 /** Honest copy for the three "couldn't apply" truths — the UI must never tell the user it
@@ -32,9 +39,14 @@ export function describeTaskOutcome(r: WriteResult<TaskWriteOk | TaskWriteConfli
   if (r.kind === 'conflict') {
     const code = (r.data as TaskWriteConflict).code;
     if (code === 'too_late') return 'The agent already finished — showing the result.';
-    if (code === 'no_inflight') return 'This run is executing in-process and can’t be interrupted yet.';
+    if (code === 'no_inflight') return 'This run is executing in-process and can’t be interrupted — use Force reset to clear it.';
     return 'That action isn’t available in the task’s current state — showing the latest.';
   }
+  // A 403 that survives the CSRF refresh-and-retry on a task write is a ROLE denial, not a stale
+  // token (a fresh token can't grant a role) — Force reset is admin-only, the other interventions
+  // member+. The generic describeFailure would wrongly claim "security token expired … please
+  // retry" (a futile loop); tell the operator the truth instead.
+  if (r.kind === 'forbidden') return 'You don’t have permission to do that — showing the latest.';
   return describeFailure(r);
 }
 
@@ -47,10 +59,12 @@ export function wireTask(el: HTMLElement, rerun: () => Promise<void>): void {
       const action = btn.dataset.action;
       void liveAction({
         button: btn,
-        pendingLabel: action === 'interrupt' ? 'Interrupting…' : 'Reassigning…',
+        pendingLabel:
+          action === 'interrupt' ? 'Interrupting…' : action === 'force-reset' ? 'Resetting…' : 'Reassigning…',
         view: el,
         rerun,
-        write: () => (action === 'interrupt' ? interruptTask(id) : reassignTask(id)),
+        write: () =>
+          action === 'interrupt' ? interruptTask(id) : action === 'force-reset' ? forceResetTask(id) : reassignTask(id),
         describe: describeTaskOutcome,
       });
     });

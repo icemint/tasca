@@ -266,6 +266,11 @@ export const reassignTask = (id: string) =>
   post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/reassign`, {});
 export const interruptTask = (id: string) =>
   post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/interrupt`, {});
+// Force-clear a STUCK task (issue 317): when a run wedges in executing/claimed with no live job,
+// interrupt/reassign dead-end (no_inflight) — this releases the claim → needs_attention. Admin-only
+// server-side; a non-admin gets 403 (surfaced honestly by the caller's describe).
+export const forceResetTask = (id: string) =>
+  post<TaskWriteOk | TaskWriteConflict>(`/api/tasks/${encodeURIComponent(id)}/force-reset`, {});
 
 // ── PM-assistant proposals (slice W3-S1) — advisory; accept routes through routing ─────
 

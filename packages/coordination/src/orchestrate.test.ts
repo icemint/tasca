@@ -255,6 +255,9 @@ class FakeStore implements CoordinationStore {
   async interruptTask(): Promise<TaskWriteOutcome> {
     return { ok: false, reason: 'not_found' };
   }
+  async forceResetTask(): Promise<TaskWriteOutcome> {
+    return { ok: false, reason: 'not_found' };
+  }
   // read-side
   async listTasks() { return []; }
   async getTaskStatusCounts() { return {}; }
