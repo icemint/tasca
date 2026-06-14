@@ -502,7 +502,7 @@ describe('settings — Workspace panel (slice 3.5-B.2: name + members/roles)', (
     expect(html).not.toContain('Coming soon');
   });
 
-  it('sole owner (#316): own role <select> + Remove are disabled, with a hint to promote another owner first', async () => {
+  it('sole owner (issue 316): own role <select> + Remove are disabled, with a hint to promote another owner first', async () => {
     // MEMBERS_OK has exactly one owner (u1) — the lockout-prone case.
     stubFetch({
       ...VENDOR,
@@ -523,7 +523,7 @@ describe('settings — Workspace panel (slice 3.5-B.2: name + members/roles)', (
     expect(html).toMatch(/data-act="ws-role" data-user-id="u2" aria-label/);
   });
 
-  it('two owners (#316): the lock lifts — no member is the last owner, controls enabled, no hint', async () => {
+  it('two owners (issue 316): the lock lifts — no member is the last owner, controls enabled, no hint', async () => {
     const TWO_OWNERS = {
       members: [
         { userId: 'u1', email: 'denny@tasca.dev', displayName: 'Denny', role: 'owner' },

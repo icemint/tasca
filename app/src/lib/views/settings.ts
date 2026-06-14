@@ -235,7 +235,7 @@ function roleSelect(m: OrgMember, lock: boolean): string {
 /** One member row: identity + a role badge (+ a `(you)` marker), and — owner-only — a role
  *  control + a two-step Remove. A non-owner sees the badge only (read-only list). When the member is
  *  the org's only owner (`isLastOwner`), the role + Remove controls are disabled and a hint explains
- *  why — the lockout guard (#316) lives in the server (atomic 409 last_owner); this just keeps the
+ *  why — the lockout guard (issue 316) lives in the server (atomic 409 last_owner); this just keeps the
  *  operator from clicking into a guaranteed failure. */
 function memberRow(m: OrgMember, isOwner: boolean, selfUserId: string | null, isLastOwner: boolean): string {
   const you = m.userId === selfUserId ? ' <span class="ws-you">(you)</span>' : '';
