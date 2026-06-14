@@ -215,6 +215,7 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
   // the repo, so handleWebhook uses these directly instead of resolving the org from the event's
   // workspace, and stamps `repoHint` onto every event so the task lands on the connection's repo.
   interface ConnectionContext {
+    connectionId: string;
     orgId: string;
     repoRef: string | null;
   }
@@ -266,10 +267,17 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     for (const candidate of verifier.parse(verified)) {
       const parsed = AdapterEventSchema.safeParse(candidate);
       if (parsed.success) {
-        // Connection-scoped delivery (slice SC-1): stamp the connection's project repo onto every
-        // event, so the task gets the right repo (Shortcut events carry no repoHint of their own).
+        // Connection-scoped delivery (slice SC-1/SC-2): stamp the connection's project repo (so the task
+        // gets the right repo — Shortcut events carry no repoHint of their own) AND the connection id (so
+        // the content source can resolve THIS connection's read token to fetch the story title/body).
         events.push(
-          connectionContext ? { ...parsed.data, repoHint: connectionContext.repoRef ?? undefined } : parsed.data
+          connectionContext
+            ? {
+                ...parsed.data,
+                repoHint: connectionContext.repoRef ?? undefined,
+                shortcutConnectionId: connectionContext.connectionId,
+              }
+            : parsed.data
         );
       } else safeLog('coordination: dropped malformed adapter event', { platform: verified.platform });
     }
@@ -386,7 +394,11 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Build a per-request verifier with THIS connection's secret. The registered agent-id set is the
     // boot-time snapshot (assignee/self set), shared with the legacy route.
     const verifier = shortcutVerifier(secret, deps.registeredShortcutIds ?? new Set<string>());
-    await handleWebhook(verifier, req, res, { orgId: connection.orgId, repoRef: connection.repoRef });
+    await handleWebhook(verifier, req, res, {
+      connectionId,
+      orgId: connection.orgId,
+      repoRef: connection.repoRef,
+    });
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

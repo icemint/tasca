@@ -52,6 +52,7 @@ import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { RepoProvisioner, TaskContentSource } from './orchestrate';
 import { GitAppRepoProvisioner } from './repo-provisioner';
 import { makeGitHubContentSource } from './github-content-source';
+import { makeShortcutContentSource } from './shortcut-content-source';
 import { shortcutVerifier } from './shortcut-verifier';
 import { githubVerifier } from './github-verifier';
 
@@ -123,14 +124,15 @@ function rejectAllVerifier(): WebhookVerifier {
 }
 
 /**
- * GATED status-back. Real write-back under each agent's native Shortcut identity
- * depends on the token-issuance model (Tasca-Shortcut-Kickoff-Brief item 2). Until
- * then this logs the intended update and returns — it must never throw, or the
- * orchestration loop would treat every task as failed at the status-back step.
+ * No-op status-back fallback. The router (routingStatusReporter) sends a platform here
+ * only when no real write-back reporter is wired for it — e.g. GitHub before its App is
+ * configured, or Shortcut before the vault master key (TASCA_SECRET_STORE_KEY) enables
+ * the per-agent identity write-back. It logs the intended update and returns — it must
+ * never throw, or the orchestration loop would treat every task as failed at status-back.
  */
 const gatedStatusReporter: StatusReporter = {
   async postStatus(update) {
-    logger.info?.('status-back suppressed (write-back gated on Shortcut item 2)', {
+    logger.info?.('status-back suppressed (no write-back reporter wired for this platform)', {
       agentId: update.agentId,
       externalStoryId: update.externalStoryId,
       state: update.state,
@@ -238,18 +240,20 @@ async function main(): Promise<void> {
     }
   }
   // Shortcut write-back (slice SC-3): an agent posts a story comment AS ITSELF, under its own Shortcut
-  // Agent-User token resolved from the per-agent vault. Enabled when the vault master key is present AND
-  // the Shortcut webhook secret is set (no shortcut intake → no shortcut write-back to do). The resolver
-  // is SHARED with the agent-identity set-API (passed into the factory) so a set busts its cache here.
+  // Agent-User token resolved from the per-agent vault. Enabled when the vault master key is present
+  // (slice SC-2: decoupled from SHORTCUT_WEBHOOK_SECRET — each connection now brings its own secret, so
+  // an operator no longer sets a dummy env var to turn write-back on). The resolver is SHARED with the
+  // agent-identity set-API (passed into the factory) so a set busts its cache here.
   const agentMasterKey = loadMasterKey();
   let agentCredentialResolver: AgentCredentialResolver | undefined;
   let shortcutStatusReporter: ShortcutStatusReporter | undefined;
-  if (agentMasterKey && webhookSecret) {
+  if (agentMasterKey) {
     const store = new PgCoordinationStore(pool);
     agentCredentialResolver = new AgentCredentialResolver(store, agentMasterKey);
     // The write-back adapter only drives postStoryComment (per-agent token in the header); its
-    // webhookSecret is unused for that path but required to construct.
-    const writebackAdapter = new ShortcutAdapter({ webhookSecret });
+    // webhookSecret is unused for that path but required to construct — placeholder when the legacy
+    // env secret is unset (write-back no longer gates on it).
+    const writebackAdapter = new ShortcutAdapter({ webhookSecret: webhookSecret || 'write-back-adapter' });
     shortcutStatusReporter = new ShortcutStatusReporter({
       credentials: agentCredentialResolver,
       adapter: writebackAdapter,
@@ -257,7 +261,7 @@ async function main(): Promise<void> {
     });
     logger.info?.('shortcut write-back enabled (per-agent identity vault)');
   } else {
-    logger.info?.('shortcut write-back disabled (needs TASCA_SECRET_STORE_KEY + SHORTCUT_WEBHOOK_SECRET)');
+    logger.info?.('shortcut write-back disabled (needs TASCA_SECRET_STORE_KEY)');
   }
 
   // Connection-scoped Shortcut intake (slice SC-1): a Shortcut workspace binds to a project (→ repo) and
@@ -288,7 +292,8 @@ async function main(): Promise<void> {
   let brokerHandle: BrokerServerHandle | undefined;
   // Default content source derives a TaskInput from the event id; with the App
   // env present we fetch the REAL issue title/body for github events (so the
-  // agent prompt is the actual story), delegating non-github to the default.
+  // agent prompt is the actual story), delegating non-github to the default. The
+  // shortcut block below wraps this so shortcut events fetch their real story too.
   let content: TaskContentSource = eventContentSource;
   if (githubWritebackEnabled) {
     const store = new PgCoordinationStore(pool);
@@ -390,6 +395,27 @@ async function main(): Promise<void> {
     }
   } else {
     logger.info?.('github write-back disabled (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_WEBHOOK_SECRET unset)');
+  }
+
+  // Real story content for the agent prompt (shortcut events): fetch title/body via the connection's
+  // workspace READ token (slice SC-2). Wrap the existing `content` (github-or-stub) so a shortcut event
+  // routes to the shortcut source while github/other events fall through unchanged — each content source
+  // self-routes by platform. Enabled whenever the connection vault is up (the SAME resolver SC-1 built —
+  // not a second instance, so a read-token write busts one cache); off → shortcut content stays the stub.
+  if (connectionCredentialResolver) {
+    // The read-only adapter drives ONLY fetchStory (the read token rides in the header); its webhookSecret
+    // is never used for that path but the constructor requires a non-empty value. This source enables off
+    // the connection vault — independent of the legacy SHORTCUT_WEBHOOK_SECRET — so it can't reuse that
+    // (possibly-unset) secret; a fixed placeholder keeps the constructor happy without gating on it.
+    const readAdapter = new ShortcutAdapter({ webhookSecret: webhookSecret || 'read-only-adapter' });
+    content = makeShortcutContentSource({
+      store: new PgCoordinationStore(pool),
+      resolver: connectionCredentialResolver,
+      adapter: readAdapter,
+      fallback: content,
+      logger,
+    });
+    logger.info?.('shortcut content fetch enabled (per-connection read token)');
   }
 
   // Agent-call metering is now PER-TASK in orchestrate (BYOK, slice 3.5-A.2b): the in-process spawn
