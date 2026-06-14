@@ -42,16 +42,12 @@
 .mt-meta .prchip { padding: 2px 7px; }
 .mt-meta .ci { font-size: 9px; padding: 2px 7px; }
 
-/* ── escalations rail ─────────────────────────────────────────────────────── */
-.esc-rail .escrow { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1.4fr) auto; align-items: center; gap: 16px; padding: 13px 0; border-top: 1px solid var(--line); }
-.esc-rail .escrow:first-of-type { border-top: none; }
-.esc-task { display: flex; align-items: center; gap: 10px; background: none; border: none; padding: 0; text-align: left; cursor: pointer; min-width: 0; }
-.esc-title { font-size: var(--fs-sm); color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; transition: color var(--dur); }
-.esc-task:hover .esc-title { color: var(--fg); }
-.esc-reason { font-size: var(--fs-xs); color: var(--fg-3); line-height: 1.5; min-width: 0; }
-.esc-act { display: inline-flex; align-items: center; gap: 10px; justify-self: end; }
+/* ── blocked-task reason line (Blocked column) ────────────────────────────────
+   The why-blocked reason (lastError) shown inline under a card in the Blocked
+   column. A left accent in the blocked state-token marks it as the attention signal,
+   alongside the column's "Blocked" label (status is never conveyed by color alone). */
+.mt-reason { font-size: var(--fs-xs); color: var(--fg-3); line-height: 1.5; margin: 0 0 11px; padding-left: 9px; border-left: 2px solid var(--state-blocked); text-wrap: pretty; }
 .mt-agent.sm { font-size: var(--fs-2xs); }
-@media (max-width: 860px){ .esc-rail .escrow { grid-template-columns: 1fr; gap: 8px; } .esc-act { justify-self: start; } }
 
 /* ── quiet-day honest state (calm, intentional) ───────────────────────────── */
 .quiet-wrap { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 60px 24px; gap: 16px; }

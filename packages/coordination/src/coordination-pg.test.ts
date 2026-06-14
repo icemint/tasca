@@ -337,6 +337,32 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(await store.listPullRequestsForTask(ORG, task.id)).toHaveLength(1);
   });
 
+  it('getTaskIdByPullRequestUrl resolves a recorded PR cross-org by its url; null for an unknown url', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-pr-lookup', platform: 'shortcut', repoRef: '/r' });
+    const url = 'https://github.com/icemint/tasca/pull/200';
+    await store.recordPullRequest(ORG, { taskId: task.id, url });
+
+    // The resolver is cross-org (no org argument): the merge webhook arrives with only the url.
+    expect(await store.getTaskIdByPullRequestUrl(url)).toEqual({ orgId: ORG, taskId: task.id });
+    // A PR Tasca did not open (no recorded row) resolves to null → the merge handler no-ops.
+    expect(await store.getTaskIdByPullRequestUrl('https://github.com/icemint/tasca/pull/404')).toBeNull();
+  });
+
+  it('markPullRequestMerged flips state to merged ONLY within the owning org (org-scoped)', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-pr-merge', platform: 'shortcut', repoRef: '/r' });
+    const url = 'https://github.com/icemint/tasca/pull/300';
+    await store.recordPullRequest(ORG, { taskId: task.id, url });
+
+    // A foreign org flipping the same url touches nothing (the org_id predicate misses).
+    await store.markPullRequestMerged('org_other', url);
+    expect((await store.listPullRequestsForTask(ORG, task.id))[0]!.state).toBe('open');
+
+    // The owning org flips it to merged; idempotent on a re-mark.
+    await store.markPullRequestMerged(ORG, url);
+    await store.markPullRequestMerged(ORG, url);
+    expect((await store.listPullRequestsForTask(ORG, task.id))[0]!.state).toBe('merged');
+  });
+
   it('auto-recover: a failed attempt resets the SAME task to routable and re-wins the CAS (real Postgres)', async () => {
     // The headline §6.14 fix. First delivery fails in execution (spawn exit 1) →
     // task reset to routable, claim cleared, failure_count 1. Re-delivering the

@@ -137,6 +137,9 @@ export interface TaskSummary {
   repoRef: string | null;
   claimedBy: string | null;
   failureCount: number;
+  /** The why-blocked reason (set when a task is failed/needs_attention); null otherwise.
+   *  Surfaced on the board's Blocked column so an operator sees what needs a human. */
+  lastError: string | null;
 }
 
 /** A persisted routing decision, projected for the inspector. */
@@ -362,6 +365,11 @@ export interface CoordinationStore {
   /** Persist the PR a run opened and link it to the task. */
   recordPullRequest(orgId: string, input: { taskId: string; url: string }): Promise<void>;
 
+  /** Mark a recorded PR `merged` (the GitHub merge webhook). Org-scoped: the caller
+   *  resolves the org from the PR row (via getTaskIdByPullRequestUrl) before calling,
+   *  so this only ever flips a row this org owns. A url with no row is a silent no-op. */
+  markPullRequestMerged(orgId: string, url: string): Promise<void>;
+
   // ── Human write-API: PM/operator task interventions ──────────────────────────
   // These are deliberate ADMIN overrides invoked from the app (session-gated), so
   // they bypass the normal routing-flow guard (TASK_TRANSITIONS) with their own
@@ -545,6 +553,17 @@ export interface CoordinationStore {
    * the job — there is nothing to finalize and no org to invent).
    */
   getOrgForTask(taskId: string): Promise<string | null>;
+
+  /**
+   * The org + task a recorded PR belongs to (GitHub merge webhook → org/task). The
+   * merge webhook arrives at the edge with no org — only the PR's globally-unique
+   * `html_url` — so this DISCOVERS the owning org/task by that url (pull_request.url is
+   * UNIQUE(task_id, url) and indexed for this lookup). CROSS-ORG by design, like
+   * getShortcutConnectionById: the url is the routing key, so the resolver cannot be
+   * org-scoped. Returns null when no recorded PR matches the url — a PR Tasca did not
+   * open — and the merge handler then no-ops (never touches an unrelated task/tenant).
+   */
+  getTaskIdByPullRequestUrl(url: string): Promise<{ orgId: string; taskId: string } | null>;
 
   // ── Read-side (the read-only API serves these; query-only, no writes) ───────
 
@@ -1669,6 +1688,17 @@ export class PgCoordinationStore
     );
   }
 
+  async markPullRequestMerged(orgId: string, url: string): Promise<void> {
+    // ORG-SCOPED flip to `merged`. The caller resolves the org from the PR row first
+    // (getTaskIdByPullRequestUrl), so the org_id predicate only ever matches the row
+    // this org owns; a missing/foreign row updates zero rows (a silent no-op), never
+    // a cross-tenant write. Idempotent: re-marking an already-merged row is a no-op set.
+    await this.db.query(`UPDATE pull_request SET state = 'merged' WHERE org_id = $1 AND url = $2`, [
+      orgId,
+      url,
+    ]);
+  }
+
   // ── GitHub App installation ───────────────────────────────────────────────────
 
   async upsertGitHubInstallation(
@@ -1787,6 +1817,21 @@ export class PgCoordinationStore
     return res.rows[0]?.org_id ?? null;
   }
 
+  async getTaskIdByPullRequestUrl(
+    url: string
+  ): Promise<{ orgId: string; taskId: string } | null> {
+    // Discover the org + task a recorded PR belongs to (GitHub merge webhook → org/task).
+    // Unscoped by design: the merge webhook arrives with no org, only the PR url, so this
+    // is resolving WHICH org/task owns it (the url is the routing key). null = no recorded
+    // PR for that url — a PR Tasca did not open — and the merge handler then no-ops.
+    const res = await this.db.query<{ org_id: string; task_id: string }>(
+      `SELECT org_id, task_id FROM pull_request WHERE url = $1`,
+      [url]
+    );
+    const row = res.rows[0];
+    return row ? { orgId: row.org_id, taskId: row.task_id } : null;
+  }
+
   // ── Read-side queries ───────────────────────────────────────────────────────
 
   async listTasks(
@@ -1810,7 +1855,7 @@ export class PgCoordinationStore
     }
     params.push(limit);
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate
+      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error
          FROM task ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
       params
     );
@@ -1961,6 +2006,7 @@ function mapTaskSummary(row: TaskRow): TaskSummary {
     repoRef: row.repo_ref,
     claimedBy: row.claimed_by,
     failureCount: row.failure_count,
+    lastError: row.last_error ?? null,
   };
 }
 

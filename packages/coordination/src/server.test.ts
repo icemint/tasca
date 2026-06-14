@@ -98,6 +98,8 @@ class CountingStore implements CoordinationStore {
   }
   async recordRoutingDecision() {}
   async recordPullRequest() {}
+  async markPullRequestMerged() {}
+  async getTaskIdByPullRequestUrl() { return null; }
   async escalateTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async overrideTierEstimate(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async reassignTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }

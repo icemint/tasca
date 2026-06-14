@@ -310,7 +310,7 @@ describe('GitHubAdapter.registerWebhook (REST v3, injected fetch)', () => {
     const headers = captured?.init.headers as Record<string, string>;
     expect(headers['Authorization']).toBe('Bearer ghs_token');
     const sentBody = JSON.parse(String(captured?.init.body));
-    expect(sentBody.events).toEqual(['issues', 'issue_comment']);
+    expect(sentBody.events).toEqual(['issues', 'issue_comment', 'pull_request']);
     expect(sentBody.config).toMatchObject({ url: 'https://api.tasca.dev/webhooks/github', secret: SECRET });
   });
 
@@ -432,5 +432,48 @@ describe('GitHubAdapter gated halves (stubbed)', () => {
     await expect(adapter().provisionIdentity('agent_elvis', {})).rejects.toThrow(
       /gated: GitHub identity provisioning not yet built/
     );
+  });
+});
+
+describe('GitHubAdapter.parseMergedPr (pull_request closed+merged → prUrl)', () => {
+  const PR_URL = 'https://github.com/icemint/demo/pull/7';
+
+  /** A pull_request event envelope. Defaults to closed+merged with a url. */
+  function prPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      action: 'closed',
+      pull_request: { merged: true, html_url: PR_URL },
+      ...overrides,
+    };
+  }
+
+  it('returns the html_url for a closed + merged pull_request', () => {
+    const body = JSON.stringify(prPayload());
+    expect(adapter().parseMergedPr({ ok: true, rawBody: body })).toEqual({ prUrl: PR_URL });
+  });
+
+  it('returns null when the PR was closed WITHOUT being merged', () => {
+    const body = JSON.stringify(prPayload({ pull_request: { merged: false, html_url: PR_URL } }));
+    expect(adapter().parseMergedPr({ ok: true, rawBody: body })).toBeNull();
+  });
+
+  it('returns null for a non-closed pull_request action (e.g. opened, synchronize)', () => {
+    const opened = JSON.stringify(prPayload({ action: 'opened' }));
+    expect(adapter().parseMergedPr({ ok: true, rawBody: opened })).toBeNull();
+  });
+
+  it('returns null when merged is true but no html_url is present', () => {
+    const body = JSON.stringify(prPayload({ pull_request: { merged: true } }));
+    expect(adapter().parseMergedPr({ ok: true, rawBody: body })).toBeNull();
+  });
+
+  it('returns null for a non-PR event (no pull_request object — e.g. an issues event)', () => {
+    const body = JSON.stringify({ action: 'closed', issue: { number: 1 } });
+    expect(adapter().parseMergedPr({ ok: true, rawBody: body })).toBeNull();
+  });
+
+  it('returns null (never throws) on a malformed / non-JSON body', () => {
+    expect(adapter().parseMergedPr({ ok: true, rawBody: 'not json{' })).toBeNull();
+    expect(adapter().parseMergedPr({ ok: true, rawBody: '"a string"' })).toBeNull();
   });
 });

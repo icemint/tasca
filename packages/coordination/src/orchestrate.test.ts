@@ -188,6 +188,11 @@ class FakeStore implements CoordinationStore {
     }
     this.pullRequests.push(input);
   }
+  async markPullRequestMerged() {}
+  async getTaskIdByPullRequestUrl(url: string) {
+    const pr = this.pullRequests.find((p) => p.url === url);
+    return pr ? { orgId: 'org_default', taskId: pr.taskId } : null;
+  }
   // human write-API (unused by these orchestration tests)
   async escalateTask(): Promise<TaskWriteOutcome> {
     return { ok: false, reason: 'not_found' };

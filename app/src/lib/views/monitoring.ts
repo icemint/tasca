@@ -1,39 +1,56 @@
-// Monitoring (C7) — mission control. A pipeline board of tasks grouped by their
-// real status from GET /api/tasks, plus an attention rail for needs_attention /
-// failed tasks. KPI tiles report honest counts only (no throughput / cost-burn /
-// success-over-time aggregates — those columns don't exist, so they're omitted).
+// Monitoring (C7) — mission control. An operator-facing board of tasks grouped into
+// five workflow columns (each mapping a SET of internal statuses, covering all eight),
+// from GET /api/tasks. The Blocked column shows each task's why-blocked reason
+// (lastError) so a human sees what needs attention inline. KPI tiles report honest
+// counts only (no throughput / cost-burn / success-over-time aggregates — those
+// columns don't exist, so they're omitted).
 
 import { getTasks, getProjects } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, platTag, tierTag, taskRef, esc, roControl } from '../ui';
+import { I, platTag, tierTag, taskRef, esc } from '../ui';
 import type { TaskStatus, TaskSummary } from '../contract';
 
-// Pipeline columns, in flow order. needs_attention/failed surface in the rail.
-const COLUMNS: { status: TaskStatus; label: string }[] = [
-  { status: 'routable', label: 'Routable' },
-  { status: 'claimed', label: 'Claimed' },
-  { status: 'executing', label: 'Executing' },
-  { status: 'in_review', label: 'In review' },
-  { status: 'done', label: 'Done' },
+// Operator columns, in flow order. Each maps a SET of internal statuses; together the
+// sets partition all eight statuses, so no task orphans. `blocked` flags the column
+// that surfaces the why-blocked reason (lastError) under each task.
+interface BoardColumn {
+  label: string;
+  statuses: TaskStatus[];
+  blocked?: boolean;
+}
+const COLUMNS: BoardColumn[] = [
+  { label: 'Backlog', statuses: ['ingested', 'routable'] },
+  { label: 'Blocked', statuses: ['needs_attention', 'failed'], blocked: true },
+  { label: 'In Progress', statuses: ['claimed', 'executing'] },
+  { label: 'PR Opened', statuses: ['in_review'] },
+  { label: 'Completed', statuses: ['done'] },
 ];
 
-function taskCard(t: TaskSummary): string {
+function taskCard(t: TaskSummary, showReason = false): string {
   const agent = t.claimedBy
     ? `<a class="mt-agent" href="/agents?id=${encodeURIComponent(t.claimedBy)}">${esc(t.claimedBy)}</a>`
     : `<span class="mt-agent unrouted">Unrouted</span>`;
+  // On the Blocked column, show the why-blocked reason (lastError) inline so the
+  // operator sees what needs a human without opening the task. The reason is the
+  // text signal — Blocked never relies on color alone to convey "needs attention".
+  const reason =
+    showReason && t.lastError
+      ? `<div class="mt-reason">${esc(t.lastError)}</div>`
+      : '';
   return `<a class="montask" href="/tasks?id=${encodeURIComponent(t.id)}">
     <div class="mt-top">${platTag(t.platform)}${taskRef(t.id)}</div>
     <div class="mt-title">${esc(t.externalStoryId)}</div>
+    ${reason}
     <div class="mt-foot">${agent}<span class="mt-meta">${tierTag(t.tierEstimate)}</span></div>
   </a>`;
 }
 
-function column(label: string, tasks: TaskSummary[]): string {
+function column(col: BoardColumn, tasks: TaskSummary[]): string {
   const body = tasks.length
-    ? tasks.map(taskCard).join('')
+    ? tasks.map((t) => taskCard(t, col.blocked)).join('')
     : `<div class="col-empty">Empty</div>`;
-  return `<div class="moncol"><div class="moncol-h"><span class="mono fl" style="color:var(--fg-4)">${esc(label)}</span><span class="moncol-ct">${tasks.length}</span></div><div class="moncol-body">${body}</div></div>`;
+  return `<div class="moncol"><div class="moncol-h"><span class="mono fl" style="color:var(--fg-4)">${esc(col.label)}</span><span class="moncol-ct">${tasks.length}</span></div><div class="moncol-body">${body}</div></div>`;
 }
 
 function kpis(tasks: TaskSummary[]): string {
@@ -51,20 +68,6 @@ function kpis(tasks: TaskSummary[]): string {
         `<div class="kpi"><div class="kpi-k"><span class="glyph" style="background:${t.g}"></span>${t.k}</div><div class="kpi-v">${t.v}</div></div>`
     )
     .join('')}</div>`;
-}
-
-function attentionRail(tasks: TaskSummary[]): string {
-  const attn = tasks.filter((t) => t.status === 'needs_attention' || t.status === 'failed');
-  if (!attn.length) return '';
-  const rows = attn
-    .map(
-      (t) =>
-        `<div class="escrow"><a class="esc-task" href="/tasks?id=${encodeURIComponent(t.id)}">${taskRef(t.id)}<span class="esc-title">${esc(t.externalStoryId)}</span></a>
-        <span class="esc-reason">${t.failureCount} ${t.failureCount === 1 ? 'failed attempt' : 'failed attempts'} · awaiting review</span>
-        <span class="esc-act">${roControl('Re-tier', { cls: 'ictl amber' })}${roControl('Escalate')}</span></div>`
-    )
-    .join('');
-  return `<div class="pcard esc-rail" style="margin-top:24px"><div class="pc-h">Needs attention <span class="pc-h-r mono dim">${attn.length}</span></div>${rows}</div>`;
 }
 
 /** Resolve the active-project scope label for the board header (best-effort). "All projects" when
@@ -107,12 +110,12 @@ export async function loadMonitoring(): Promise<LoadResult> {
     }
 
     const board = COLUMNS.map((col) =>
-      column(col.label, tasks.filter((t) => t.status === col.status))
+      column(col, tasks.filter((t) => col.statuses.includes(t.status)))
     ).join('');
 
     return {
       kind: 'ok',
-      html: `${head}${kpis(tasks)}<div class="monboard">${board}</div>${attentionRail(tasks)}`,
+      html: `${head}${kpis(tasks)}<div class="monboard">${board}</div>`,
     };
   });
 }
