@@ -42,7 +42,7 @@ export interface WriteAuditSink {
 }
 
 export interface WriteApiDeps {
-  store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask' | 'interruptTask'>;
+  store: Pick<CoordinationStore, 'escalateTask' | 'overrideTierEstimate' | 'reassignTask' | 'interruptTask' | 'forceResetTask'>;
   /** Agent-state writes (pause/resume/edit-profile). Absent → those routes 404. */
   identity?: AgentWriter;
   /** Resolves a verified session's user to their org (slice 4 RBAC) AND their role in it (slice 5b).
@@ -69,6 +69,7 @@ type WriteRoute =
   | { kind: 'retier'; id: string }
   | { kind: 'reassign'; id: string }
   | { kind: 'interrupt'; id: string }
+  | { kind: 'force_reset'; id: string }
   | { kind: 'pause'; id: string }
   | { kind: 'resume'; id: string }
   | { kind: 'profile'; id: string };
@@ -76,12 +77,15 @@ type WriteRoute =
 /**
  * The minimum role each gated write requires (slice 5b). Task interventions are a member-level
  * action; agent/roster writes (pause/resume/edit-profile) are roster management → admin+.
+ * force_reset force-discards a wedged run mid-flight (a roster/operator-grade recovery,
+ * stronger than the graceful member-level interrupt) → admin+.
  */
 const WRITE_ROUTE_MIN_ROLE: Record<Exclude<WriteRoute, { kind: 'csrf' }>['kind'], OrgRole> = {
   escalate: 'member',
   retier: 'member',
   reassign: 'member',
   interrupt: 'member',
+  force_reset: 'admin',
   pause: 'admin',
   resume: 'admin',
   profile: 'admin',
@@ -90,13 +94,14 @@ const WRITE_ROUTE_MIN_ROLE: Record<Exclude<WriteRoute, { kind: 'csrf' }>['kind']
 function matchWriteRoute(method: string, path: string): WriteRoute | null {
   if (method === 'GET' && path === '/api/csrf') return { kind: 'csrf' };
   if (method !== 'POST') return null;
-  const task = /^\/api\/tasks\/([^/]+)\/(escalate|retier|reassign|interrupt)$/.exec(path);
+  const task = /^\/api\/tasks\/([^/]+)\/(escalate|retier|reassign|interrupt|force-reset)$/.exec(path);
   if (task) {
     const id = decodeURIComponent(task[1]!);
     const action = task[2]!;
     if (action === 'escalate') return { kind: 'escalate', id };
     if (action === 'retier') return { kind: 'retier', id };
     if (action === 'interrupt') return { kind: 'interrupt', id };
+    if (action === 'force-reset') return { kind: 'force_reset', id };
     return { kind: 'reassign', id };
   }
   const agent = /^\/api\/agents\/([^/]+)\/(pause|resume|profile)$/.exec(path);
@@ -254,6 +259,11 @@ async function handleWrite(
     case 'interrupt': {
       const outcome = await deps.store.interruptTask(orgId, route.id);
       await audit('task.interrupt', sendOutcome(res, outcome));
+      return;
+    }
+    case 'force_reset': {
+      const outcome = await deps.store.forceResetTask(orgId, route.id);
+      await audit('task.force_reset', sendOutcome(res, outcome));
       return;
     }
     case 'retier': {

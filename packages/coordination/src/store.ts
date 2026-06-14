@@ -488,6 +488,17 @@ export interface CoordinationStore {
    *  interrupt); `not_found` if absent. */
   interruptTask(orgId: string, taskId: string): Promise<TaskWriteOutcome>;
 
+  /** Operator escape hatch for a STUCK task (issue 317): force a task that is `executing`
+   *  or `claimed` to `needs_attention`, clearing `claimed_by` and resetting `failure_count`
+   *  so the agent un-pins (its `working` pill is derived purely from `claimed_by`) and
+   *  unhire/UI reconcile. Unlike `interrupt`/`reassign`, it does NOT depend on a live runner
+   *  job — it is the recovery for when the run vanished (paused/dead PTY/reaped job) and no
+   *  job remains to cancel, so `interrupt` dead-ends with `no_inflight`. It need not kill any
+   *  process: the runner fence + the bumped version reject a late zombie finalize. Idempotent —
+   *  a second call finds no `executing`/`claimed` row → `conflict` (no spurious version bump);
+   *  `conflict` from any other status; `not_found` if absent. */
+  forceResetTask(orgId: string, taskId: string): Promise<TaskWriteOutcome>;
+
   // ── PM-assistant proposals (slice W3-S1) — advisory; accept routes through a binding method ──
 
   /** List the org's proposals (newest first), optionally filtered by status/kind. Org-scoped. */
@@ -1526,6 +1537,26 @@ export class PgCoordinationStore
     // executing; a non-executing task has nothing live to interrupt → conflict.
     return this.cancelCoupledWrite(orgId, taskId, 'needs_attention', () =>
       Promise.resolve({ ok: false, reason: 'conflict' })
+    );
+  }
+
+  async forceResetTask(orgId: string, taskId: string): Promise<TaskWriteOutcome> {
+    // Stuck-task recovery (#317): clear a task wedged in executing/claimed with no live job.
+    // Unlike escalateTask, this ALSO clears claimed_by + failure_count so the agent releases
+    // (its "working" pill is derived purely from claimed_by) and unhire/UI reconcile. Guarding
+    // to executing/claimed makes it idempotent — a second call matches no row → conflict, never
+    // a spurious version bump. Does NOT touch any runner job: the fence + version bump fence out
+    // a late zombie finalize, and this is precisely the path for when no job remains to cancel.
+    return this.taskWrite(
+      `UPDATE task
+          SET status = 'needs_attention', claimed_by = NULL, failure_count = 0,
+              last_error = 'force-reset by operator (stuck run cleared)',
+              version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status IN ('executing','claimed')
+       RETURNING status`,
+      [orgId, taskId],
+      orgId,
+      taskId
     );
   }
 

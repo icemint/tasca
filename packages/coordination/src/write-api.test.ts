@@ -18,6 +18,7 @@ class FakeWriteStore {
   retierResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   reassignResult: TaskWriteOutcome = { ok: true, status: 'routable' };
   interruptResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
+  forceResetResult: TaskWriteOutcome = { ok: true, status: 'needs_attention' };
   async escalateTask(orgId: string, id: string): Promise<TaskWriteOutcome> {
     this.lastOrgId = orgId;
     this.calls.push(`escalate:${id}`);
@@ -35,6 +36,11 @@ class FakeWriteStore {
   async interruptTask(_orgId: string, id: string): Promise<TaskWriteOutcome> {
     this.calls.push(`interrupt:${id}`);
     return this.interruptResult;
+  }
+  async forceResetTask(orgId: string, id: string): Promise<TaskWriteOutcome> {
+    this.lastOrgId = orgId;
+    this.calls.push(`force_reset:${id}`);
+    return this.forceResetResult;
   }
 }
 
@@ -260,6 +266,22 @@ describe('task interventions (session + CSRF satisfied)', () => {
     expect(JSON.parse(conflict.body).code).toBe('conflict');
   });
 
+  it('force-reset → calls forceResetTask and returns the new status (admin escape hatch for issue 317)', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(deps(store), fakeReq('POST', '/api/tasks/t1/force-reset', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(JSON.parse(r.body)).toEqual({ ok: true, status: 'needs_attention' });
+    expect(store.calls).toEqual(['force_reset:t1']);
+  });
+
+  it('force-reset is idempotent: a second call on an already-cleared task → 409 conflict', async () => {
+    const store = new FakeWriteStore();
+    store.forceResetResult = { ok: false, reason: 'conflict' };
+    const r = await run(deps(store), fakeReq('POST', '/api/tasks/t1/force-reset', { headers: csrf() }));
+    expect(r.statusCode).toBe(409);
+    expect(JSON.parse(r.body).code).toBe('conflict');
+  });
+
   it('allowUnauthenticated opens the gate for dev (CSRF still required)', async () => {
     const store = new FakeWriteStore();
     const d: WriteApiDeps = { store, membership: membershipFor('org_default'), allowUnauthenticated: true, secureCookies: false };
@@ -369,6 +391,20 @@ describe('role gate (slice 5b) — additive over the membership/tenant gate', ()
       fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) })
     );
     expect(r.statusCode).toBe(200); // role gate passes; the write proceeds
+  });
+
+  it('force-reset is admin+ (stronger than the member-level interrupt): a MEMBER → 403, store never touched', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(deps(store, { membership: membershipFor('org_default', 'member') }), fakeReq('POST', '/api/tasks/t1/force-reset', { headers: csrf() }));
+    expect(r.statusCode).toBe(403);
+    expect(store.calls).toEqual([]); // role gate blocks before the store write
+  });
+
+  it('an ADMIN may force-reset a stuck task', async () => {
+    const store = new FakeWriteStore();
+    const r = await run(deps(store, { membership: membershipFor('org_default', 'admin') }), fakeReq('POST', '/api/tasks/t1/force-reset', { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(store.calls).toEqual(['force_reset:t1']);
   });
 
   it('the role gate is ADDITIVE: no membership (resolveOrg null) still 403s before the role check', async () => {

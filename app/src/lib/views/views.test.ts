@@ -237,17 +237,28 @@ describe('task inspector — the agent-authored PR actually shows', () => {
     const html = htmlOf(await loadTask());
     expect(html).toContain('data-action="interrupt"');
     expect(html).toContain('data-action="reassign"');
-    expect(html).toContain('live-ctl'); // Interrupt + Reassign are live (not disabled) controls
+    expect(html).toContain('data-action="force-reset"'); // the stuck-task escape hatch (issue 317)
+    expect(html).toContain('live-ctl'); // Interrupt + Reassign + Force reset are live (not disabled) controls
     // (Escalate stays read-only — out of this slice's scope — so data-ro is still present for it.)
   });
 
-  it('a DONE task offers no Interrupt and only a disabled Reassign (nothing live to act on)', async () => {
+  it('a DONE task offers no Interrupt, no Force reset, and only a disabled Reassign (nothing live to act on)', async () => {
     withId('task-lru');
     stubFetch({ '/api/tasks/task-lru': { body: TASK_LRU_DETAIL } });
     const html = htmlOf(await loadTask());
     expect(html).not.toContain('data-action="interrupt"');
+    expect(html).not.toContain('data-action="force-reset"'); // not a stuck state
     expect(html).not.toContain('data-action="reassign"'); // Reassign is read-only (roControl) on a done task
     expect(html).toContain('data-ro'); // the disabled Reassign control
+  });
+
+  it('a CLAIMED task (stuck, never started) offers Force reset but NOT Interrupt (interrupt is executing-only)', async () => {
+    withId('task-claimed');
+    const claimed = { ...TASK_EXECUTING_DETAIL, id: 'task-claimed', status: 'claimed' } as typeof TASK_EXECUTING_DETAIL;
+    stubFetch({ '/api/tasks/task-claimed': { body: claimed } });
+    const html = htmlOf(await loadTask());
+    expect(html).toContain('data-action="force-reset"'); // the canonical stuck case this control exists for
+    expect(html).not.toContain('data-action="interrupt"'); // interrupt only renders while executing
   });
 
   it('a needs_attention task surfaces the honest reason (e.g. no execution capacity), not a silent stall', async () => {
@@ -265,9 +276,10 @@ describe('describeTaskOutcome — the three cancel truths reach the user distinc
     expect(msg).toContain('already finished');
     expect(msg.toLowerCase()).not.toContain('interrupt');
   });
-  it('no_inflight explains the in-process limitation distinctly', () => {
+  it('no_inflight explains the in-process limitation distinctly and points to Force reset (issue 317)', () => {
     const msg = describeTaskOutcome({ kind: 'conflict', data: { error: 'x', code: 'no_inflight' } });
     expect(msg).toContain('in-process');
+    expect(msg).toContain('Force reset'); // the dead end now names the escape hatch
   });
   it('a generic conflict is distinct from both', () => {
     const msg = describeTaskOutcome({ kind: 'conflict', data: { error: 'x', code: 'conflict' } });
@@ -277,6 +289,14 @@ describe('describeTaskOutcome — the three cancel truths reach the user distinc
   });
   it('falls back to the generic describer for non-conflict failures', () => {
     expect(describeTaskOutcome({ kind: 'notfound' })).toMatch(/no longer exists|not found/i);
+  });
+  it('a role-denied 403 (forbidden) is honest — never the "token expired / please retry" lie (Force reset is admin-only, issue 317)', () => {
+    // A 403 that survives the CSRF retry is a permission denial, not a stale token. The generic
+    // describeFailure would claim the token expired and tell the operator to retry (a futile loop).
+    const msg = describeTaskOutcome({ kind: 'forbidden' });
+    expect(msg).toContain('permission');
+    expect(msg.toLowerCase()).not.toContain('token');
+    expect(msg.toLowerCase()).not.toContain('retry');
   });
 });
 

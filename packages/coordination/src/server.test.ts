@@ -112,6 +112,7 @@ class CountingStore implements CoordinationStore {
   async overrideTierEstimate(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async reassignTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async interruptTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
+  async forceResetTask(): Promise<TaskWriteOutcome> { return { ok: false, reason: 'not_found' }; }
   async failNoCapacity(): Promise<boolean> { return false; }
   async retireNoChanges(): Promise<boolean> { return false; }
   async upsertGitHubInstallation() {}
