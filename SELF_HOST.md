@@ -87,15 +87,57 @@ set `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_SLUG`, and `GITHUB_WE
 
 ### Tier 3 — optional
 
-Shortcut intake (`SHORTCUT_WEBHOOK_SECRET`), email invites (`RESEND_API_KEY` +
-`TASCA_INVITE_FROM`), git author identity, and naming an existing org as the instance org —
-see the comments in `.env.example`.
+Email invites (`RESEND_API_KEY` + `TASCA_INVITE_FROM`), git author identity, and naming an
+existing org as the instance org — see the comments in `.env.example`. (Shortcut is configured
+per workspace, not via an env var — see "Connecting Shortcut" below.)
 
 ## First boot
 
 On first start the worker applies the schema (idempotent) and, with `TASCA_SINGLE_TENANT=on`,
 provisions a single instance organization. The first person to log in is enrolled into it. There
 is no separate seed or setup step.
+
+## Connecting Shortcut (per client workspace)
+
+Tasca speaks Shortcut natively: a story assigned to an agent is worked on the linked repo, the
+agent opens a PR and comments on the story **as itself**, and the story moves through its workflow
+off the PR. Set `TASCA_SECRET_STORE_KEY` (the vault key) — it enables the whole Shortcut surface.
+Then, per client workspace:
+
+1. **Create a project** for the client's GitHub repo (so a Shortcut story resolves to a repo).
+2. **Create the connection** — `POST /api/orgs/<orgId>/connections/shortcut` with
+   `{ workspaceId, projectId, webhookSecret, readToken }`, where `readToken` is a Shortcut API
+   token with read access to the workspace. The response returns a `webhookUrl`
+   (`/webhooks/shortcut/<connectionId>`) — the unique URL for **this** workspace.
+3. **Point Shortcut at it** — in the workspace's Shortcut settings, add an **Outgoing Webhook**
+   targeting that `webhookUrl`, with the same `webhookSecret`.
+4. **Give the agent a Shortcut identity** — `POST /api/orgs/<orgId>/agents/<agentId>/identity/shortcut`
+   with `{ memberId, token }`: the agent's Shortcut **Agent-User** member id and that user's API
+   token (the agent writes back as itself with this token).
+5. **Restart the worker** — the agent→assignee match set is a boot-time snapshot, so a newly
+   configured agent identity is picked up on restart.
+
+> There is also a legacy single-workspace intake route (`/webhooks/shortcut`, keyed by the global
+> `SHORTCUT_WEBHOOK_SECRET` env var). It predates the per-connection model and doesn't carry a
+> project/repo link — use the per-connection `webhookUrl` above for new setups.
+
+### Required: the Shortcut → GitHub Event Handler (the auto-move)
+
+Tasca **never writes story state** (the projection model). The story moves because Shortcut's own
+GitHub integration does it — but **you must configure that**, it is not automatic:
+
+- In the Shortcut workspace's **GitHub integration → Event Handlers**, add a handler:
+  **"Automatically move a Story to the first Started Workflow State when a Branch / Commit / PR is
+  associated."** (Add more handlers for the in-review / done transitions as your workflow needs.)
+- Shortcut links a PR to its story by an **`sc-<id>` token in the branch name** (its
+  `[owner]/sc-<id>/[name]` convention). Tasca emits branches as `tasca/sc-<storyId>-<hash>` and
+  references `[sc-<storyId>]` in the PR body, so Shortcut's integration links them automatically —
+  no action needed on the Tasca side.
+- Make sure the GitHub account is connected to the Shortcut workspace with **Comment on PRs**
+  enabled.
+
+Without the event handler, everything else still works (the agent claims, executes, opens the PR,
+and comments as itself) — only the automatic story-state move is skipped.
 
 ## Updating
 

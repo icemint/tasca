@@ -32,6 +32,9 @@ export interface DispatchPayload {
   prompt: string;
   /** Deterministic PR head branch (idempotent re-drive). */
   headBranch: string;
+  /** Projection-model PR body, precomputed coordination-side (GitHub `Closes #N`, Shortcut `[sc-<id>]`,
+   *  else absent). The runner opens the PR with it verbatim — it does NOT re-derive platform body logic. */
+  prBody?: string;
   [k: string]: unknown;
 }
 

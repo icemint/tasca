@@ -91,15 +91,16 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
 
       // 4. Open the PR with the SCOPED token (env-auth push + gh GH_TOKEN; not in argv).
       //    The deterministic head makes a re-drive idempotent (no duplicate PR).
-      // PROJECTION model (roadmap D8): a github PR carries `Closes #N` so the native merge→issue-close
-      // does the transition — the agent's only state-affecting write. Non-github → no closing keyword.
-      const closes = payload.platform === 'github' ? /#(\d+)$/.exec(payload.externalStoryId) : null;
+      // PROJECTION model (roadmap D8): Tasca never writes story/issue state — the platform's own
+      // integration transitions it off the PR. The PR body that drives that (GitHub `Closes #N`,
+      // Shortcut `[sc-<id>]`) is precomputed coordination-side and carried on the payload, so the two
+      // PR-opening paths (in-process orchestrate + this runner) stay byte-identical. Don't re-derive it.
       const pr = await deps.execution.openPr({
         cwd: worktree.worktreePath,
         branch: worktree.branch,
         headBranch: payload.headBranch,
         title: `Tasca: ${payload.externalStoryId}`,
-        ...(closes ? { body: `Closes #${closes[1]}` } : {}),
+        ...(payload.prBody ? { body: payload.prBody } : {}),
         token: token.token,
       });
 

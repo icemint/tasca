@@ -202,6 +202,9 @@ export interface DispatchPayload {
   agentId: string;
   prompt: string;
   headBranch: string;
+  /** The projection-model PR body (precomputed like headBranch so the runner doesn't re-derive it):
+   *  GitHub `Closes #N`, Shortcut `[sc-<id>]`, else absent. See prBodyReference. */
+  prBody?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -546,7 +549,8 @@ export async function orchestrateTaskAssigned(
         externalStoryId: event.externalStoryId,
         agentId: winner.agentId,
         prompt,
-        headBranch: deterministicHeadBranch(event.externalStoryId),
+        headBranch: deterministicHeadBranch(event.platform, event.externalStoryId),
+        ...(prBodyReference(event) ? { prBody: prBodyReference(event)! } : {}),
       };
       const { id: jobId } = await deps.dispatchQueue.enqueue({
         orgId,
@@ -748,11 +752,13 @@ export async function orchestrateTaskAssigned(
     const pr = await deps.execution.openPr({
       cwd: worktree.path,
       branch: worktree.branch,
-      headBranch: deterministicHeadBranch(event.externalStoryId),
+      headBranch: deterministicHeadBranch(event.platform, event.externalStoryId),
       title: `Tasca: ${event.externalStoryId}`,
-      // PROJECTION model (roadmap D8): the agent's ONE state-affecting write is the PR's `Closes #N`
-      // link — GitHub's native PR-merge→issue-close does the transition; Tasca never writes issue state.
-      ...(closesReference(event) ? { body: closesReference(event)! } : {}),
+      // PROJECTION model (roadmap D8): Tasca never writes issue/story state — the platform's own
+      // integration does the transition off the PR. GitHub: a `Closes #N` link + native PR-merge→close.
+      // Shortcut: a `[sc-<id>]` story reference (belt-and-suspenders to the sc-<id> branch token) +
+      // the operator's Shortcut GitHub Event Handler that auto-moves the story on PR association.
+      ...(prBodyReference(event) ? { body: prBodyReference(event)! } : {}),
       ...(prToken ? { token: prToken } : {}),
     });
     await deps.store.recordPullRequest(orgId, { taskId: task.id, url: pr.url });
@@ -848,13 +854,21 @@ export async function orchestrateTaskAssigned(
   }
 }
 
-/** The projection-model PR-body link (roadmap D8). For a GitHub issue (externalStoryId `owner/repo#N`)
- *  the PR carries `Closes #N` so the native merge→issue-close transition fires — the agent's only
- *  state-affecting write. Other platforms (Shortcut/Linear) project via their own mechanisms → null. */
-function closesReference(event: { platform: string; externalStoryId: string }): string | null {
-  if (event.platform !== 'github') return null;
-  const m = /#(\d+)$/.exec(event.externalStoryId);
-  return m ? `Closes #${m[1]}` : null;
+/** The projection-model PR-body reference (roadmap D8) — Tasca never writes story/issue state; the
+ *  platform's own integration transitions it off the PR. GitHub (externalStoryId `owner/repo#N`): a
+ *  `Closes #N` link drives the native merge→issue-close. Shortcut (externalStoryId = bare story id): a
+ *  `[sc-<id>]` story reference that its GitHub integration links on (in addition to the sc-<id> branch
+ *  token), with the actual move done by the operator-configured Shortcut GitHub Event Handler. Linear
+ *  and other platforms → null until they land. */
+function prBodyReference(event: { platform: string; externalStoryId: string }): string | null {
+  if (event.platform === 'github') {
+    const m = /#(\d+)$/.exec(event.externalStoryId);
+    return m ? `Closes #${m[1]}` : null;
+  }
+  if (event.platform === 'shortcut') {
+    return `[sc-${event.externalStoryId}]`;
+  }
+  return null;
 }
 
 /**
@@ -867,12 +881,19 @@ function closesReference(event: { platform: string; externalStoryId: string }): 
  * `owner/repo#42` and `owner-repo#42` would otherwise both slug to the same thing).
  * Starts with a letter so it satisfies the open-pr SAFE_REF guard.
  */
-function deterministicHeadBranch(externalStoryId: string): string {
+function deterministicHeadBranch(platform: string, externalStoryId: string): string {
+  const hash = createHash('sha256').update(externalStoryId).digest('hex').slice(0, 8);
+  // Shortcut's GitHub integration links a PR to its story by an `sc-<id>` token in the branch name
+  // (its convention is [owner]/sc-<id>/[name]); without that token the story never links and never
+  // auto-moves. A Shortcut externalStoryId is the bare numeric story id, so `sc-<id>` is exactly the
+  // token Shortcut scans for. The hash keeps the branch unique + deterministic (same as below).
+  if (platform === 'shortcut' && /^\d+$/.test(externalStoryId)) {
+    return `tasca/sc-${externalStoryId}-${hash}`;
+  }
   const slug = externalStoryId
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 180);
-  const hash = createHash('sha256').update(externalStoryId).digest('hex').slice(0, 8);
   return `tasca/${slug || 'task'}-${hash}`;
 }
 
