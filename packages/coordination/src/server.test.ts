@@ -265,14 +265,18 @@ function signedShortcutReq(connectionId: string, storyId: string, secret: string
 }
 
 /** A real signed Shortcut delivery: a story-comment CREATE → one task.clarification_reply (EM v1 slice 3).
- *  The commenter is the envelope member_id. */
+ *  The real Shortcut shape: the comment-create action carries the commenter as author_id; the parent
+ *  story is the companion story-update action's id (the envelope primary_id is the COMMENT id). */
 function signedShortcutCommentReq(connectionId: string, storyId: string, secret: string, eventId: string, commenter: string): IncomingMessage {
   const body = JSON.stringify({
     id: eventId,
     changed_at: '2026-06-14T00:00:00Z',
     member_id: commenter,
-    primary_id: storyId,
-    actions: [{ id: 'comment-1', entity_type: 'story-comment', action: 'create', primary_id: storyId }],
+    primary_id: 'comment-1', // the envelope primary_id is the comment id, not the story
+    actions: [
+      { id: 'comment-1', entity_type: 'story-comment', action: 'create', author_id: commenter },
+      { id: storyId, entity_type: 'story', action: 'update', changes: { comment_ids: { adds: ['comment-1'] } } },
+    ],
   });
   const signature = createHmac('sha256', secret).update(body, 'utf8').digest('hex');
   return fakeReq('POST', `/webhooks/shortcut/${connectionId}`, body, { 'payload-signature': signature });

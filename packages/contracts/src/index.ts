@@ -183,15 +183,18 @@ export const ShortcutOwnerIdsChangeSchema = z.object({
 });
 
 /** One entry in `actions[]`. We care about (1) story updates whose owner_ids gained ids, and (2) a
- *  story-comment CREATE (EM v1 slice 3) — the clarification-reply signal. For a comment action the parent
- *  story id is the action's own `primary_id` (else the envelope's), so it is modeled here (passthrough
- *  tolerates the rest of the comment action's fields). */
+ *  story-comment CREATE (EM v1 slice 3) — the clarification-reply signal, whose commenter is the action's
+ *  `author_id`. A comment action carries NO story id of its own; the parent story is the COMPANION
+ *  `entity_type:'story'` action's `id` (resolved in shortcut.ts parseEvent). `passthrough` tolerates the
+ *  rest of each action's fields. */
 export const ShortcutActionSchema = z
   .object({
     id: z.union([z.string(), z.number()]).optional(),
     entity_type: z.string(),
     action: z.string(),
-    /** On a story-comment action, the parent story id (the comment's `id` is the comment, not the story). */
+    /** On a story-comment CREATE action, the comment author's member id — distinguishes a human reply
+     *  from the EM's own questions. NOT the envelope `member_id` (the delivery actor). */
+    author_id: z.string().optional(),
     primary_id: z.union([z.string(), z.number()]).optional(),
     changes: z
       .object({
