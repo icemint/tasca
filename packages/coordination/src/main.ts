@@ -124,14 +124,15 @@ function rejectAllVerifier(): WebhookVerifier {
 }
 
 /**
- * GATED status-back. Real write-back under each agent's native Shortcut identity
- * depends on the token-issuance model (Tasca-Shortcut-Kickoff-Brief item 2). Until
- * then this logs the intended update and returns — it must never throw, or the
- * orchestration loop would treat every task as failed at the status-back step.
+ * No-op status-back fallback. The router (routingStatusReporter) sends a platform here
+ * only when no real write-back reporter is wired for it — e.g. GitHub before its App is
+ * configured, or Shortcut before the vault master key (TASCA_SECRET_STORE_KEY) enables
+ * the per-agent identity write-back. It logs the intended update and returns — it must
+ * never throw, or the orchestration loop would treat every task as failed at status-back.
  */
 const gatedStatusReporter: StatusReporter = {
   async postStatus(update) {
-    logger.info?.('status-back suppressed (write-back gated on Shortcut item 2)', {
+    logger.info?.('status-back suppressed (no write-back reporter wired for this platform)', {
       agentId: update.agentId,
       externalStoryId: update.externalStoryId,
       state: update.state,
