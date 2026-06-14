@@ -67,6 +67,7 @@ const PAYLOAD: DispatchPayload = {
   externalStoryId: 'acme/widgets#5',
   prompt: 'Fix the bug',
   headBranch: 'tasca/acme-widgets-5-abc123',
+  prBody: 'Closes #5', // precomputed coordination-side; the runner opens the PR with it verbatim
 };
 const JOB: DispatchJob = { id: 'job-1', taskId: 'task-1', payload: PAYLOAD, attempts: 1, fence: 1 };
 const TOKEN: RepoToken = { token: 'ghs_scoped', expiresAt: Date.now() + 3_600_000 };
@@ -105,9 +106,33 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
     // commit checks against the base
     expect(commits[0]).toMatchObject({ cwd: '/wt', baseRef: 'origin/main' });
     // the PR push carries the SCOPED token (ExecutionPort.openPr does env-auth, token NOT in argv)
-    expect(prs[0]).toMatchObject({ cwd: '/wt', branch: 'tasca-wt/x', headBranch: 'tasca/acme-widgets-5-abc123', token: 'ghs_scoped' });
+    // + the projection body precomputed on the payload (the runner does NOT re-derive platform logic)
+    expect(prs[0]).toMatchObject({ cwd: '/wt', branch: 'tasca-wt/x', headBranch: 'tasca/acme-widgets-5-abc123', body: 'Closes #5', token: 'ghs_scoped' });
     // the worktree is reclaimed (no disk leak on the shared volume)
     expect(removeWorktree).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: '/wt', localPath: '/repos/acme/widgets' }));
+  });
+
+  it('opens the PR with the precomputed Shortcut [sc-<id>] body + sc-<id> branch from the payload (SC-4)', async () => {
+    const { execution, prs } = fakeExecution();
+    const execute = makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) });
+    const shortcutPayload: DispatchPayload = {
+      ...PAYLOAD,
+      platform: 'shortcut',
+      externalStoryId: '123',
+      headBranch: 'tasca/sc-123-abc123',
+      prBody: '[sc-123]',
+    };
+    await execute({ ...JOB, payload: shortcutPayload }, shortcutPayload, TOKEN, ctl());
+    // the runner opens the PR verbatim with the payload's headBranch + body (no platform re-derivation)
+    expect(prs[0]).toMatchObject({ headBranch: 'tasca/sc-123-abc123', body: '[sc-123]' });
+  });
+
+  it('omits the PR body when the payload carries none (no projection reference for the platform)', async () => {
+    const { execution, prs } = fakeExecution();
+    const execute = makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) });
+    const { prBody: _omit, ...noBody } = PAYLOAD;
+    await execute({ ...JOB, payload: noBody as DispatchPayload }, noBody as DispatchPayload, TOKEN, ctl());
+    expect(prs[0]!.body).toBeUndefined();
   });
 
   it('SECURITY: the agent spawn input carries NO token and NO broker socket', async () => {

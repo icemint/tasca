@@ -538,14 +538,20 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     );
     expect(outcome.kind).toBe('dispatched');
     expect(status.updates[0]!.platform).toBe('github');
-    // PROJECTION model (D8): the github PR carries `Closes #42` so a merge auto-closes the issue.
+    // PROJECTION model (D8): the github PR carries `Closes #42` so a merge auto-closes the issue, and
+    // the branch keeps the slug form (no sc-<id> token — that's Shortcut-only).
     expect(execution.lastOpenPrInput!.body).toBe('Closes #42');
+    expect(execution.lastOpenPrInput!.headBranch).toMatch(/^tasca\/icemint-demo-42-[0-9a-f]{8}$/);
   });
 
-  it('a NON-github (shortcut) PR carries NO Closes reference (projection is platform-native)', async () => {
-    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit }));
+  it('SC-4: a SHORTCUT PR carries an sc-<id> branch + a [sc-<id>] body so its GitHub integration links + auto-moves the story', async () => {
+    const shortcutEvent: AdapterEvent = { ...EVENT, externalStoryId: '123' }; // a real Shortcut story id is numeric
+    const outcome = await orchestrateTaskAssigned(shortcutEvent, makeDeps({ store, execution, status, audit }));
     expect(outcome.kind).toBe('dispatched');
-    expect(execution.lastOpenPrInput!.body).toBeUndefined(); // EVENT is platform:'shortcut', id 'sc-story-1'
+    // Shortcut links a PR to its story by the sc-<id> token in the branch (its [owner]/sc-<id>/[name]
+    // convention) + the [sc-<id>] body reference; the actual move is the operator's Shortcut Event Handler.
+    expect(execution.lastOpenPrInput!.headBranch).toMatch(/^tasca\/sc-123-[0-9a-f]{8}$/);
+    expect(execution.lastOpenPrInput!.body).toBe('[sc-123]');
   });
 
   it('FAIL-CLOSED: a github event for an UNCONNECTED workspace → unconnected, no task, no agent run', async () => {
