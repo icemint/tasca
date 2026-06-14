@@ -56,11 +56,17 @@ export type AgentWriteOutcome =
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'version_conflict'; currentVersion: number };
 
-/** The editable slice of a capability profile (the agent-edit form). */
+/** The editable slice of a capability profile (the agent-edit form). The tier-range and specialty
+ *  fields are OPTIONAL: when omitted the existing values are preserved (so callers that only edit
+ *  the original three keep working unchanged). Specialties are validated against the @tasca/domain
+ *  taxonomy at the API boundary before they reach here. */
 export interface CapabilityProfilePatch {
   maxTier: CapabilityProfile['maxTier'];
   concurrencyLimit: number | null;
   costCeiling: number | null;
+  tiersCovered?: CapabilityProfile['tiersCovered'];
+  languageSpecialties?: string[];
+  frameworkSpecialties?: string[];
 }
 
 /**
@@ -339,15 +345,25 @@ export class PgIdentityRepository {
       // a write that lies. The upsert makes the edit always land. concurrency_limit
       // is NOT NULL (default 1) → COALESCE a null patch to the existing value (or 1
       // on insert); cost_ceiling is nullable (NULL = "no cap", read back as 0).
+      // tiers_covered / language_specialties / framework_specialties are jsonb. A null param means
+      // "not edited" → COALESCE keeps the existing value (or the '[]' default on insert), so the
+      // three original fields can still be edited alone without wiping specialties.
+      const tiersCovered = patch.tiersCovered === undefined ? null : JSON.stringify(patch.tiersCovered);
+      const languages = patch.languageSpecialties === undefined ? null : JSON.stringify(patch.languageSpecialties);
+      const frameworks = patch.frameworkSpecialties === undefined ? null : JSON.stringify(patch.frameworkSpecialties);
       await repo.db.query(
-        `INSERT INTO capability_profile (agent_id, max_tier, concurrency_limit, cost_ceiling, updated_at)
-         VALUES ($1, $2, COALESCE($3, 1), $4, now())
+        `INSERT INTO capability_profile
+           (agent_id, max_tier, tiers_covered, language_specialties, framework_specialties, concurrency_limit, cost_ceiling, updated_at)
+         VALUES ($1, $2, COALESCE($5::jsonb, '[]'::jsonb), COALESCE($6::jsonb, '[]'::jsonb), COALESCE($7::jsonb, '[]'::jsonb), COALESCE($3, 1), $4, now())
          ON CONFLICT (agent_id) DO UPDATE SET
            max_tier = $2,
+           tiers_covered = COALESCE($5::jsonb, capability_profile.tiers_covered),
+           language_specialties = COALESCE($6::jsonb, capability_profile.language_specialties),
+           framework_specialties = COALESCE($7::jsonb, capability_profile.framework_specialties),
            concurrency_limit = COALESCE($3, capability_profile.concurrency_limit),
            cost_ceiling = $4,
            updated_at = now()`,
-        [agentId, patch.maxTier, patch.concurrencyLimit, patch.costCeiling]
+        [agentId, patch.maxTier, patch.concurrencyLimit, patch.costCeiling, tiersCovered, languages, frameworks]
       );
       return { ok: true, version: cas.rows[0]!.version };
     });

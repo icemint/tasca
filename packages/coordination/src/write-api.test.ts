@@ -353,6 +353,42 @@ describe('agent-state writes (optimistic concurrency via version)', () => {
     expect(badNum.statusCode).toBe(400);
   });
 
+  it('profile edit accepts structured specialties + tier range and forwards them (issue 337)', async () => {
+    const id = new FakeAgentWriter();
+    const ok = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, tiersCovered: ['low', 'hard'], languageSpecialties: ['typescript', 'python'], frameworkSpecialties: ['react'] }) }));
+    expect(ok.statusCode).toBe(200);
+    expect(id.lastPatch).toEqual({ maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, tiersCovered: ['low', 'hard'], languageSpecialties: ['typescript', 'python'], frameworkSpecialties: ['react'] });
+  });
+
+  it('profile edit rejects out-of-taxonomy specialties — the server is the authority, not just the UI', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, languageSpecialties: ['cobol'] }) }));
+    expect(r.statusCode).toBe(400);
+    expect(id.calls).toEqual([]); // never reached the writer
+  });
+
+  it('profile edit rejects a covered tier above maxTier (incoherent range)', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'low', concurrencyLimit: 3, costCeiling: null, tiersCovered: ['ultra'] }) }));
+    expect(r.statusCode).toBe(400);
+    expect(id.calls).toEqual([]);
+  });
+
+  it('profile edit rejects an over-long specialty array (bounded payload, no unbounded jsonb)', async () => {
+    const id = new FakeAgentWriter();
+    const flood = Array.from({ length: 200 }, () => 'typescript'); // all valid, but absurdly long
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, languageSpecialties: flood }) }));
+    expect(r.statusCode).toBe(400);
+    expect(id.calls).toEqual([]);
+  });
+
+  it('profile edit WITHOUT specialty fields forwards only the three numerics (preserve-if-absent contract)', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'medium', concurrencyLimit: 2, costCeiling: 5 }) }));
+    expect(r.statusCode).toBe(200);
+    expect(id.lastPatch).toEqual({ maxTier: 'medium', concurrencyLimit: 2, costCeiling: 5 }); // no specialty keys
+  });
+
   it('agent routes 503 (not 404) when no identity writer is wired (honest "not enabled")', async () => {
     const d: WriteApiDeps = { store: new FakeWriteStore(), membership: membershipFor('org_default'), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
     const r = await run(d, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }));
