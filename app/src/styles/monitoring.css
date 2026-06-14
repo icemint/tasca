@@ -20,9 +20,6 @@
 .monboard { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 24px; align-items: start; }
 @media (max-width: 1080px){ .monboard { grid-template-columns: 1fr 1fr; } }
 .moncol { background: var(--bg-sub); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 12px; min-width: 0; }
-.moncol.attn { border-color: color-mix(in srgb, currentColor 30%, transparent); }
-.moncol.attn.astate-awaiting { color: var(--state-awaiting); }
-.moncol.attn.astate-blocked { color: var(--state-blocked); }
 .moncol-h { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 12px; }
 .moncol-ct { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-4); font-variant-numeric: tabular-nums; }
 .moncol-body { display: flex; flex-direction: column; gap: 8px; }

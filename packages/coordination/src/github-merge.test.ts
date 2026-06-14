@@ -113,7 +113,7 @@ describe('makeGitHubMergeHandler', () => {
     expect(store.transitions).toEqual([]);
   });
 
-  it('skips (no throw) a task already done — a duplicate merge redelivery', async () => {
+  it('records the merge but does NOT advance a task already done — a duplicate redelivery (no throw)', async () => {
     const store = fakeStore({
       pr: { orgId: 'org-A', taskId: 'task-1' },
       task: { orgId: 'org-A', taskId: 'task-1', status: 'done' },
@@ -125,12 +125,13 @@ describe('makeGitHubMergeHandler', () => {
     });
 
     await expect(handler('{}')).resolves.toBeUndefined();
-    // Never reaches markPullRequestMerged / setStatus — the in_review guard stops first.
-    expect(store.merged).toEqual([]);
+    // The merge is recorded durably (idempotent), but the done→done advance is NOT attempted, so the
+    // terminal guard is never hit — a clean no-op.
+    expect(store.merged).toEqual(['org-A:' + PR_URL]);
     expect(store.transitions).toEqual([]);
   });
 
-  it('skips a task that is not in in_review (e.g. still executing)', async () => {
+  it('records the merge but does NOT advance a task that left in_review (e.g. executing, or operator-escalated)', async () => {
     const store = fakeStore({
       pr: { orgId: 'org-A', taskId: 'task-1' },
       task: { orgId: 'org-A', taskId: 'task-1', status: 'executing' },
@@ -143,7 +144,9 @@ describe('makeGitHubMergeHandler', () => {
 
     await handler('{}');
 
-    expect(store.merged).toEqual([]);
+    // The merge fact is durably recorded on the PR row regardless of the task's status (so an escalated
+    // task's merge isn't lost), but only an in_review task is advanced.
+    expect(store.merged).toEqual(['org-A:' + PR_URL]);
     expect(store.transitions).toEqual([]);
   });
 

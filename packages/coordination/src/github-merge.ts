@@ -67,19 +67,25 @@ export function makeGitHubMergeHandler(deps: GitHubMergeHandlerDeps): (rawBody: 
       logger.info?.('coordination: pr-merge for a vanished task — skipped', { taskId });
       return;
     }
-    // Only advance from `in_review`. A task already `done` (a duplicate merge
-    // redelivery) or in any other status is skipped — so the setStatus terminal guard
-    // is never hit and a redelivery is a clean no-op, not a throw.
+
+    // Record the merge on the PR row FIRST, regardless of the task's current status — so the merge fact
+    // is durably captured even if an operator escalated the task out of in_review before it merged (the
+    // PR row then reads merged while the task sits in needs_attention: honest + recoverable, not lost).
+    // rowCount is intentionally unchecked: a 0-row update means the PR row was deleted in a near-
+    // impossible race, whose only effect is a skipped state-mirror — never the task lifecycle.
+    await store.markPullRequestMerged(orgId, merged.prUrl);
+
+    // Advance ONLY from `in_review`. A task already `done` (a duplicate merge redelivery) or moved
+    // elsewhere (e.g. operator-escalated to needs_attention) is left as-is — the merge is recorded
+    // above, the board shows the task's real state, and the terminal `done` guard is never hit (so a
+    // redelivery is a clean no-op, not a throw).
     if (task.status !== 'in_review') {
-      logger.info?.('coordination: pr-merge for a task not in in_review — skipped', {
+      logger.info?.('coordination: pr-merge recorded; task not in in_review — not advanced', {
         taskId,
         status: task.status,
       });
       return;
     }
-
-    // Record the merge on the PR row (org-scoped), then advance the task.
-    await store.markPullRequestMerged(orgId, merged.prUrl);
     await store.setStatus(orgId, taskId, 'done');
     logger.info?.('coordination: task auto-completed on pr merge', { taskId });
   };
