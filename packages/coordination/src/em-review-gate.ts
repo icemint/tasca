@@ -22,13 +22,20 @@
 // OrchestrationDeps.emReviewGate.
 
 import type { Task } from '@tasca/domain';
-import type { AdapterEvent } from '@tasca/contracts';
+import type { TaskAssignedEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
-import type { EmReviewerPort } from '@tasca/llm';
+import type { ClarificationComment, EmReviewerPort } from '@tasca/llm';
 import type { Logger } from './ports';
 import type { ManagerCredentialResolver } from './vendor-credential';
 import type { ShortcutWriteBack } from './shortcut-status-reporter';
 import { withUsageContext } from './usage-context';
+
+/** The slice of the Shortcut adapter the gate reads for its conversation-aware re-review (EM v1 slice 3):
+ *  the story's comment thread (its own questions + the human's answer). A fetch failure degrades to judging
+ *  on the story alone (fail-soft) — never blocks the gate. The token rides ONLY in the header. */
+export interface ShortcutCommentReader {
+  fetchStoryComments(input: { token: string; storyId: string }): Promise<ClarificationComment[]>;
+}
 
 /** The narrow store slice the gate reads — resolve the task's project, then its EM. */
 export interface EmGateStore {
@@ -47,6 +54,9 @@ export interface EmReviewGateDeps {
   reviewerFor(apiKey: string): EmReviewerPort;
   /** Post the EM's clarifying questions as a story comment under the EM's token. */
   shortcut: ShortcutWriteBack;
+  /** Read the story's comment thread (the EM's questions + the human's reply) so the re-review is
+   *  conversation-aware (EM v1 slice 3). A fetch failure degrades to judging on the story alone. */
+  comments: ShortcutCommentReader;
   logger?: Logger;
 }
 
@@ -65,7 +75,7 @@ export function formatEmQuestions(questions: string[]): string {
  */
 export function makeEmReviewGate(
   deps: EmReviewGateDeps
-): (orgId: string, task: Task, content: TaskInput, event: AdapterEvent) => Promise<{ clear: boolean }> {
+): (orgId: string, task: Task, content: TaskInput, event: TaskAssignedEvent) => Promise<{ clear: boolean }> {
   const logger = deps.logger;
   return async (orgId, task, content, event) => {
     // v1 is Shortcut-first: only Shortcut stories get EM review. GitHub-issue EM review is a later add.
@@ -85,9 +95,25 @@ export function makeEmReviewGate(
       ]);
       if (!managerToken || !apiKey) return { clear: true };
 
+      // CONVERSATION-AWARE re-review (EM v1 slice 3): fetch the story's comment thread (the EM's earlier
+      // questions + the human's answer) so a satisfactory reply can CLEAR the story — without it the judge
+      // re-reads the unchanged title/body and loops to the cap. The first review has no comments yet (empty
+      // thread → judge on the story alone, unchanged). A fetch error degrades to the story alone (fail-soft,
+      // never blocks). The manager token rides ONLY in the adapter header — it is NEVER logged.
+      let thread: ClarificationComment[] = [];
+      try {
+        thread = await deps.comments.fetchStoryComments({ token: managerToken, storyId: event.externalStoryId });
+      } catch (err) {
+        logger?.error?.('em gate: story-comment fetch failed — judging on the story alone (fail-soft)', {
+          taskId: task.id,
+          externalStoryId: event.externalStoryId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       // The clarity judge, metered as source='manager' for this task (the EM's spend).
       const review = await withUsageContext({ orgId, taskId: task.id, source: 'manager' }, () =>
-        deps.reviewerFor(apiKey).review({ title: content.title, body: content.body })
+        deps.reviewerFor(apiKey).review({ title: content.title, body: content.body, thread })
       );
       if (review.clear) return { clear: true };
 

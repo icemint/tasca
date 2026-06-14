@@ -360,6 +360,35 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect((await store.getTask(ORG, task.id))?.emClarificationRound).toBe(1); // unchanged
   });
 
+  it('getAwaitingClarificationTask returns the parked task and is org-scoped + status-filtered (EM v1 slice 3)', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-await', platform: 'shortcut', repoRef: '/r' });
+    // Not parked yet → no row.
+    expect(await store.getAwaitingClarificationTask(ORG, 'shortcut', 'sc-em-await')).toBeNull();
+    await store.parkAwaitingClarification(ORG, task.id, 1);
+    const found = await store.getAwaitingClarificationTask(ORG, 'shortcut', 'sc-em-await');
+    expect(found?.id).toBe(task.id);
+    expect(found?.status).toBe('awaiting_clarification');
+    // Cross-tenant: a different org never sees it.
+    expect(await store.getAwaitingClarificationTask('org_other', 'shortcut', 'sc-em-await')).toBeNull();
+  });
+
+  it('resumeFromClarification: awaiting_clarification → routable, em_cleared + round PERSIST; guarded (EM v1 slice 3)', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-resume', platform: 'shortcut', repoRef: '/r' });
+    await store.parkAwaitingClarification(ORG, task.id, 2);
+    expect(await store.resumeFromClarification(ORG, task.id)).toBe(true);
+    const resumed = await store.getTask(ORG, task.id);
+    expect(resumed?.status).toBe('routable');
+    expect(resumed?.emCleared).toBe(false); // the gate must re-run
+    expect(resumed?.emClarificationRound).toBe(2); // the round PERSISTS so the cap still counts
+
+    // a second resume from routable (not awaiting_clarification) no-ops — the guard holds.
+    expect(await store.resumeFromClarification(ORG, task.id)).toBe(false);
+    // org-scoped: a foreign org cannot resume a parked task it doesn't own.
+    await store.parkAwaitingClarification(ORG, task.id, 3);
+    expect(await store.resumeFromClarification('org_other', task.id)).toBe(false);
+    expect((await store.getTask(ORG, task.id))?.status).toBe('awaiting_clarification');
+  });
+
   it('recordPullRequest is idempotent on (task_id, url): a re-finalize does not duplicate the PR', async () => {
     const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-pr-idem', platform: 'shortcut', repoRef: '/r' });
     const url = 'https://github.com/icemint/tasca/pull/123';

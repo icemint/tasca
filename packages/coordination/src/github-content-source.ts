@@ -4,7 +4,7 @@
 // token resolved from the event's owner.
 
 import type { TaskInput } from '@tasca/routing';
-import type { AdapterEvent } from '@tasca/contracts';
+import type { TaskAssignedEvent } from '@tasca/contracts';
 import type { TaskContentSource } from './orchestrate';
 
 /** GitHub `owner/repo#number` external story id. */
@@ -33,7 +33,7 @@ export function makeGitHubContentSource(deps: {
   fallback: TaskContentSource;
 }): TaskContentSource {
   return {
-    async fetch(event: AdapterEvent): Promise<TaskInput> {
+    async fetch(event: TaskAssignedEvent): Promise<TaskInput> {
       if (event.platform !== 'github') {
         return deps.fallback.fetch(event);
       }

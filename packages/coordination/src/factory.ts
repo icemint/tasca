@@ -18,7 +18,7 @@ import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
 import { VendorKeyResolver, ManagerCredentialResolver, type VendorValidator, type AgentCredentialResolver, type ConnectionCredentialResolver } from './vendor-credential';
-import { makeEmReviewGate } from './em-review-gate';
+import { makeEmReviewGate, type ShortcutCommentReader } from './em-review-gate';
 import type { ShortcutWriteBack } from './shortcut-status-reporter';
 import { PgOrgRosterRepo, type OrgRosterRepo } from './roster';
 import { PgAgentCreator } from './agent-creator';
@@ -90,7 +90,7 @@ export interface CreateCoordinationDeps {
    * by construction — no manager / no key / LLM error all skip the review and proceed. `model` defaults
    * to the latest Anthropic model (LATEST_ANTHROPIC_MODEL). Absent / disabled / no master key → no gate.
    */
-  emGate?: { enabled: boolean; model?: string; shortcut: ShortcutWriteBack; masterKey: Buffer | null };
+  emGate?: { enabled: boolean; model?: string; shortcut: ShortcutWriteBack & ShortcutCommentReader; masterKey: Buffer | null };
   /** Window to wait (polling) for a runner to claim before retiring the task to
    *  needs_attention. Default 30000ms. */
   runnerWaitMs?: number;
@@ -249,6 +249,10 @@ export function createCoordination(
               coordinationUsageSink
             ),
           shortcut: input.emGate.shortcut,
+          // The SAME real ShortcutAdapter reads the story's comment thread for the conversation-aware
+          // re-review (EM v1 slice 3): its own questions + the human's reply, so a satisfactory answer
+          // clears the story instead of looping to the cap.
+          comments: input.emGate.shortcut,
           ...(input.logger !== undefined ? { logger: input.logger } : {}),
         })
       : undefined;

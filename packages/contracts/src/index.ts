@@ -65,8 +65,8 @@ export interface DecomposerPort {
   decompose(input: { title: string; body: string }): Promise<DecompositionProposal | null>;
 }
 
-/** Normalized inbound platform event (adapters emit this; coordination consumes it). */
-export const AdapterEventSchema = z.object({
+/** A normalized assignment event: an agent was assigned a story → orchestrate the forward path. */
+export const TaskAssignedEventSchema = z.object({
   type: z.literal('task.assigned'),
   platform: z.enum(['shortcut', 'github', 'linear']),
   externalStoryId: z.string().min(1),
@@ -78,6 +78,31 @@ export const AdapterEventSchema = z.object({
   // that reconstructs the event without it falls back to the stub content (safe/degraded).
   shortcutConnectionId: z.string().optional(),
 });
+export type TaskAssignedEvent = z.infer<typeof TaskAssignedEventSchema>;
+
+/**
+ * A normalized clarification-reply event (EM v1 slice 3): a human commented on a Shortcut story that the
+ * EM parked `awaiting_clarification`, so the EM re-review must re-run. Carries only what the resume handler
+ * needs — the story id + the commenter (`replierMemberId`, the envelope-level actor). The handler resolves
+ * the parked task, drops the EM's OWN comment (replier == the project manager's shortcut_member_id), and
+ * re-orchestrates. v1 is Shortcut-only (GitHub-issue EM reply is a later add), so `platform` is fixed.
+ */
+export const TaskClarificationReplyEventSchema = z.object({
+  type: z.literal('task.clarification_reply'),
+  platform: z.literal('shortcut'),
+  externalStoryId: z.string().min(1),
+  /** The commenter's Shortcut member UUID (the actor) — used to drop the EM's own posted questions. */
+  replierMemberId: z.string().optional(),
+});
+export type TaskClarificationReplyEvent = z.infer<typeof TaskClarificationReplyEventSchema>;
+
+/** Normalized inbound platform event (adapters emit this; coordination consumes it). A discriminated
+ *  union on `type`: `task.assigned` drives the forward orchestration path; `task.clarification_reply`
+ *  (EM v1 slice 3) re-triggers the EM review on a parked Shortcut story. */
+export const AdapterEventSchema = z.discriminatedUnion('type', [
+  TaskAssignedEventSchema,
+  TaskClarificationReplyEventSchema,
+]);
 export type AdapterEvent = z.infer<typeof AdapterEventSchema>;
 
 // ── Platform-adapter seam (scaffold §4.1) ─────────────────────────────────────
@@ -157,12 +182,17 @@ export const ShortcutOwnerIdsChangeSchema = z.object({
   removes: z.array(z.string()).optional(),
 });
 
-/** One entry in `actions[]`. We care about story updates whose owner_ids gained ids. */
+/** One entry in `actions[]`. We care about (1) story updates whose owner_ids gained ids, and (2) a
+ *  story-comment CREATE (EM v1 slice 3) — the clarification-reply signal. For a comment action the parent
+ *  story id is the action's own `primary_id` (else the envelope's), so it is modeled here (passthrough
+ *  tolerates the rest of the comment action's fields). */
 export const ShortcutActionSchema = z
   .object({
     id: z.union([z.string(), z.number()]).optional(),
     entity_type: z.string(),
     action: z.string(),
+    /** On a story-comment action, the parent story id (the comment's `id` is the comment, not the story). */
+    primary_id: z.union([z.string(), z.number()]).optional(),
     changes: z
       .object({
         owner_ids: ShortcutOwnerIdsChangeSchema.optional(),

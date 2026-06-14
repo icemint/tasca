@@ -154,6 +154,30 @@ describe('AnthropicEmReviewer (EM v1 slice 2) — parses the clarity verdict', (
     await new AnthropicEmReviewer(chat, cap.sink).review({ title: 't', body: 'b' });
     expect(cap.events).toEqual([{ model: 'sonnet', inputTokens: 400, outputTokens: 30, idempotencyKey: 'msg_em' }]);
   });
+
+  it('an EMPTY thread → the prompt is the story alone (no clarification block) — EM v1 slice 3', async () => {
+    const t = okWith('{"clear":true,"questions":[]}');
+    await new AnthropicEmReviewer(new AnthropicChat({ apiKey: 'k', model: 'm', fetch: t.fetch })).review({ title: 'T', body: 'B', thread: [] });
+    const prompt = JSON.parse(t.calls[0]!.body).messages[0].content as string;
+    expect(prompt).toContain('Title: T');
+    expect(prompt).not.toContain('Clarification thread');
+  });
+
+  it('a thread → the Q&A is appended to the prompt so a reply can clear the story — EM v1 slice 3', async () => {
+    const t = okWith('{"clear":true,"questions":[]}');
+    await new AnthropicEmReviewer(new AnthropicChat({ apiKey: 'k', model: 'm', fetch: t.fetch })).review({
+      title: 'T',
+      body: 'B',
+      thread: [
+        { author: 'em', text: 'Which service?' },
+        { author: 'human', text: 'Billing.' },
+      ],
+    });
+    const prompt = JSON.parse(t.calls[0]!.body).messages[0].content as string;
+    expect(prompt).toContain('Clarification thread so far:');
+    expect(prompt).toContain('em: Which service?');
+    expect(prompt).toContain('human: Billing.');
+  });
 });
 
 describe('usage metering — the port impls report each call through the sink', () => {

@@ -10,7 +10,7 @@ import {
   type SealedConnectionCredentialReader,
   type ConnectionCredentialKind,
 } from './vendor-credential';
-import type { AdapterEvent } from '@tasca/contracts';
+import type { AdapterEvent, TaskAssignedEvent } from '@tasca/contracts';
 import type { Task, TaskStatus, TierEstimate } from '@tasca/domain';
 import type { CoordinationStore, TaskWriteOutcome, Proposal, CreateProposalInput, ProposalWriteOutcome, TaskOrigin } from './store';
 import type { WebhookVerifier, RawWebhook, VerifiedWebhook, StatusReporter, Logger } from './ports';
@@ -130,6 +130,19 @@ class CountingStore implements CoordinationStore {
   async retireUnroutable() { return false; }
   async markEmCleared() {}
   async parkAwaitingClarification() { return false; }
+  // EM reply-resume (slice 3): a settable parked task lets the connection-route test exercise the resume
+  // path; awaitClarificationCalls / resumeCalls record the org-scoped calls the handler made.
+  parkedTask: Task | null = null;
+  awaitClarificationCalls: Array<{ orgId: string; externalStoryId: string }> = [];
+  resumeCalls: string[] = [];
+  async getAwaitingClarificationTask(orgId: string, _platform: Task['platform'], externalStoryId: string) {
+    this.awaitClarificationCalls.push({ orgId, externalStoryId });
+    return this.parkedTask;
+  }
+  async resumeFromClarification(_orgId: string, taskId: string) {
+    this.resumeCalls.push(taskId);
+    return this.parkedTask?.id === taskId;
+  }
   // read-side (unused by the webhook/intake tests)
   async listTasks() { return []; }
   async getTaskStatusCounts() { return {}; }
@@ -245,6 +258,20 @@ function signedShortcutReq(connectionId: string, storyId: string, secret: string
     member_id: 'human-actor',
     primary_id: storyId,
     actions: [{ id: storyId, entity_type: 'story', action: 'update', changes: { owner_ids: { adds: [SC_AGENT_ID] } } }],
+  });
+  const signature = createHmac('sha256', secret).update(body, 'utf8').digest('hex');
+  return fakeReq('POST', `/webhooks/shortcut/${connectionId}`, body, { 'payload-signature': signature });
+}
+
+/** A real signed Shortcut delivery: a story-comment CREATE → one task.clarification_reply (EM v1 slice 3).
+ *  The commenter is the envelope member_id. */
+function signedShortcutCommentReq(connectionId: string, storyId: string, secret: string, eventId: string, commenter: string): IncomingMessage {
+  const body = JSON.stringify({
+    id: eventId,
+    changed_at: '2026-06-14T00:00:00Z',
+    member_id: commenter,
+    primary_id: storyId,
+    actions: [{ id: 'comment-1', entity_type: 'story-comment', action: 'create', primary_id: storyId }],
   });
   const signature = createHmac('sha256', secret).update(body, 'utf8').digest('hex');
   return fakeReq('POST', `/webhooks/shortcut/${connectionId}`, body, { 'payload-signature': signature });
@@ -749,7 +776,7 @@ describe('connection-scoped Shortcut intake (slice SC-1)', () => {
     const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
     // Capture the event the content source is handed — it must carry the connection id (so the shortcut
     // content source can resolve the read token) AND the connection's repoHint, stamped post-parse.
-    const seen: AdapterEvent[] = [];
+    const seen: TaskAssignedEvent[] = [];
     const capturingContent: TaskContentSource = {
       async fetch(event) {
         seen.push(event);
@@ -770,5 +797,43 @@ describe('connection-scoped Shortcut intake (slice SC-1)', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]!.shortcutConnectionId).toBe('conn-1');
     expect(seen[0]!.repoHint).toBe('eltexsoft/widget-api');
+  });
+
+  it('a story-comment reply on the connection route → routes to the EM resume handler (slice 3)', async () => {
+    const store = new CountingStore();
+    store.shortcutConnection = { orgId: 'org-eltexsoft', repoRef: 'eltexsoft/widget-api' };
+    // Seed the parked task the handler resolves + resumes (the connection org owns it).
+    store.parkedTask = {
+      id: 'task-parked',
+      externalStoryId: 'story-99',
+      platform: 'shortcut',
+      status: 'awaiting_clarification',
+      version: 1,
+      claimedBy: null,
+      failureCount: 0,
+      repoRef: 'eltexsoft/widget-api',
+      tierEstimate: null,
+      lastError: null,
+      preferredAgentId: null,
+      emCleared: false,
+      emClarificationRound: 1,
+    };
+    const work: Array<() => Promise<void>> = [];
+    const resolver = new ConnectionCredentialResolver(connReaderFor(CONN_WEBHOOK_SECRET), CONN_MASTER);
+    const handle = createRequestHandler(
+      makeServerDeps(store, verifierFor('unused'), (w) => work.push(w), undefined, undefined, undefined, {
+        resolver,
+        registeredShortcutIds: ids,
+      })
+    );
+    const r = fakeRes();
+    await handle(signedShortcutCommentReq('conn-1', 'story-99', CONN_WEBHOOK_SECRET, 'evt-reply', 'human-actor'), r.res);
+    expect(r.statusCode).toBe(202);
+    for (const w of work) await w();
+    await flush();
+    // The resume handler ran, org-scoped to the connection's org, and resumed the parked task. (No
+    // orchestrateTaskAssigned was driven via the assigned path — the reply routes to the resume handler.)
+    expect(store.awaitClarificationCalls).toEqual([{ orgId: 'org-eltexsoft', externalStoryId: 'story-99' }]);
+    expect(store.resumeCalls).toEqual(['task-parked']);
   });
 });
