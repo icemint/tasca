@@ -11,7 +11,7 @@
 }
 /* elements with their own rounded shape get a matching ring via box-shadow */
 .btn:focus-visible, .btn-asst:focus-visible, .chip:focus-visible,
-.rail-btn:focus-visible, .icon-btn:focus-visible, .close-btn:focus-visible,
+.rail-item:focus-visible, .rail-btn:focus-visible, .icon-btn:focus-visible, .close-btn:focus-visible,
 .tier:focus-visible, .kc:focus-visible, .pick-item:focus-visible,
 .toggle:focus-visible, .tab:focus-visible, .logs-tab:focus-visible,
 .set-nav button:focus-visible, .oauth-btn:focus-visible, .input:focus-visible,
