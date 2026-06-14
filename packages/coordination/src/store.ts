@@ -412,6 +412,13 @@ export interface CoordinationStore {
    *  acted. */
   parkAwaitingClarification(orgId: string, taskId: string, round: number): Promise<boolean>;
 
+  /** EM block-explanation (EM v1 slice 4): replace a blocked task's `last_error` with a human-readable
+   *  rephrase of the raw reason. Updates ONLY `last_error` (no status change, no breaker). GUARDED to a
+   *  still-blocked status (`needs_attention`/`failed`) so a task that moved on (resumed / re-driven)
+   *  between the block and the rephrase is NOT overwritten with a stale reason. org-scoped. Returns true
+   *  if it acted. */
+  updateBlockReason(orgId: string, taskId: string, humanReason: string): Promise<boolean>;
+
   /** EM reply-resume (EM v1 slice 3): the org-scoped task currently parked at `awaiting_clarification` for
    *  a source story, or null. A reply comment on a story with no parked task (already routable / cleared /
    *  dispatched / done, or never parked) returns null → the resume handler no-ops. Status-filtered so a
@@ -1884,6 +1891,20 @@ export class PgCoordinationStore
           SET status = 'awaiting_clarification', em_clarification_round = $3, version = version + 1, updated_at = now()
         WHERE org_id = $1 AND id = $2 AND status = 'routable'`,
       [orgId, taskId, round]
+    );
+    return res.rowCount === 1;
+  }
+
+  async updateBlockReason(orgId: string, taskId: string, humanReason: string): Promise<boolean> {
+    // EM block-explanation (slice 4): upgrade ONLY last_error with the human rephrase — no status change,
+    // no breaker. GUARDED to a still-blocked status so if the task moved on (resume → routable, re-drive →
+    // executing, finalize → done) between the block and this best-effort rephrase, the update no-ops and
+    // can't overwrite the live state with a stale reason. version is bumped so a watcher sees the text move.
+    const res = await this.db.query(
+      `UPDATE task
+          SET last_error = $3, version = version + 1, updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND status IN ('needs_attention','failed')`,
+      [orgId, taskId, humanReason]
     );
     return res.rowCount === 1;
   }

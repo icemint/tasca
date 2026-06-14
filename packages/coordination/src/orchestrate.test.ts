@@ -185,6 +185,16 @@ class FakeStore implements CoordinationStore {
     t.version += 1;
     return true;
   }
+  blockReasonCalls: Array<{ taskId: string; humanReason: string }> = [];
+  async updateBlockReason(_orgId: string, taskId: string, humanReason: string): Promise<boolean> {
+    this.blockReasonCalls.push({ taskId, humanReason });
+    const t = this.tasks.get(taskId);
+    // Guarded to a still-blocked status (mirrors the SQL): a task that moved on is not overwritten.
+    if (!t || (t.status !== 'needs_attention' && t.status !== 'failed')) return false;
+    t.lastError = humanReason;
+    t.version += 1;
+    return true;
+  }
   emClearedCalls: string[] = [];
   async markEmCleared(_orgId: string, taskId: string): Promise<void> {
     this.emClearedCalls.push(taskId);
@@ -463,6 +473,7 @@ function makeDeps(opts: {
   agentVendorResolver?: OrchestrationDeps['agentVendorResolver'];
   startAgentProxy?: OrchestrationDeps['startAgentProxy'];
   emReviewGate?: OrchestrationDeps['emReviewGate'];
+  emBlockExplainer?: OrchestrationDeps['emBlockExplainer'];
 }): OrchestrationDeps {
   const candidates = opts.candidates ?? [{ profile: elvisProfile(), state: 'idle', activeCount: 0 }];
   return {
@@ -475,6 +486,7 @@ function makeDeps(opts: {
     content: opts.content ?? content,
     ...(opts.classifierFor ? { classifierFor: opts.classifierFor } : {}),
     ...(opts.emReviewGate ? { emReviewGate: opts.emReviewGate } : {}),
+    ...(opts.emBlockExplainer ? { emBlockExplainer: opts.emBlockExplainer } : {}),
     ...(opts.agentVendorResolver ? { agentVendorResolver: opts.agentVendorResolver } : {}),
     ...(opts.startAgentProxy ? { startAgentProxy: opts.startAgentProxy } : {}),
   };
@@ -1451,8 +1463,13 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     async removeWorktree() {},
   };
 
-  const queueDeps = (store: FakeStore, execution: FakeExecution, queue: FakeDispatchQueue): OrchestrationDeps => ({
-    ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit() }),
+  const queueDeps = (
+    store: FakeStore,
+    execution: FakeExecution,
+    queue: FakeDispatchQueue,
+    emBlockExplainer?: OrchestrationDeps['emBlockExplainer']
+  ): OrchestrationDeps => ({
+    ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit(), ...(emBlockExplainer ? { emBlockExplainer } : {}) }),
     provisioner: passingProvisioner,
     dispatchQueue: queue,
     runnerWaitMs: 5, // tiny bound so the no-claim timeout fires fast
@@ -1464,8 +1481,12 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     const execution = new FakeExecution();
     const queue = new FakeDispatchQueue(true); // cancel succeeds at timeout = nobody claimed it
     // queue.status stays 'queued' → the poll times out.
+    const blockCalls: string[] = [];
+    const emBlockExplainer: OrchestrationDeps['emBlockExplainer'] = async (_org, _task, _content, rawReason) => {
+      blockCalls.push(rawReason);
+    };
 
-    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, queueDeps(store, execution, queue));
+    const outcome = await orchestrateTaskAssigned(GITHUB_EVENT, queueDeps(store, execution, queue, emBlockExplainer));
 
     expect(queue.enqueued).toHaveLength(1); // it WAS enqueued for a runner
     expect(execution.spawnInputs).toHaveLength(0); // the hardened boundary HELD — no in-process run
@@ -1473,6 +1494,9 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     expect(store.noCapacityCalls).toHaveLength(1); // → needs_attention with a reason
     expect(store.noCapacityCalls[0]!.reason).toContain('no execution capacity');
     expect(outcome.kind).toBe('no_capacity');
+    // EM v1 slice 4: the explainer was handed the raw no-capacity reason (best-effort, outcome unchanged).
+    expect(blockCalls).toHaveLength(1);
+    expect(blockCalls[0]).toContain('no execution capacity');
   });
 
   it('a runner CLAIMS the job (poll sees it leave the queue) → dispatched, no in-process run', async () => {
@@ -1696,5 +1720,115 @@ describe('orchestrateTaskAssigned — EM requirements gate (EM v1 slice 2)', () 
     expect(t.emCleared).toBe(false);
     expect(store.parkCalls).toHaveLength(0);
     expect(store.emClearedCalls).toHaveLength(0);
+  });
+});
+
+// EM v1 slice 4 — the block-explanation post-step. When a task is retired to a blocked state with a RAW
+// reason, the wired explainer is invoked best-effort with that reason; the retire semantics + the returned
+// outcome are unchanged. The already-human EM-cap retire must NOT trigger it.
+describe('orchestrateTaskAssigned — EM block-explanation (EM v1 slice 4)', () => {
+  let store: FakeStore;
+  let execution: FakeExecution;
+  let status: FakeStatus;
+  let audit: FakeAudit;
+  /** A recording explainer that captures every (task, rawReason) it was handed. */
+  let calls: Array<{ taskId: string; title: string; rawReason: string }>;
+  let emBlockExplainer: OrchestrationDeps['emBlockExplainer'];
+  beforeEach(() => {
+    store = new FakeStore();
+    execution = new FakeExecution();
+    status = new FakeStatus();
+    audit = new FakeAudit();
+    calls = [];
+    emBlockExplainer = async (_org, task, content, rawReason) => {
+      calls.push({ taskId: task.id, title: content.title, rawReason });
+    };
+  });
+
+  it('no_roster retire → SAME needs_attention outcome AND the explainer is invoked with the raw reason', async () => {
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: [], emBlockExplainer })
+    );
+    // The block itself is unchanged.
+    expect(outcome.kind).toBe('no_roster');
+    if (outcome.kind !== 'no_roster') return;
+    const task = store.tasks.get(outcome.taskId)!;
+    expect(task.status).toBe('needs_attention');
+    expect(store.retireCalls).toEqual([{ taskId: outcome.taskId, reason: 'no agents hired' }]);
+    // The explainer ran once, on the raw reason.
+    expect(calls).toEqual([{ taskId: outcome.taskId, title: 'Fix the thing', rawReason: 'no agents hired' }]);
+  });
+
+  it('agent_not_hired retire → the explainer is invoked with the raw reason', async () => {
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({
+        store,
+        execution,
+        status,
+        audit,
+        content: labeledContent(['agent:ghost']), // names an unhired agent
+        names: {},
+        emBlockExplainer,
+      })
+    );
+    expect(outcome.kind).toBe('agent_not_hired');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.rawReason).toBe("requested agent 'ghost' is not hired");
+  });
+
+  it('no-changes retire → the explainer is invoked (fallback title = story id, content out of scope)', async () => {
+    const noChangeExec = new FakeExecution({ commitChanged: false });
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution: noChangeExec, status, audit, emBlockExplainer })
+    );
+    expect(outcome.kind).toBe('no_changes');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.title).toBe('sc-story-1'); // the catch has no story content → story id fallback
+    expect(calls[0]!.rawReason).toMatch(/no committed changes/i);
+  });
+
+  it('the EM-cap retire (already human) → the explainer is NOT invoked', async () => {
+    // Seed a task already at round = CAP-1: the next unclear verdict escalates at the cap.
+    const id = randomUUID();
+    store.tasks.set(id, {
+      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
+      preferredAgentId: null, emCleared: false, emClarificationRound: 2,
+    });
+    const emReviewGate: OrchestrationDeps['emReviewGate'] = async () => ({ clear: false });
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, emReviewGate, emBlockExplainer })
+    );
+    expect(outcome.kind).toBe('needs_clarification_capped');
+    expect(store.retireCalls[0]!.reason).toMatch(/still unclear after 3/i);
+    expect(calls).toHaveLength(0); // the cap reason is already human — not rephrased
+  });
+
+  it('no emBlockExplainer wired → block still retires, no rephrase attempted', async () => {
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: [] })
+    );
+    expect(outcome.kind).toBe('no_roster');
+    if (outcome.kind !== 'no_roster') return;
+    expect(store.tasks.get(outcome.taskId)!.status).toBe('needs_attention');
+    expect(store.tasks.get(outcome.taskId)!.lastError).toBe('no agents hired'); // raw reason stands
+  });
+
+  it('the explainer throwing does NOT disturb the block outcome (best-effort)', async () => {
+    const throwingExplainer: OrchestrationDeps['emBlockExplainer'] = async () => {
+      throw new Error('explainer boom');
+    };
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates: [], emBlockExplainer: throwingExplainer })
+    );
+    expect(outcome.kind).toBe('no_roster'); // unchanged despite the throw
+    if (outcome.kind !== 'no_roster') return;
+    expect(store.tasks.get(outcome.taskId)!.status).toBe('needs_attention');
   });
 });

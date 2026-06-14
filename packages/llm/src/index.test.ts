@@ -180,6 +180,40 @@ describe('AnthropicEmReviewer (EM v1 slice 2) — parses the clarity verdict', (
   });
 });
 
+describe('AnthropicEmReviewer.explainBlock (EM v1 slice 4) — rephrases a raw blocker reason', () => {
+  it('returns the model text, trimmed (the operator one-liner)', async () => {
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch: okWith('  No agents picked this up — assign one.  ').fetch });
+    const out = await new AnthropicEmReviewer(chat).explainBlock({ rawReason: 'no execution capacity', title: 'Fix X' });
+    expect(out).toBe('No agents picked this up — assign one.');
+  });
+
+  it('passes the raw reason + the task title to the model, with a small token budget (one sentence)', async () => {
+    const t = okWith('A clear sentence.');
+    await new AnthropicEmReviewer(new AnthropicChat({ apiKey: 'k', model: 'm', fetch: t.fetch })).explainBlock({
+      rawReason: 'no agent-runner claimed within 30000ms',
+      title: 'Ship the widget',
+    });
+    const sent = JSON.parse(t.calls[0]!.body);
+    expect(sent.max_tokens).toBe(120);
+    const prompt = sent.messages[0].content as string;
+    expect(prompt).toContain('no agent-runner claimed within 30000ms');
+    expect(prompt).toContain('Ship the widget');
+  });
+
+  it('surfaces a non-200 as a throw (the consumer keeps the raw reason)', async () => {
+    const fetch: FetchLike = async () => ({ ok: false, status: 503, async text() { return 'overloaded'; } });
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'm', fetch });
+    await expect(new AnthropicEmReviewer(chat).explainBlock({ rawReason: 'r', title: 't' })).rejects.toBeTruthy();
+  });
+
+  it('meters the call through the sink', async () => {
+    const cap = captureSink();
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'sonnet', fetch: okWith('A sentence.', { id: 'msg_blk', usage: { input_tokens: 90, output_tokens: 18 } }).fetch });
+    await new AnthropicEmReviewer(chat, cap.sink).explainBlock({ rawReason: 'r', title: 't' });
+    expect(cap.events).toEqual([{ model: 'sonnet', inputTokens: 90, outputTokens: 18, idempotencyKey: 'msg_blk' }]);
+  });
+});
+
 describe('usage metering — the port impls report each call through the sink', () => {
   const features = { wordCount: 50, hasReasoningVerb: true, scopeHint: 'multi-file' as const, labelTier: null };
 
