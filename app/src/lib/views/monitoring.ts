@@ -18,13 +18,15 @@ interface BoardColumn {
   label: string;
   statuses: TaskStatus[];
   blocked?: boolean;
+  /** Token color for the summary-tile glyph (the tiles derive from COLUMNS so they can't drift). */
+  glyph: string;
 }
 const COLUMNS: BoardColumn[] = [
-  { label: 'Backlog', statuses: ['ingested', 'routable'] },
-  { label: 'Blocked', statuses: ['needs_attention', 'failed'], blocked: true },
-  { label: 'In Progress', statuses: ['claimed', 'executing'] },
-  { label: 'PR Opened', statuses: ['in_review'] },
-  { label: 'Completed', statuses: ['done'] },
+  { label: 'Backlog', statuses: ['ingested', 'routable'], glyph: 'var(--fg-faint)' },
+  { label: 'Blocked', statuses: ['needs_attention', 'failed'], blocked: true, glyph: 'var(--state-blocked)' },
+  { label: 'In Progress', statuses: ['claimed', 'executing'], glyph: 'var(--state-working)' },
+  { label: 'PR Opened', statuses: ['in_review'], glyph: 'var(--state-awaiting)' },
+  { label: 'Completed', statuses: ['done'], glyph: 'var(--state-shipped)' },
 ];
 
 function taskCard(t: TaskSummary, showReason = false): string {
@@ -54,13 +56,15 @@ function column(col: BoardColumn, tasks: TaskSummary[]): string {
 }
 
 function kpis(tasks: TaskSummary[]): string {
-  const c = (s: TaskStatus) => tasks.filter((t) => t.status === s).length;
+  // The tiles MIRROR the 5 board columns (same labels, same status sets) plus a Total — derived from
+  // COLUMNS so the strip and the columns can never disagree again.
   const tiles = [
     { k: 'Total', v: tasks.length, g: 'var(--fg-faint)' },
-    { k: 'Executing', v: c('executing'), g: 'var(--state-working)' },
-    { k: 'In review', v: c('in_review'), g: 'var(--state-awaiting)' },
-    { k: 'Needs attention', v: c('needs_attention') + c('failed'), g: 'var(--state-blocked)' },
-    { k: 'Done', v: c('done'), g: 'var(--state-shipped)' },
+    ...COLUMNS.map((col) => ({
+      k: col.label,
+      v: tasks.filter((t) => col.statuses.includes(t.status)).length,
+      g: col.glyph,
+    })),
   ];
   return `<div class="mon-kpis">${tiles
     .map(
