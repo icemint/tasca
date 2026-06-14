@@ -43,6 +43,9 @@ const nav = [
   <script is:inline>
     (function () { try { document.documentElement.setAttribute('data-theme', localStorage.getItem('tasca-theme') || 'dark'); } catch (e) {} })();
   </script>
+  <script is:inline>
+    (function () { try { document.documentElement.setAttribute('data-rail', localStorage.getItem('tasca-rail') || 'expanded'); } catch (e) {} })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -68,10 +71,17 @@ const nav = [
       </div>
     </header>
     <div class="app-body">
-      <nav class="app-rail" aria-label="Sections">
+      <nav id="app-rail" class="app-rail" aria-label="Sections">
         {nav.map((n) => (
-          <a class={`rail-item${active === n.key ? ' is-on' : ''}`} href={n.href} aria-label={n.label} aria-current={active === n.key ? 'page' : undefined} title={n.label} set:html={n.icon} />
+          <a class={`rail-item${active === n.key ? ' is-on' : ''}`} href={n.href} aria-label={n.label} aria-current={active === n.key ? 'page' : undefined} title={n.label}>
+            <span class="rail-ico" set:html={n.icon} />
+            <span class="rail-label">{n.label}</span>
+          </a>
         ))}
+        <span class="rail-spacer" aria-hidden="true"></span>
+        <button type="button" class="rail-btn rail-toggle" data-rail-toggle aria-controls="app-rail" aria-expanded="true" aria-label="Collapse navigation">
+          <span class="rail-ico" set:html={I.chevronsLeft} />
+        </button>
       </nav>
       <div class="app-main">
         <main id="main" class="main-scroll">
@@ -116,6 +126,26 @@ const nav = [
         syncTheme(v);
       })
     );
+  </script>
+
+  <script>
+    // Rail collapse toggle (#353). State lives on documentElement[data-rail] (set pre-paint
+    // by the head inline script), mirrored to localStorage. Mirrors the theme-persistence pattern.
+    const railBtn = document.querySelector<HTMLButtonElement>('[data-rail-toggle]');
+    function syncRail(state: 'expanded' | 'collapsed') {
+      document.documentElement.setAttribute('data-rail', state);
+      const expanded = state === 'expanded';
+      railBtn?.setAttribute('aria-expanded', String(expanded));
+      railBtn?.setAttribute('aria-label', expanded ? 'Collapse navigation' : 'Expand navigation');
+    }
+    let railState: 'expanded' | 'collapsed' = 'expanded';
+    try { railState = localStorage.getItem('tasca-rail') === 'collapsed' ? 'collapsed' : 'expanded'; } catch (e) {}
+    syncRail(railState);
+    railBtn?.addEventListener('click', () => {
+      railState = railState === 'expanded' ? 'collapsed' : 'expanded';
+      try { localStorage.setItem('tasca-rail', railState); } catch (e) {}
+      syncRail(railState);
+    });
   </script>
 </body>
 </html>
