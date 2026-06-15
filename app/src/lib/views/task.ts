@@ -97,7 +97,7 @@ function decisionBlock(d: RoutingDecision): string {
       <div class="flow-arr">${I.arrow}</div>
       <div class="flow-step"><div class="fs-k">Candidates</div><div class="fs-v big">${ranked.length}</div></div>
       <div class="flow-arr">${I.arrow}</div>
-      <div class="flow-step"><div class="fs-k">Routed to</div><div class="fs-v big">${d.winnerAgentId ? esc(d.winnerAgentId) : '—'}</div></div>
+      <div class="flow-step"><div class="fs-k">Routed to</div><div class="fs-v big">${d.winnerAgentId ? esc(d.winnerAgentId) : '—'}${d.policy === 'em' ? '<span class="coming-tag">Assigned by EM</span>' : ''}</div></div>
     </div>
     <div class="cand-head"><span>Agent</span><span>Score</span></div>
     <div class="cands">${cands}</div>

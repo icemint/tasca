@@ -150,7 +150,13 @@ CREATE TABLE IF NOT EXISTS routing_decision (
   winner_agent_id text,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS routing_decision_task_idx ON routing_decision (task_id, created_at);`;
+CREATE INDEX IF NOT EXISTS routing_decision_task_idx ON routing_decision (task_id, created_at);
+-- EM-router visibility (#339 slice 3): which policy chose the agent — 'em' (the EM's
+-- least-loaded autonomous pick) or 'rank' (the legacy ranking, or an operator override).
+-- Appended as an ALTER (not folded into the CREATE) so it applies on an existing prod
+-- routing_decision table, which the CREATE IF NOT EXISTS skips. Nullable: historical rows
+-- read as 'rank' at the store boundary.
+ALTER TABLE routing_decision ADD COLUMN IF NOT EXISTS policy text;`;
 
 /**
  * The pull request a run opened — links task ↔ PR and mirrors the PR URL/state

@@ -47,12 +47,12 @@ const AGENTS: Agent[] = [
 ];
 
 const ROUTING_DECISIONS: RoutingDecision[] = [
-  { taskId: 'tas-241', tierEstimate: 'hard', winnerAgentId: 'nova', createdAt: '2026-06-01T12:04:02.000Z',
+  { taskId: 'tas-241', tierEstimate: 'hard', winnerAgentId: 'nova', policy: 'em', createdAt: '2026-06-01T12:04:02.000Z',
     candidates: [
       { agentId: 'nova', score: 0.92, eligible: true, reasons: ['TypeScript + auth history', 'HARD-capable', 'free slot'] },
       { agentId: 'sable', score: 0.74, eligible: false, reasons: ['at concurrency limit'] },
     ] },
-  { taskId: 'tas-219', tierEstimate: 'medium', winnerAgentId: 'juno', createdAt: '2026-06-01T11:30:00.000Z',
+  { taskId: 'tas-219', tierEstimate: 'medium', winnerAgentId: 'juno', policy: 'rank', createdAt: '2026-06-01T11:30:00.000Z',
     candidates: [{ agentId: 'juno', score: 0.88, eligible: true, reasons: ['edge history', 'free slot'] }] },
 ];
 

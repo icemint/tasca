@@ -91,6 +91,8 @@ export interface RoutingDecision {
   tierEstimate: Tier;
   candidates: RoutingCandidate[];
   winnerAgentId: string | null;
+  /** Which policy routed: 'em' (the EM's autonomous pick) or 'rank' (legacy / operator override). */
+  policy: 'em' | 'rank';
   createdAt: string;
 }
 

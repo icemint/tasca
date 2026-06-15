@@ -320,7 +320,7 @@ describe('read-api handler', () => {
     const store = new FakeStore();
     store.tasks = [task('t1', { tierEstimate: tier('medium'), title: 'Add the slugify CLI' })];
     store.decisions = [
-      { id: 'd1', taskId: 't1', tierEstimate: tier('medium'), candidates: [], winnerAgentId: 'a1', createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'd1', taskId: 't1', tierEstimate: tier('medium'), candidates: [], winnerAgentId: 'a1', policy: 'em', createdAt: '2026-01-01T00:00:00.000Z' },
     ];
     store.prs = [{ url: 'https://example/pr/1', state: 'open', createdAt: '2026-01-01T00:00:00.000Z' }];
     const id = new FakeIdentity();
@@ -330,6 +330,7 @@ describe('read-api handler', () => {
     const body = json(r);
     expect(body.title).toBe('Add the slugify CLI'); // the detail serializer must carry title, not drop it
     expect(body.routingDecision.winnerAgentId).toBe('a1');
+    expect(body.routingDecision.policy).toBe('em'); // #339: the read serializer carries policy through
     expect(body.routingDecision.tierEstimate).toBe('medium');
     expect(body.pullRequests).toHaveLength(1);
   });

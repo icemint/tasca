@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { PgClaimRepository, PgDispatchQueue, TASK_TABLE_DDL, DISPATCH_JOB_DDL } from '@tasca/db';
@@ -339,6 +340,34 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(task.emClarificationRound).toBe(0);
     const read = await store.getTask(ORG, task.id);
     expect(read).toMatchObject({ emCleared: false, emClarificationRound: 0 });
+  });
+
+  it('routing_decision.policy round-trips; a null/legacy row reads as rank (#339 slice 3)', async () => {
+    const estimate = {
+      tier: 'medium' as const,
+      confidence: 0.7,
+      signals: { wordCount: 5, hasReasoningVerb: false, scopeHint: 'unknown' as const, labelTier: null },
+      classifierUsed: true,
+    };
+    // EM-routed write round-trips as 'em'.
+    const emTask = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-policy-em', platform: 'shortcut', repoRef: '/r' });
+    await store.recordRoutingDecision(ORG, {
+      taskId: emTask.id,
+      tierEstimate: estimate,
+      candidates: [],
+      winnerAgentId: agentId,
+      policy: 'em',
+    });
+    expect((await store.getRoutingDecisionForTask(ORG, emTask.id))?.policy).toBe('em');
+
+    // A legacy row written before the column existed has policy NULL → reads as 'rank'.
+    const legacyTask = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-policy-legacy', platform: 'shortcut', repoRef: '/r' });
+    await pool.query(
+      `INSERT INTO routing_decision (id, org_id, task_id, tier_estimate, candidates, winner_agent_id, policy)
+       VALUES ($1,$2,$3,$4::jsonb,'[]'::jsonb,$5,NULL)`,
+      [randomUUID(), ORG, legacyTask.id, JSON.stringify(estimate), agentId]
+    );
+    expect((await store.getRoutingDecisionForTask(ORG, legacyTask.id))?.policy).toBe('rank');
   });
 
   it('countActiveByAgent: counts claimed+executing, ignores other statuses, org-scoped (EM v1 slice 1)', async () => {

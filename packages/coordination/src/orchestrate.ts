@@ -550,6 +550,7 @@ export async function orchestrateTaskAssigned(
         tierEstimate: estimate,
         candidates: [],
         winnerAgentId: null,
+        policy: 'rank', // empty roster — no EM pick was attempted (the legacy/default path).
       });
       const noRosterReason = 'no agents hired';
       await deps.store.retireUnroutable(orgId, task.id, noRosterReason);
@@ -581,6 +582,11 @@ export async function orchestrateTaskAssigned(
     let winnerId: string | null = null;
     let unhiredPreference = false;
     let requestedAgent: string | null = null;
+    // §339 slice 3 — which policy routed this task. 'em' only when the EM's autonomous router made the
+    // pick (manager present, no explicit override); 'rank' otherwise. An explicit preference/label is an
+    // operator OVERRIDE of the EM — the human picked, not the EM's policy — so it stays 'rank'. Set inside
+    // the EM branch regardless of OUTCOME (a no_em_match/no_em_capacity is still the EM having routed).
+    let policy: 'em' | 'rank' = 'rank';
     // §EM v1 slice 1 — an EM project's no-fit (manager set, roster non-empty, nobody eligible) is a
     // VISIBLE block (no_em_match), not the silent no_candidate. Tracked here, acted on below — only the
     // EM-router path (no explicit preference/label) can set it; an explicit preference fails closed
@@ -616,6 +622,7 @@ export async function orchestrateTaskAssigned(
       // legacy capability SCORE. Off an EM project, the legacy top-ranked pick is unchanged. The manager
       // was resolved ONCE above (shared with the gate), so the two reads cannot disagree.
       if (isEmProject) {
+        policy = 'em'; // the EM router made the routing attempt (records WHO routed, not the outcome).
         // Eligibility comes from a SECOND, EM-scoped matchCapability — tier-eligible + idle/under-concurrency
         // + carrying every required specialty (slice 2). The SCORE is NOT consulted. Among the eligible,
         // pick the lowest activeCount; ties → highest successRate, then agent id asc (deterministic).
@@ -653,6 +660,7 @@ export async function orchestrateTaskAssigned(
       tierEstimate: estimate,
       candidates: ranked,
       winnerAgentId: winnerId,
+      policy,
     });
 
     if (unhiredPreference) {
