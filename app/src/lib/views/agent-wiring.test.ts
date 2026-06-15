@@ -465,7 +465,7 @@ describe('agent wiring — description (agent.md) + cost/concurrency validation 
   });
 });
 
-describe('agent wiring — Current-work task actions are FUNCTIONAL, not inert (#317/#327)', () => {
+describe('agent wiring — Current-work task actions are FUNCTIONAL, not inert (issues 317/327)', () => {
   // A working agent (currentTaskId set) renders Interrupt / Force reset / Reassign as live controls.
   const WORKING = { ...AGENT_ELVIS_DETAIL_FULL, currentTaskId: 'task-x', state: 'working' as const };
 
