@@ -2232,10 +2232,17 @@ export class PgCoordinationStore
   async getShortcutConnectionForOrg(
     orgId: string
   ): Promise<{ connectionId: string; workspaceId: string; projectId: string | null } | null> {
-    // The org's single LIVE Shortcut connection (drives the Settings status read). ORG-SCOPED — a
-    // revoked connection does not surface (it is being removed/reconnected). One row per org by the
-    // UNIQUE(org_id, platform, workspace_id) + one Shortcut workspace per org in practice; LIMIT 1
-    // keeps the read deterministic regardless.
+    // The org's single LIVE Shortcut connection (drives the Settings status read AND the disconnect
+    // path's id resolution). ORG-SCOPED — a revoked connection does not surface (it is being
+    // removed/reconnected). One row per org by the UNIQUE(org_id, platform, workspace_id) + one
+    // Shortcut workspace per org in practice; LIMIT 1 keeps the read deterministic regardless.
+    // NOTE on `health <> 'revoked'`: revoked is set ONLY by the GitHub uninstall path
+    // (revokeGithubConnectionByAccount) — NO Shortcut code path marks a connection revoked, so for
+    // Shortcut this filter never excludes a live row, and the Settings DELETE (which resolves the id
+    // through here) can always reach it. If a Shortcut-revoke path is ever added, revisit this: a
+    // revoked Shortcut row would become invisible AND un-deletable through Settings, and a reconnect
+    // to the same workspace would collide on UNIQUE(org_id, platform, workspace_id). The disconnect
+    // would then need an include-revoked resolution so the stale row stays removable.
     const res = await this.db.query<{ id: string; workspace_id: string; project_id: string | null }>(
       `SELECT id, workspace_id, project_id
          FROM platform_connection
