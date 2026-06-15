@@ -9,11 +9,13 @@
 import {
   getAgent, pauseAgent, resumeAgent, editAgentProfile,
   activeOrgId, getAgentCredentials, setAgentCredential, deleteAgentCredential, testAgentCredential,
+  interruptTask, reassignTask, forceResetTask,
   canManageActiveOrg, redirectToLogin, type WriteResult,
 } from '../api';
 import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction } from '../live';
+import { describeTaskOutcome } from './task';
 import {
   I, avatar, vendorChip, statePill, tierRamp, tierTag, pct, money, taskRef, taskLabel,
   PLATFORM_LABEL, TIER_LABEL, esc, roControl, RO_GATE_PROVISION, RO_GATE_AGENT_EDIT, RO_GATE_AGENT_CREDS,
@@ -98,8 +100,9 @@ function currentWork(a: AgentDetail): string {
       <div class="tc-meta"><a class="ictl" href="/tasks?id=${encodeURIComponent(a.currentTaskId)}">Inspect routing ${I.arrow}</a></div>
     </div>
     <div class="ictl-row">
-      ${roControl('Interrupt')}
-      ${roControl('Reassign')}
+      <button class="ictl live-ctl amber" type="button" data-task-action="interrupt" data-task-id="${esc(a.currentTaskId)}" aria-label="Interrupt this run">${I.pause} Interrupt</button>
+      <button class="ictl live-ctl" type="button" data-task-action="force-reset" data-task-id="${esc(a.currentTaskId)}" aria-label="Force-reset this stuck task">Force reset</button>
+      <button class="ictl live-ctl" type="button" data-task-action="reassign" data-task-id="${esc(a.currentTaskId)}" aria-label="Reassign this task">Reassign</button>
       ${roControl('Escalate')}
     </div></div>`;
 }
@@ -497,10 +500,34 @@ export async function loadAgent(): Promise<LoadResult> {
  *  passes it). Re-reads id/version from the DOM each render. */
 export function wireAgent(el: HTMLElement, rerun: () => Promise<void>): void {
   wirePause(el, rerun);
+  wireCurrentWork(el, rerun);
   wireDescription(el, rerun);
   wireIdentity(el, rerun);
   wireCapability(el, rerun);
   wireCredentials(el, rerun);
+}
+
+/** Wire the Current-work task actions (interrupt / force-reset / reassign) on the agent's active task.
+ *  Scoped by `data-task-action` (NOT the pause control's `data-action`). The same cancel-coupled task
+ *  endpoints the task inspector uses; the server enforces the role and a 403 surfaces honestly via
+ *  describeTaskOutcome. Escalate stays a gated placeholder until the escalate→EM behavior (#327) lands. */
+function wireCurrentWork(el: HTMLElement, rerun: () => Promise<void>): void {
+  el.querySelectorAll<HTMLButtonElement>('.live-ctl[data-task-action]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const taskId = btn.dataset.taskId ?? '';
+      const action = btn.dataset.taskAction;
+      void liveAction({
+        button: btn,
+        pendingLabel:
+          action === 'interrupt' ? 'Interrupting…' : action === 'force-reset' ? 'Resetting…' : 'Reassigning…',
+        view: el,
+        rerun,
+        write: () =>
+          action === 'interrupt' ? interruptTask(taskId) : action === 'force-reset' ? forceResetTask(taskId) : reassignTask(taskId),
+        describe: describeTaskOutcome,
+      });
+    });
+  });
 }
 
 function wirePause(el: HTMLElement, rerun: () => Promise<void>): void {
