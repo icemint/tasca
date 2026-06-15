@@ -1073,6 +1073,63 @@ describe('orchestrateTaskAssigned — EM router pure decision logic (EM v1 slice
     const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
     expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-fresh'); // headroom tipped the legacy rank
   });
+
+  // ── EM v1 slice 2: SPECIALTY filtering on the EM path ──────────────────────────────────────────────
+  // The task title names a specialty ('React'); only an agent carrying it is EM-eligible. tier:medium pins
+  // the tier so eligibility turns purely on the specialty (and capacity).
+  const reactMedium: TaskContentSource = {
+    async fetch() { return { title: 'Add a React component', body: 'task body', labels: ['tier:medium'] }; },
+  };
+
+  it('(g) a covered task routes to the COVERING agent (specialty filter engages on the EM path)', async () => {
+    // 'agent-bare' is least-loaded but carries no react; 'agent-react' covers it. The specialty filter must
+    // skip the least-loaded-but-unqualified agent and pick the covering one.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-bare', { frameworkSpecialties: [] }), state: 'idle', activeCount: 0 },
+      { profile: profile('agent-react', { frameworkSpecialties: ['react'] }), state: 'idle', activeCount: 1 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: reactMedium }));
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-react');
+  });
+
+  it('(h) a specialty GAP → no_em_match with the specialty NAMED in the reason', () => {
+    return (async () => {
+      // Tier-OK agents exist but none carry react → a real gap (not transient). Park visibly; the reason
+      // names the missing specialty so the operator knows what to hire/configure.
+      const candidates: MatchCandidate[] = [
+        { profile: profile('agent-x', { frameworkSpecialties: [] }), state: 'idle', activeCount: 0 },
+      ];
+      const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: reactMedium }));
+      expect(outcome.kind).toBe('no_em_match');
+      if (outcome.kind !== 'no_em_match') return;
+      const parked = store.tasks.get(outcome.taskId)!;
+      expect(parked.status).toBe('needs_attention');
+      expect(parked.lastError).toContain('react'); // the specialty is NAMED in the no-fit reason
+    })();
+  });
+
+  it('(i) a no-signal task routes tier-only (slice-1 behavior unchanged when there is no specialty signal)', async () => {
+    // tierMedium's title ('Build it') derives no specialty → required = [] → passes all agents → the
+    // least-loaded eligible wins exactly as slice 1 did.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-busy'), state: 'idle', activeCount: 2 },
+      { profile: profile('agent-idle'), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-idle');
+  });
+
+  it('(j) a COVERING-but-all-busy roster → no_em_capacity (routable), NOT a false no_em_match park', async () => {
+    // The only react-covering agent is at its per-agent concurrency limit. That is transient capacity over
+    // the COVERING subset, not a staffing gap — must leave the task routable, never park as no_em_match.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-react-full', { frameworkSpecialties: ['react'], concurrencyLimit: 1 }), state: 'idle', activeCount: 1 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: reactMedium }));
+    expect(outcome.kind).toBe('no_em_capacity');
+    if (outcome.kind !== 'no_em_capacity') return;
+    expect(store.tasks.get(outcome.taskId)!.status).not.toBe('needs_attention'); // left routable
+  });
 });
 
 describe('orchestrateTaskAssigned — usage context (W3-S4a)', () => {

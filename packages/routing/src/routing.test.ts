@@ -237,6 +237,37 @@ describe('capability matching', () => {
     expect(m2.map((x) => x.agentId)).toEqual(['first', 'second']);
   });
 
+  it('requiredSpecialties: an agent covering the specialty stays eligible', () => {
+    const m = matchCapability(est, [{ profile: profile({ languageSpecialties: ['python'] }), state: 'idle', activeCount: 0 }], ['python']);
+    expect(m[0]!.eligible).toBe(true);
+  });
+
+  it('requiredSpecialties: an agent missing the specialty is ineligible, with a naming reason', () => {
+    const m = matchCapability(est, [{ profile: profile({ languageSpecialties: ['typescript'] }), state: 'idle', activeCount: 0 }], ['python']);
+    expect(m[0]!.eligible).toBe(false);
+    expect(m[0]!.reasons.some((r) => r.includes('missing specialties: python'))).toBe(true);
+  });
+
+  it('requiredSpecialties: matches across BOTH language and framework lists', () => {
+    const m = matchCapability(
+      est,
+      [{ profile: profile({ languageSpecialties: ['typescript'], frameworkSpecialties: ['react'] }), state: 'idle', activeCount: 0 }],
+      ['typescript', 'react']
+    );
+    expect(m[0]!.eligible).toBe(true);
+  });
+
+  it('requiredSpecialties: empty list is the backstop — every tier-eligible agent passes', () => {
+    const m = matchCapability(est, [{ profile: profile({ languageSpecialties: [] }), state: 'idle', activeCount: 0 }], []);
+    expect(m[0]!.eligible).toBe(true);
+  });
+
+  it('requiredSpecialties: omitting the param entirely is unchanged (default [])', () => {
+    // The existing tier-only callers (legacy path, PM-proposer) call with two args — must behave as before.
+    const m = matchCapability(est, [{ profile: profile({ languageSpecialties: [] }), state: 'idle', activeCount: 0 }]);
+    expect(m[0]!.eligible).toBe(true);
+  });
+
   it('returns ranked entries for an all-ineligible set (every entry eligible:false, score 0)', () => {
     // All over-tier → all ineligible. They still come back ranked (all score 0,
     // input order preserved), not dropped or crashed.

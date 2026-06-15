@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto';
 import {
   estimateTier,
   matchCapability,
+  deriveRequiredSpecialties,
   canDispatch,
   atomicClaim,
   type MatchCandidate,
@@ -586,6 +587,11 @@ export async function orchestrateTaskAssigned(
     // through its own unhiredPreference path.
     let noEmMatch = false;
     let emBusy = false;
+    // §EM v1 slice 2 — the specialties this task REQUIRES (derived from file mentions + title keywords; []
+    // when there is no signal → passes all agents). Specialty filtering is the EM's job ONLY: the top-level
+    // `ranked` above stays specialty-BLIND (legacy tier-only pick + recordRoutingDecision); the EM branch
+    // below computes its OWN specialty-scoped eligibility. Empty list ⇒ the two agree by construction.
+    const requiredSpecialties = deriveRequiredSpecialties(content);
     if (task.preferredAgentId) {
       // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time. An
       // explicit preference OVERRIDES the EM (autonomous-with-override): the EM branch is in the `else`.
@@ -610,22 +616,31 @@ export async function orchestrateTaskAssigned(
       // legacy capability SCORE. Off an EM project, the legacy top-ranked pick is unchanged. The manager
       // was resolved ONCE above (shared with the gate), so the two reads cannot disagree.
       if (isEmProject) {
-        // Eligibility comes from matchCapability (tier-eligible + idle/under-concurrency); the SCORE is
-        // NOT consulted. Among the eligible, pick the lowest activeCount; ties → highest successRate,
-        // then agent id asc (deterministic). em_cleared is irrelevant here — a cleared task still routes.
-        const eligibleIds = new Set(ranked.filter((m) => m.eligible).map((m) => m.agentId));
+        // Eligibility comes from a SECOND, EM-scoped matchCapability — tier-eligible + idle/under-concurrency
+        // + carrying every required specialty (slice 2). The SCORE is NOT consulted. Among the eligible,
+        // pick the lowest activeCount; ties → highest successRate, then agent id asc (deterministic).
+        // em_cleared is irrelevant here — a cleared task still routes.
+        const emRanked = matchCapability(estimate, candidates, requiredSpecialties);
+        const eligibleIds = new Set(emRanked.filter((m) => m.eligible).map((m) => m.agentId));
         const eligible = candidates.filter((c) => eligibleIds.has(c.profile.agentId));
         const winner = leastLoaded(eligible);
         if (winner) {
           winnerId = winner;
         } else {
-          // No eligible agent — but WHY matters. A real STAFFING GAP (no agent reaches this tier) parks
-          // the task with an honest "hire one" reason. TRANSIENT CAPACITY (tier-eligible agents exist but
-          // all at their concurrency limit) must NOT park — it's not a gap; leave the task routable for a
-          // soft wait (the non-EM no-capacity path does the same). Parking busy-as-gap would tell the
-          // operator to hire someone they already have.
-          const anyTierEligible = candidates.some((c) => tierAtLeast(c.profile.maxTier, estimate.tier));
-          if (anyTierEligible) emBusy = true;
+          // No eligible agent — but WHY matters. A real STAFFING GAP (no agent both reaches the tier AND
+          // covers the required specialty) parks the task with an honest "hire one" reason. TRANSIENT
+          // CAPACITY (a tier+specialty-fit agent EXISTS but is at its concurrency limit) must NOT park — it's
+          // not a gap; leave the task routable for a soft wait. Compute "busy" over the COVERING subset (tier
+          // AND specialty), so a covering-but-busy roster → no_em_capacity (routable), never a false
+          // no_em_match park. Parking busy-as-gap would tell the operator to hire someone they already have.
+          const anyCovering = candidates.some(
+            (c) =>
+              tierAtLeast(c.profile.maxTier, estimate.tier) &&
+              requiredSpecialties.every((s) =>
+                new Set([...c.profile.languageSpecialties, ...c.profile.frameworkSpecialties]).has(s)
+              )
+          );
+          if (anyCovering) emBusy = true;
           else noEmMatch = true;
         }
       } else {
@@ -648,13 +663,20 @@ export async function orchestrateTaskAssigned(
       return { kind: 'agent_not_hired', taskId: task.id };
     }
     if (noEmMatch) {
-      // §EM v1 slice 1 — an EM project with NO eligible agent: park it VISIBLY (needs_attention) with an
-      // EM-voiced reason on the story, never the silent no_candidate. Slice 1 is tier-only, so the reason
-      // names the tier the task needs (the specialty half lands in slice 2). The EM voice mirrors the
-      // gate's clarifying comments — first person, no tooling/provenance text.
-      const noFitReason = `I don't have an agent matching this yet — needs an agent at ${estimate.tier} tier. Hire or configure one and I'll route it.`;
+      // §EM v1 slice 1+2 — an EM project with NO eligible agent: park it VISIBLY (needs_attention) with an
+      // EM-voiced reason on the story, never the silent no_candidate. The EM voice mirrors the gate's
+      // clarifying comments — first person, no tooling/provenance text. Distinguish the two gaps so the
+      // operator knows what to hire: (a) no agent reaches the tier → name the tier; (b) tier-OK agents exist
+      // but none carry the required specialty → NAME the specialty + tier (loud + operator-correctable, never
+      // a silent strand). The derived-specialty nuance (e.g. a title-only false positive) is correctable here
+      // and refined by the LLM fast-follow (#370).
+      const anyTierEligible = candidates.some((c) => tierAtLeast(c.profile.maxTier, estimate.tier));
+      const noFitReason =
+        anyTierEligible && requiredSpecialties.length > 0
+          ? `I don't have an agent matching this yet — needs a ${requiredSpecialties.join('/')} specialist at ${estimate.tier} tier. Hire or configure one and I'll route it.`
+          : `I don't have an agent matching this yet — needs an agent at ${estimate.tier} tier. Hire or configure one and I'll route it.`;
       await deps.store.retireUnroutable(orgId, task.id, noFitReason);
-      deps.logger?.info?.('coordination: EM found no eligible agent — task → needs_attention', { taskId: task.id, tier: estimate.tier });
+      deps.logger?.info?.('coordination: EM found no eligible agent — task → needs_attention', { taskId: task.id, tier: estimate.tier, requiredSpecialties });
       await explainBlock(deps, orgId, task, content, noFitReason);
       return { kind: 'no_em_match', taskId: task.id };
     }
