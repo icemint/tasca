@@ -161,6 +161,12 @@ export const RO_GATE_WORKSPACE = 'Workspace settings are managed by an admin';
 /** Inviting teammates is an admin+ action (slice 3.5-B.3.2); a non-admin never sees the invite
  *  section (the server enforces the same gate — this is the honest reason where a control shows). */
 export const RO_GATE_INVITES = 'Invites are managed by an admin';
+/** Editing an agent's profile/capability (Slice D #318/#337/#320/#329) is an admin+ action; a non-admin
+ *  sees the read-only profile with this honest reason on the disabled Edit control (server-enforced too). */
+export const RO_GATE_AGENT_EDIT = 'Agent settings are managed by an admin';
+/** Setting/replacing an agent's platform credentials (Slice D #319) is an admin+ action; a non-admin
+ *  sees the read-only credential status with this honest reason (the server enforces the same gate). */
+export const RO_GATE_AGENT_CREDS = 'Agent credentials are managed by an admin';
 
 /** Render a mutating control in the read-only console: visible-but-disabled, with a
  *  consistent class hook (`.ro-ctl` + `data-ro`) and an honest reason surfaced to

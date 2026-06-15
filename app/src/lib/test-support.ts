@@ -6,6 +6,7 @@ import { vi } from 'vitest';
 import type { LoadResult } from './mount';
 import type {
   Agent,
+  AgentCredentialsResponse,
   AgentDetail,
   ConnectionsResponse,
   CredentialAuditResponse,
@@ -147,6 +148,30 @@ export const AGENT_ELVIS_DETAIL: AgentDetail = {
   bindings: [{ platform: 'github', externalHandle: 'tasca-elvis', state: 'active' }],
   recentTasks: [TASK_LRU, TASK_RETRY_ATTN],
 };
+
+// A detail fixture exercising Slice D's editable surfaces: a written agent.md, structured (lowercase,
+// taxonomy-valid) specialties, and a set cost ceiling. Pairs with ADMIN_ORGS in the wiring tests so the
+// editable forms render.
+export const AGENT_ELVIS_DETAIL_FULL: AgentDetail = {
+  ...AGENT_ELVIS,
+  description: '# Role\nYou ship boring, readable TypeScript.',
+  bindings: [{ platform: 'github', externalHandle: 'tasca-elvis', state: 'active' }],
+  recentTasks: [TASK_LRU, TASK_RETRY_ATTN],
+  capability: {
+    ...AGENT_ELVIS.capability,
+    languageSpecialties: ['typescript'],
+    frameworkSpecialties: ['node'],
+    costCeiling: 25,
+  },
+};
+
+// Per-agent platform credentials (slice SC-3-B) — the read shape NEVER carries a token, only a status +
+// fingerprint. GitHub is set/active; Shortcut is absent (→ Not configured).
+export const AGENT_CREDS_GITHUB: AgentCredentialsResponse = {
+  credentials: [{ provider: 'github', status: 'active', fingerprint: '9f3c', lastValidatedAt: new Date().toISOString() }],
+};
+
+export const AGENT_CREDS_EMPTY: AgentCredentialsResponse = { credentials: [] };
 
 export const CONNECTIONS_OK: ConnectionsResponse = {
   platforms: [
