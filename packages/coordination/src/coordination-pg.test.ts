@@ -337,6 +337,26 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(read).toMatchObject({ emCleared: false, emClarificationRound: 0 });
   });
 
+  it('setTaskTitle persists + round-trips through getTask/listTasks; null by default; org-scoped (QA item 325)', async () => {
+    const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-title', platform: 'shortcut', repoRef: '/r' });
+    // A fresh task has no title.
+    expect(task.title).toBeNull();
+    expect((await store.getTask(ORG, task.id))?.title).toBeNull();
+
+    await store.setTaskTitle(ORG, task.id, 'Fix the parser');
+    // round-trips through both the single read and the list read.
+    expect((await store.getTask(ORG, task.id))?.title).toBe('Fix the parser');
+    const listed = (await store.listTasks(ORG)).find((t) => t.id === task.id);
+    expect(listed?.title).toBe('Fix the parser');
+
+    // status untouched (a display label, not a transition — no version bump path).
+    expect((await store.getTask(ORG, task.id))?.status).toBe('routable');
+
+    // org-scoped: a foreign org cannot overwrite this task's title.
+    await store.setTaskTitle('org_other', task.id, 'hijacked');
+    expect((await store.getTask(ORG, task.id))?.title).toBe('Fix the parser'); // unchanged
+  });
+
   it('markEmCleared flips em_cleared WITHOUT changing status (orthogonal to the lifecycle), org-scoped', async () => {
     const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-em-clear', platform: 'shortcut', repoRef: '/r' });
     await store.markEmCleared(ORG, task.id);

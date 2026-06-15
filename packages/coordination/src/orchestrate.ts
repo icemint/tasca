@@ -224,6 +224,10 @@ const DEFAULT_RUNNER_POLL_MS = 500;
  *  keeps not-clarifying-enough) must terminate, not loop forever. */
 const EM_CLARIFICATION_CAP = 3;
 
+/** Defensive cap on the persisted task title (QA item 325) — a display label, truncated not rejected,
+ *  matching the content title bound so a pathological story title can't bloat the row. */
+const MAX_TASK_TITLE_LEN = 300;
+
 /** What coordination enqueues for an agent-runner — everything the runner needs to
  *  execute the task. Mirrors @tasca/agent-runner's DispatchPayload (jsonb on the wire). */
 export interface DispatchPayload {
@@ -422,6 +426,21 @@ export async function orchestrateTaskAssigned(
     // for a synthetic child; a NORMAL task (no stored content) fetches from its platform adapter.
     const origin = await deps.store.getTaskOrigin(orgId, task.id);
     const content: TaskInput = origin?.content ?? (await deps.content.fetch(event));
+
+    // QA item 325 — persist the fetched title so the UI shows it instead of the raw task UUID. The title
+    // is otherwise discarded after building the routing prompt. BEST-EFFORT: a failed title write is a
+    // cosmetic loss, never a reason to abort the run — wrap it so a throw is logged, not propagated
+    // (it would otherwise feed the breaker for a display-only write). Truncated, never rejected.
+    if (content.title) {
+      try {
+        await deps.store.setTaskTitle(orgId, task.id, content.title.slice(0, MAX_TASK_TITLE_LEN));
+      } catch (err) {
+        deps.logger?.warn?.('coordination: failed to persist task title (non-fatal)', {
+          taskId: task.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // §EM v1 slice 2 — the requirements gate. Before routing, the EM for the task's project LLM-judges
     // whether the story is clear enough to build. Runs only when wired AND the task isn't already

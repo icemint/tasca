@@ -7,7 +7,7 @@ import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction } from '../live';
 import {
-  I, avatar, vendorChip, statePill, tierRamp, tierTag, pct, money, taskRef,
+  I, avatar, vendorChip, statePill, tierRamp, tierTag, pct, money, taskRef, taskLabel,
   PLATFORM_LABEL, esc, roControl, RO_GATE_PROVISION,
 } from '../ui';
 import type { AgentDetail, Binding, TaskSummary } from '../contract';
@@ -66,8 +66,10 @@ function bindingRow(b: Binding): string {
 }
 
 function recentRow(t: TaskSummary): string {
+  // QA item 325: show the story title (falling back to the story ref) as the row's label — never the raw
+  // task UUID, which previously led the row. The UUID stays in the href for navigation.
   return `<a class="recrow" href="/tasks?id=${encodeURIComponent(t.id)}">
-    ${taskRef(t.id)}<span class="rec-title">${esc(t.externalStoryId)}</span>${tierTag(t.tierEstimate)}<span class="rec-arrow">${I.chevron}</span></a>`;
+    <span class="rec-title">${esc(taskLabel(t))}</span>${tierTag(t.tierEstimate)}<span class="rec-arrow">${I.chevron}</span></a>`;
 }
 
 function currentWork(a: AgentDetail): string {

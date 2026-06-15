@@ -68,6 +68,7 @@ class CountingStore implements CoordinationStore {
     const task: Task = {
       id: randomUUID(),
       externalStoryId: input.externalStoryId,
+      title: null,
       platform: input.platform,
       status: 'routable',
       version: 0,
@@ -97,6 +98,7 @@ class CountingStore implements CoordinationStore {
   async getTask() { return null; }
   async getTaskOrigin(): Promise<TaskOrigin | null> { return null; }
   async setTierEstimate(_org: string, _id: string, _e: TierEstimate) {}
+  async setTaskTitle(_org: string, _id: string, _title: string) {}
   async setStatus(_org: string, _id: string, _s: TaskStatus) {}
   async recordFailureAndTransition(_org: string, _id: string, threshold: number) {
     return { failureCount: 1, tripped: 1 >= threshold };
@@ -812,6 +814,7 @@ describe('connection-scoped Shortcut intake (slice SC-1)', () => {
     store.parkedTask = {
       id: 'task-parked',
       externalStoryId: 'story-99',
+      title: null,
       platform: 'shortcut',
       status: 'awaiting_clarification',
       version: 1,

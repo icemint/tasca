@@ -144,6 +144,9 @@ export interface ManagerSummary {
 export interface TaskSummary {
   id: string;
   externalStoryId: string;
+  /** The story title (QA item 325); null until the task has been orchestrated. The UI renders it
+   *  in place of the raw task UUID, falling back to the story ref when null. */
+  title: string | null;
   platform: 'shortcut' | 'github' | 'linear';
   status: TaskStatus;
   tierEstimate: TierEstimate | null;
@@ -338,6 +341,10 @@ export interface CoordinationStore {
 
   /** Persist the inspectable tier estimate onto the task. */
   setTierEstimate(orgId: string, taskId: string, estimate: TierEstimate): Promise<void>;
+
+  /** Persist the story title onto the task (QA item 325), org+task-scoped. Called best-effort at
+   *  orchestration once the content is fetched; the caller must keep a failure non-fatal. */
+  setTaskTitle(orgId: string, taskId: string, title: string): Promise<void>;
 
   /** Move a task to a new status, incrementing its version. */
   setStatus(orgId: string, taskId: string, status: TaskStatus): Promise<void>;
@@ -699,6 +706,7 @@ export interface CoordinationStore {
 interface TaskRow {
   id: string;
   external_story_id: string;
+  title: string | null;
   platform: string;
   status: string;
   version: number;
@@ -716,6 +724,7 @@ function mapTask(row: TaskRow): Task {
   return {
     id: row.id,
     externalStoryId: row.external_story_id,
+    title: row.title ?? null,
     platform: row.platform as Task['platform'],
     status: row.status as TaskStatus,
     version: row.version,
@@ -1101,7 +1110,7 @@ export class PgCoordinationStore
        VALUES ($1,$2,$3,$4,'routable',0,0,$5,$6,$7::jsonb,$8)
        ON CONFLICT (org_id, platform, external_story_id)
          DO UPDATE SET external_story_id = EXCLUDED.external_story_id, updated_at = now()
-       RETURNING id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round`,
+       RETURNING id, external_story_id, title, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round`,
       [
         randomUUID(),
         orgId,
@@ -1370,7 +1379,7 @@ export class PgCoordinationStore
 
   async getTask(orgId: string, taskId: string): Promise<Task | null> {
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round
+      `SELECT id, external_story_id, title, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round
          FROM task WHERE org_id = $1 AND id = $2`,
       [orgId, taskId]
     );
@@ -1382,6 +1391,14 @@ export class PgCoordinationStore
     await this.db.query(
       `UPDATE task SET tier_estimate = $3::jsonb, updated_at = now() WHERE org_id = $1 AND id = $2`,
       [orgId, taskId, JSON.stringify(estimate)]
+    );
+  }
+
+  async setTaskTitle(orgId: string, taskId: string, title: string): Promise<void> {
+    // No version bump (a display label, not a state transition — it must not race the CAS).
+    await this.db.query(
+      `UPDATE task SET title = $3, updated_at = now() WHERE org_id = $1 AND id = $2`,
+      [orgId, taskId, title]
     );
   }
 
@@ -1973,7 +1990,7 @@ export class PgCoordinationStore
     // matches. A reply on a story whose task already moved on (routable/cleared/dispatched/done) → no row
     // → the resume no-ops. (platform, external_story_id) is the same key getOrCreateTask uses.
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round
+      `SELECT id, external_story_id, title, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error, preferred_agent_id, em_cleared, em_clarification_round
          FROM task
         WHERE org_id = $1 AND platform = $2 AND external_story_id = $3 AND status = 'awaiting_clarification'`,
       [orgId, platform, externalStoryId]
@@ -2197,7 +2214,7 @@ export class PgCoordinationStore
     }
     params.push(limit);
     const res = await this.db.query<TaskRow>(
-      `SELECT id, external_story_id, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error
+      `SELECT id, external_story_id, title, platform, status, version, claimed_by, failure_count, repo_ref, tier_estimate, last_error
          FROM task ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
       params
     );
@@ -2342,6 +2359,7 @@ function mapTaskSummary(row: TaskRow): TaskSummary {
   return {
     id: row.id,
     externalStoryId: row.external_story_id,
+    title: row.title ?? null,
     platform: row.platform as TaskSummary['platform'],
     status: row.status as TaskStatus,
     tierEstimate: row.tier_estimate,

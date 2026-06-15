@@ -21,6 +21,7 @@ function fakeTask(over: Partial<Task> = {}): Task {
   return {
     id: 't1',
     externalStoryId: 'sc-1',
+    title: null,
     platform: 'shortcut',
     status: 'routable',
     version: 3,

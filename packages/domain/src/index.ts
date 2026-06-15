@@ -74,6 +74,9 @@ export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
 export interface Task {
   id: string;
   externalStoryId: string;
+  /** The human-readable story title (QA item 325), persisted at orchestration from the fetched
+   *  content. Null until the task has been orchestrated; the UI falls back to the story ref. */
+  title: string | null;
   platform: 'shortcut' | 'github' | 'linear';
   status: TaskStatus;
   /** Optimistic-lock counter; every transition increments it. CAS operates on (status, version). */

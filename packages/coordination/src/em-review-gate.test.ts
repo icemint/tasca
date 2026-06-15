@@ -86,6 +86,7 @@ function task(over: Partial<Task> = {}): Task {
   return {
     id: 'task-1',
     externalStoryId: 'sc-story-42',
+    title: null,
     platform: 'shortcut',
     status: 'routable',
     version: 0,

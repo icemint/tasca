@@ -8,7 +8,7 @@
 import { getTasks, getProjects } from '../api';
 import { fromResult, type LoadResult } from '../mount';
 import { empty } from '../states';
-import { I, platTag, tierTag, taskRef, esc } from '../ui';
+import { I, platTag, tierTag, taskRef, taskLabel, esc } from '../ui';
 import type { TaskStatus, TaskSummary } from '../contract';
 
 // Operator columns, in flow order. Each maps a SET of internal statuses; together the
@@ -43,8 +43,8 @@ function taskCard(t: TaskSummary, showReason = false): string {
       ? `<div class="mt-reason">${esc(t.lastError)}</div>`
       : '';
   return `<a class="montask" href="/tasks?id=${encodeURIComponent(t.id)}">
-    <div class="mt-top">${platTag(t.platform)}${taskRef(t.id)}</div>
-    <div class="mt-title">${esc(t.externalStoryId)}</div>
+    <div class="mt-top">${platTag(t.platform)}${taskRef(t.externalStoryId)}</div>
+    <div class="mt-title">${esc(taskLabel(t))}</div>
     ${reason}
     <div class="mt-foot">${agent}<span class="mt-meta">${tierTag(t.tierEstimate)}</span></div>
   </a>`;

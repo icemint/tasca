@@ -56,6 +56,9 @@ export interface Binding {
 export interface TaskSummary {
   id: string;
   externalStoryId: string;
+  /** The story title (QA item 325); null until the task has been orchestrated. The UI renders it in
+   *  place of the raw task UUID, falling back to the story ref when null. */
+  title: string | null;
   platform: Platform;
   status: TaskStatus;
   /** The estimated tier, or null until estimation runs. */
