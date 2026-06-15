@@ -4,7 +4,7 @@
 >
 > **Method.** Six parallel read-only surveys (PRD inventory, design inventory, backend code-state, adapter parity, frontend code-state, billing/usage/audit/keys + deploy) cross-checked against the repo. Load-bearing "not-built" claims were verified directly (grep/read), not taken on narrative.
 >
-> **Status as of 2026-06-10**, `main` @ `bb5431c05` (Wave-2 multi-tenancy arc complete, PR #258).
+> **Status as of 2026-06-15**, `main` @ PR #372 (agent-detail + EM-as-router session, PRs #354–#372). Original baseline was `bb5431c05` (Wave-2, PR #258); rows updated below where this session changed status.
 
 **Legend:** ✅ done · 🟡 partial · ⬜ not-built · 🔒 out-of-scope (PRD-excluded) · ▶ maps to slice
 
@@ -24,7 +24,9 @@ What's missing to reach "matches the PRD and the designs, end to end":
 6. **PRD Stage 3 multi-vendor / BYO-local** — routing + identity are vendor-agnostic, but **no OpenAI or local-model agent is proven end-to-end** (execution currently spawns the Claude CLI; the Emdash CLI registry covers more but isn't wired/proven). 🟡
 7. **PRD Stage 4 roster management** — the roster *dashboard* (read) is done; **roster CRUD, capability-profile editor (UI), cross-repo deploy, and the cloud scheduler/health-monitor/restart** are partial/not-built.
 
-**Stage rollup (PRD §8):** Stage 1 ✅ (Shortcut write-back is the one residual) · Stage 2 ✅ (GitHub reference) · Stage 3 🟡 (Linear ⬜, multi-vendor/BYO 🟡) · Stage 4 🟡 (dashboard ✅, management ⬜) · Stage 5 ⬜ (PM-assistant).
+**Stage rollup (PRD §8):** Stage 1 ✅ (Shortcut write-back is the one residual) · Stage 2 ✅ (GitHub reference) · Stage 3 🟡 (Linear ⬜, multi-vendor/BYO 🟡) · Stage 4 🟡 (dashboard ✅; capability editor + EM router ✅ shipped #354–#372; roster CRUD / cross-repo deploy / scheduler ⬜) · Stage 5 ⬜ (PM-assistant).
+
+> **PRs #354–#372 (2026-06-15 session) annotations:** agent-detail capability editor ✅, per-agent platform credentials ✅, editable agent identity + agent.md ✅, task titles on all surfaces ✅, EM-as-router (tier+specialty+load routing, dual concurrency limits, block explanations, operator override) ✅, sole-owner guard + force-reset + nav cleanups ✅. Items that remain open after this session are noted in-row below.
 
 ---
 
@@ -51,17 +53,17 @@ What's missing to reach "matches the PRD and the designs, end to end":
 | PRD-3.2-heuristics / -classifier / -off-hot-path | Heuristic tier + budgeted LLM classifier + confidence | ✅ engine; 🟡 classifier impl | `routing/src/tier.ts` complete with fallback; **no concrete classifier plugged in** (heuristics carry it; `LlmClassifierPort` left optional in factory) | ▶W4-S4 (wire a classifier) |
 | PRD-3.2-capability-profiles | vendor/model, specialties, max tier, success-rate history, cost/latency, concurrency | ✅ | capability_profile + match scoring | — |
 | PRD-3.2-atomic-claim | Exactly-one via CAS | ✅ | `routing/src/claim.ts` + `db/claim-repo.ts`, org-scoped | — |
-| PRD-3.2-concurrency-limits | per-agent + per-project + same-repo serialization | ✅ | `concurrency.ts` + `canDispatch` | — |
+| PRD-3.2-concurrency-limits | per-agent + per-project + same-repo serialization | ✅ | `concurrency.ts` + `canDispatch`; both limits also enforced in EM routing dispatch (shipped #354–#372) | — |
 | PRD-3.2-escalation-breaker | failure counter → breaker (N=2) → re-tier / human | 🟡 | Breaker trips to needs_attention; **re-tier/auto-escalate arm reserved for Stage 2+** (not built) | ▶W4-S4 |
 | PRD-3.2-mistier-retrain / repo-health-signals | learning loop; optional repo signals | ⬜ | Not built (nice-to-have) | ▶ defer (fork F8) |
 
 ### §3.3 Roster / team-of-employees (Wedge 3)
 | PRD id | Requirement | Status | Evidence / gap | ▶ Slice |
 |---|---|---|---|---|
-| PRD-3.3-capability-profile-plus-bindings | named agent + identity bindings per platform | ✅ data; 🟡 UI | Bindings modeled; only GitHub provisioned; hire/editor UI not built | ▶W4-S3/S5 |
+| PRD-3.3-capability-profile-plus-bindings | named agent + identity bindings per platform | ✅ data; 🟡 UI | Bindings modeled; GitHub provisioned; **capability editor + agent identity edit UI shipped #354–#372**; hire wizard (create-from-scratch) and Shortcut/Linear provisioning still ⬜ | ▶W4-S3/S5 |
 | PRD-3.3-multiproject-multitool | one agent across many repos/tools | 🟡 | org_agent roster join done; cross-repo deploy UI/flow not built | ▶W4-S5 |
 | PRD-3.3-247-cloud-coordination | scheduler, health monitor, restart crashed sessions, escalate | 🟡 | Reaper/sweeper + breaker exist; no standing scheduler/health-monitor/auto-restart loop | ▶W4-S5 |
-| PRD-3.3-roster-dashboard | per-agent state/task/throughput/success/cost "your team" | ✅ (read) | `app` roster + monitoring views, real data | — |
+| PRD-3.3-roster-dashboard | per-agent state/task/throughput/success/cost "your team" | ✅ (read) | `app` roster + monitoring views, real data; **task titles on board cards + agent recent-work shipped #354–#372**; success-rate is stored but not yet computed from task history (#326 open) | — |
 
 ### §4 Execution layer (Emdash fork)
 | PRD id | Requirement | Status | Evidence / gap | ▶ Slice |
@@ -92,7 +94,7 @@ What's missing to reach "matches the PRD and the designs, end to end":
 | PRD id | Requirement | Status | Evidence / gap | ▶ Slice |
 |---|---|---|---|---|
 | PRD-9.1-advance-benchmark | Story→reviewed-PR under native identity, one project | ✅ (GitHub) | Met on GitHub | — |
-| PRD-11-cost-runaway-ceilings | **per-agent cost ceilings + budget alerts** | ⬜ | `cost_ceiling` stored/edited but **never read for enforcement**; no usage accumulator; no alerts | ▶W3-S5 |
+| PRD-11-cost-runaway-ceilings | **per-agent cost ceilings + budget alerts** | ⬜ | `cost_ceiling` now **stored and editable** via the agent-detail capability editor (shipped #354–#372) but **never read for enforcement**; no usage accumulator; no alerts | ▶W3-S5 |
 | PRD-11-security-posture | least-privilege scopes, branch protection, credential isolation, **audit logging** | 🟡 | Scopes/branch-protection/cred-isolation ✅; audit **written but not surfaced** | ▶W3-S7 |
 | PRD-11-security (deploy isolation, implied) | per-agent OS isolation for untrusted multi-tenant | ⬜ | Container isolation done; **per-agent UID+namespace sandbox not built** (dominant residual) | ▶W4-S1 |
 | PRD-10-oq-billing-model | per-agent / per-task / pass-through usage billing | ⬜ (open) | Product decision needed → **Fork F3** | ▶W3-S6 |
@@ -111,7 +113,7 @@ What's missing to reach "matches the PRD and the designs, end to end":
 |---|---|---|---|---|
 | DESIGN-onboarding-* | Onboarding flow (login/welcome/connect/hire/done) | 🟡 | App `onboarding.ts` is a **read-only preview** reflecting real connection state; Connect/Continue gated, no real connect/hire actions | ▶W4-S3 |
 | DESIGN-roster-* | Roster (card grid / ops table / grouped) | ✅ (cards) / 🟡 | Real data, states, a11y; density/grouped variants partial; "Add agent" gated | ▶W4-S3 (variants) |
-| DESIGN-agent-detail-view | Agent profile (bindings, capability, performance) | ✅ / 🟡 | Real data + live Pause/Resume; Deploy/Edit/Assign/Escalate gated | ▶W4-S3/S5 |
+| DESIGN-agent-detail-view | Agent profile (bindings, capability, performance) | ✅ | Real data + live Pause/Resume + **capability editor (tier/specialties/concurrency/ceiling) + per-agent credentials + editable identity + agent.md** shipped #354–#372; task-action controls on agent page (interrupt/reassign/escalate/deploy/assign) remain inert placeholders; current-task UUID display partially resolved (#325 partial) | ▶W4-S3/S5 |
 | DESIGN-hire-wizard (+5 steps) | Create-agent + per-platform provision wizard | ⬜ | No `views/hire.ts`; only a disabled onboarding label | ▶W4-S3 |
 | DESIGN-routing-inspector | Task detail w/ audience-split (PM/Eng), candidate math, **live log, worktree** | 🟡 | `task.ts` has the decision block + candidate table + PR list; **audience-split toggle, live log stream, worktree view not built** | ▶W4-S3 |
 | DESIGN-monitoring-view | Mission-control pipeline + escalations + burn | ✅ / 🟡 | Real data + states; **"Live" is a manual refresh, not a feed** (no SSE/poll) | ▶W4-S3 (live feed) |
