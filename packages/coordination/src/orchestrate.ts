@@ -669,7 +669,7 @@ export async function orchestrateTaskAssigned(
       // operator knows what to hire: (a) no agent reaches the tier → name the tier; (b) tier-OK agents exist
       // but none carry the required specialty → NAME the specialty + tier (loud + operator-correctable, never
       // a silent strand). The derived-specialty nuance (e.g. a title-only false positive) is correctable here
-      // and refined by the LLM fast-follow (#370).
+      // and refined by the #370 fast-follow.
       const anyTierEligible = candidates.some((c) => tierAtLeast(c.profile.maxTier, estimate.tier));
       const noFitReason =
         anyTierEligible && requiredSpecialties.length > 0

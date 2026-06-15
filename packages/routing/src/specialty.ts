@@ -26,7 +26,7 @@ const DOTTED_SYNONYMS = Object.keys(SPECIALTY_SYNONYMS).filter((k) => k.includes
 
 /**
  * Derive the specialties a task REQUIRES, for the EM router's specialty filter (EM v1 slice 2). Two passes,
- * deliberately narrow — body PROSE judgment is deferred to an LLM fast-follow (#370), so this stays to
+ * deliberately narrow — body PROSE judgment is deferred to the #370 fast-follow, so this stays to
  * structured, taxonomy-bound signals only:
  *
  *  - Extension pass (title + body): a file mention's extension is a precise requirement wherever it appears,
