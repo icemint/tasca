@@ -477,7 +477,7 @@ describe('agent wiring — Current-work task actions are FUNCTIONAL, not inert (
       const u = String(url);
       if (init?.method === 'POST') posts.push(u);
       if (u.includes('/api/csrf')) return new Response(JSON.stringify({ token: 'tok-1' }), { status: 200 });
-      if (u.includes('/interrupt') || u.includes('/force-reset')) return new Response(JSON.stringify({ ok: true, status: 'needs_attention' }), { status: 200 });
+      if (u.includes('/interrupt') || u.includes('/force-reset') || u.includes('/reassign')) return new Response(JSON.stringify({ ok: true, status: 'needs_attention' }), { status: 200 });
       if (u.includes('/api/orgs') && !u.includes('agents')) return new Response(JSON.stringify({ orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] }), { status: 200 });
       if (u.includes('/credentials')) return new Response(JSON.stringify({ credentials: [] }), { status: 200 });
       return new Response(JSON.stringify(WORKING), { status: 200 }); // GET /api/agents/agent-elvis
@@ -490,15 +490,20 @@ describe('agent wiring — Current-work task actions are FUNCTIONAL, not inert (
     // The controls exist as live buttons (data-task-action), not disabled roControls.
     const interrupt = el.querySelector<HTMLButtonElement>('[data-task-action="interrupt"]');
     const forceReset = el.querySelector<HTMLButtonElement>('[data-task-action="force-reset"]');
+    const reassign = el.querySelector<HTMLButtonElement>('[data-task-action="reassign"]');
     expect(interrupt).not.toBeNull();
     expect(forceReset).not.toBeNull();
+    expect(reassign).not.toBeNull();
 
     interrupt!.click();
     for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
     forceReset!.click();
     for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    reassign!.click();
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
 
     expect(posts.some((u) => u.includes('/api/tasks/task-x/interrupt'))).toBe(true);
     expect(posts.some((u) => u.includes('/api/tasks/task-x/force-reset'))).toBe(true);
+    expect(posts.some((u) => u.includes('/api/tasks/task-x/reassign'))).toBe(true);
   });
 });
