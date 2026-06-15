@@ -244,7 +244,21 @@ export const resumeAgent = (id: string, version: number) =>
 export const editAgentProfile = (
   id: string,
   version: number,
-  patch: { maxTier: string; concurrencyLimit: number | null; costCeiling: number | null }
+  patch: {
+    maxTier: string;
+    concurrencyLimit: number | null;
+    costCeiling: number | null;
+    tiersCovered?: string[];
+    languageSpecialties?: string[];
+    frameworkSpecialties?: string[];
+    // Identity fields (Slice D's form). Optional + preserve-if-absent: send only what changed.
+    // `description` = agent.md instructions (stored; not yet wired into the run — see issue 362).
+    name?: string;
+    vendor?: 'claude' | 'openai' | 'local';
+    model?: string;
+    avatarUrl?: string | null;
+    description?: string | null;
+  }
 ) => post<AgentWriteOk | AgentConflict>(`/api/agents/${encodeURIComponent(id)}/profile`, { version, ...patch });
 
 // ── task interventions (cancel-coupled writes) ────────────────────────────────

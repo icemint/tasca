@@ -32,6 +32,9 @@ export interface AgentRecord {
   avatarUrl: string | null;
   vendor: string;
   model: string;
+  /** Instructions/definition (Anthropic agent.md markdown). Stored; not yet wired
+   *  into the run — see issue 362. */
+  description: string | null;
   status: AgentStatus;
   rbacRoleId: string | null;
   humanOfRecordUserId: string | null;
@@ -59,7 +62,14 @@ export type AgentWriteOutcome =
 /** The editable slice of a capability profile (the agent-edit form). The tier-range and specialty
  *  fields are OPTIONAL: when omitted the existing values are preserved (so callers that only edit
  *  the original three keep working unchanged). Specialties are validated against the @tasca/domain
- *  taxonomy at the API boundary before they reach here. */
+ *  taxonomy at the API boundary before they reach here.
+ *
+ *  The identity fields (name/vendor/model/avatarUrl/description) are also OPTIONAL and edited under
+ *  the SAME agent-version CAS, atomically with the capability columns. Preserve-if-absent: an omitted
+ *  field is left unchanged. The NOT-NULL columns (name/vendor/model) can only be set, never cleared;
+ *  the nullable ones (avatarUrl/description) accept an explicit null/'' to CLEAR vs omission to preserve.
+ *  `description` is the agent's instructions/definition (agent.md markdown) — stored, not yet wired
+ *  into the run (see issue 362). */
 export interface CapabilityProfilePatch {
   maxTier: CapabilityProfile['maxTier'];
   concurrencyLimit: number | null;
@@ -67,6 +77,11 @@ export interface CapabilityProfilePatch {
   tiersCovered?: CapabilityProfile['tiersCovered'];
   languageSpecialties?: string[];
   frameworkSpecialties?: string[];
+  name?: string;
+  vendor?: 'claude' | 'openai' | 'local';
+  model?: string;
+  avatarUrl?: string | null;
+  description?: string | null;
 }
 
 /**
@@ -154,7 +169,7 @@ export class PgIdentityRepository {
       const agentRes = await client.query<AgentRow>(
         `INSERT INTO agent (id, name, avatar_url, vendor, model, status, rbac_role_id, human_of_record_user_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING id, name, avatar_url, vendor, model, status, rbac_role_id, human_of_record_user_id, version`,
+         RETURNING id, name, avatar_url, vendor, model, description, status, rbac_role_id, human_of_record_user_id, version`,
         [
           agentId,
           input.name,
@@ -197,7 +212,7 @@ export class PgIdentityRepository {
       where = `WHERE a.status = $1`;
     }
     const res = await this.db.query<AgentWithProfileRow>(
-      `SELECT a.id, a.name, a.avatar_url, a.vendor, a.model, a.status,
+      `SELECT a.id, a.name, a.avatar_url, a.vendor, a.model, a.description, a.status,
               a.rbac_role_id, a.human_of_record_user_id, a.version,
               cp.max_tier, cp.tiers_covered, cp.language_specialties, cp.framework_specialties,
               cp.concurrency_limit, cp.cost_ceiling, cp.avg_latency_ms, cp.success_rate
@@ -213,7 +228,7 @@ export class PgIdentityRepository {
   /** Read-side: a single agent joined to its capability profile, or null. */
   async getAgentWithProfile(agentId: string): Promise<AgentWithProfile | null> {
     const res = await this.db.query<AgentWithProfileRow>(
-      `SELECT a.id, a.name, a.avatar_url, a.vendor, a.model, a.status,
+      `SELECT a.id, a.name, a.avatar_url, a.vendor, a.model, a.description, a.status,
               a.rbac_role_id, a.human_of_record_user_id, a.version,
               cp.max_tier, cp.tiers_covered, cp.language_specialties, cp.framework_specialties,
               cp.concurrency_limit, cp.cost_ceiling, cp.avg_latency_ms, cp.success_rate
@@ -334,9 +349,33 @@ export class PgIdentityRepository {
     expectedVersion: number
   ): Promise<AgentWriteOutcome> {
     return this.withTransaction(async (repo) => {
+      // The agent-row UPDATE carries BOTH the version CAS and the editable identity columns, so a
+      // stale version touches neither the agent row nor (below) the profile. Preserve-if-absent:
+      //   - name/vendor/model are NOT NULL → COALESCE($n, col): an omitted field passes null and is
+      //     preserved (they can never be cleared).
+      //   - avatar_url/description are nullable → a provided-FLAG distinguishes "set/clear" from
+      //     "preserve": CASE WHEN $flag THEN $value ELSE col END. $flag = (patch.X !== undefined),
+      //     $value = patch.X ?? null, so a present null/'' clears while omission preserves.
       const cas = await repo.db.query<{ version: number }>(
-        `UPDATE agent SET version = version + 1 WHERE id = $1 AND version = $2 RETURNING version`,
-        [agentId, expectedVersion]
+        `UPDATE agent SET
+           version = version + 1,
+           name = COALESCE($3, name),
+           vendor = COALESCE($4, vendor),
+           model = COALESCE($5, model),
+           avatar_url = CASE WHEN $6 THEN $7 ELSE avatar_url END,
+           description = CASE WHEN $8 THEN $9 ELSE description END
+         WHERE id = $1 AND version = $2 RETURNING version`,
+        [
+          agentId,
+          expectedVersion,
+          patch.name ?? null,
+          patch.vendor ?? null,
+          patch.model ?? null,
+          patch.avatarUrl !== undefined,
+          patch.avatarUrl ?? null,
+          patch.description !== undefined,
+          patch.description ?? null,
+        ]
       );
       if (cas.rowCount !== 1) return repo.agentWriteMiss(agentId);
       // UPSERT, not UPDATE: an agent can exist with no capability_profile row yet
@@ -578,6 +617,7 @@ interface AgentRow {
   avatar_url: string | null;
   vendor: string;
   model: string;
+  description: string | null;
   status: string;
   rbac_role_id: string | null;
   human_of_record_user_id: string | null;
@@ -638,6 +678,7 @@ function mapAgent(row: AgentRow): AgentRecord {
     avatarUrl: row.avatar_url,
     vendor: row.vendor,
     model: row.model,
+    description: row.description,
     status: row.status as AgentStatus,
     rbacRoleId: row.rbac_role_id,
     humanOfRecordUserId: row.human_of_record_user_id,

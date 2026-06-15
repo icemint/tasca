@@ -141,6 +141,7 @@ export const TASK_NO_CAPACITY_DETAIL: TaskDetail = {
 
 export const AGENT_ELVIS_DETAIL: AgentDetail = {
   ...AGENT_ELVIS,
+  description: null,
   bindings: [{ platform: 'github', externalHandle: 'tasca-elvis', state: 'active' }],
   recentTasks: [TASK_LRU, TASK_RETRY_ATTN],
 };

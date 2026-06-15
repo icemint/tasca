@@ -70,6 +70,8 @@ export interface TaskSummary {
 }
 
 export interface AgentDetail extends Agent {
+  /** Instructions/definition (agent.md markdown). Stored; not yet wired into the run — see issue 362. */
+  description: string | null;
   bindings: Binding[];
   recentTasks: TaskSummary[];
 }

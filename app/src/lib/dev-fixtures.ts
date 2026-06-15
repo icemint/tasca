@@ -61,6 +61,7 @@ function agentDetail(id: string): AgentDetail | null {
   if (!a) return null;
   return {
     ...a,
+    description: null,
     bindings: [
       { platform: 'shortcut', externalHandle: `${a.id}-agent`, state: 'active' },
       { platform: 'github', externalHandle: `tasca-${a.id}[bot]`, state: 'active' },

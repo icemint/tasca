@@ -389,6 +389,56 @@ describe('agent-state writes (optimistic concurrency via version)', () => {
     expect(id.lastPatch).toEqual({ maxTier: 'medium', concurrencyLimit: 2, costCeiling: 5 }); // no specialty keys
   });
 
+  it('profile edit accepts the identity fields + description and forwards them', async () => {
+    const id = new FakeAgentWriter();
+    const ok = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, name: '  Elvis  ', vendor: 'openai', model: 'gpt-5', avatarUrl: 'https://x/a.png', description: '# Elvis\nDoes the thing.' }) }));
+    expect(ok.statusCode).toBe(200);
+    // name is trimmed; description/avatarUrl pass through; vendor/model forwarded.
+    expect(id.lastPatch).toEqual({ maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, name: 'Elvis', vendor: 'openai', model: 'gpt-5', avatarUrl: 'https://x/a.png', description: '# Elvis\nDoes the thing.' });
+  });
+
+  it('profile edit clears the nullable identity fields when sent null/empty (set-vs-preserve)', async () => {
+    const id = new FakeAgentWriter();
+    const ok = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'low', concurrencyLimit: 1, costCeiling: null, avatarUrl: null, description: '' }) }));
+    expect(ok.statusCode).toBe(200);
+    expect(id.lastPatch).toEqual({ maxTier: 'low', concurrencyLimit: 1, costCeiling: null, avatarUrl: null, description: '' });
+  });
+
+  it('profile edit accepts values that EQUAL the literal "invalid" (the rejection sentinel is a symbol, not that string)', async () => {
+    const id = new FakeAgentWriter();
+    // An agent named "invalid" or agent.md prose containing the word must NOT be spuriously rejected.
+    const ok = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'low', concurrencyLimit: 1, costCeiling: null, name: 'invalid', model: 'invalid', description: 'this input is invalid by name only' }) }));
+    expect(ok.statusCode).toBe(200);
+    expect(id.lastPatch).toMatchObject({ name: 'invalid', model: 'invalid', description: 'this input is invalid by name only' });
+  });
+
+  it('profile edit rejects a bad vendor', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, vendor: 'gemini' }) }));
+    expect(r.statusCode).toBe(400);
+    expect(id.calls).toEqual([]); // never reached the writer
+  });
+
+  it('profile edit rejects an empty name and over-length name/model/description', async () => {
+    const id = new FakeAgentWriter();
+    const empty = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, name: '   ' }) }));
+    expect(empty.statusCode).toBe(400);
+    const longName = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, name: 'x'.repeat(81) }) }));
+    expect(longName.statusCode).toBe(400);
+    const longModel = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, model: 'x'.repeat(121) }) }));
+    expect(longModel.statusCode).toBe(400);
+    const longDesc = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'hard', concurrencyLimit: 3, costCeiling: null, description: 'x'.repeat(20001) }) }));
+    expect(longDesc.statusCode).toBe(400);
+    expect(id.calls).toEqual([]); // none reached the writer
+  });
+
+  it('profile edit WITHOUT identity fields forwards no identity keys (preserve-if-absent)', async () => {
+    const id = new FakeAgentWriter();
+    const r = await run(agentDeps(id), fakeReq('POST', '/api/agents/a1/profile', { headers: csrf(), body: JSON.stringify({ version: 2, maxTier: 'medium', concurrencyLimit: 2, costCeiling: 5 }) }));
+    expect(r.statusCode).toBe(200);
+    expect(id.lastPatch).toEqual({ maxTier: 'medium', concurrencyLimit: 2, costCeiling: 5 }); // no name/vendor/model/avatarUrl/description keys
+  });
+
   it('agent routes 503 (not 404) when no identity writer is wired (honest "not enabled")', async () => {
     const d: WriteApiDeps = { store: new FakeWriteStore(), membership: membershipFor('org_default'), verifySession: () => ({ userId: 'u1' }), secureCookies: false };
     const r = await run(d, fakeReq('POST', '/api/agents/a1/pause', { headers: csrf(), body: JSON.stringify({ version: 0 }) }));

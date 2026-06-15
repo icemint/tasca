@@ -469,4 +469,72 @@ run('PgIdentityRepository — versioned agent writes (optimistic concurrency)', 
     const prof = await repo.getCapabilityProfile(agent.id);
     expect(prof).toMatchObject({ maxTier: 'low', concurrencyLimit: 1, costCeiling: 5 });
   });
+
+  it('updateCapabilityProfile edits the identity fields + description atomically with the version bump', async () => {
+    const { agent } = await make(); // Elvis / claude-sonnet / claude, no description
+    const out = await repo.updateCapabilityProfile(
+      agent.id,
+      {
+        maxTier: 'hard', concurrencyLimit: 2, costCeiling: null,
+        name: 'Mona', vendor: 'openai', model: 'gpt-5', avatarUrl: 'https://x/a.png',
+        description: '# Mona\nInstructions.',
+      },
+      0
+    );
+    expect(out).toEqual({ ok: true, version: 1 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent).toMatchObject({
+      name: 'Mona', vendor: 'openai', model: 'gpt-5', avatarUrl: 'https://x/a.png',
+      description: '# Mona\nInstructions.', version: 1,
+    });
+  });
+
+  it('updateCapabilityProfile PRESERVES the identity fields when the patch omits them (edit capability alone)', async () => {
+    const { agent } = await make();
+    // Seed identity + description…
+    await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'low', concurrencyLimit: 1, costCeiling: null, name: 'Elvis', description: 'keep me' },
+      0
+    );
+    // …then edit only the capability subset — name/description must NOT be wiped.
+    const out = await repo.updateCapabilityProfile(agent.id, { maxTier: 'hard', concurrencyLimit: 3, costCeiling: 10 }, 1);
+    expect(out).toEqual({ ok: true, version: 2 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent).toMatchObject({ name: 'Elvis', description: 'keep me' });
+  });
+
+  it('a PRESENT null/empty description CLEARS it (absent=preserve, null/empty=clear)', async () => {
+    const { agent } = await make();
+    await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'low', concurrencyLimit: 1, costCeiling: null, description: 'temporary', avatarUrl: 'https://x/a.png' },
+      0
+    );
+    // null clears description; '' clears avatar_url — both are deliberate clears, not omissions.
+    const out = await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'low', concurrencyLimit: 1, costCeiling: null, description: null, avatarUrl: '' },
+      1
+    );
+    expect(out).toEqual({ ok: true, version: 2 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent.description).toBeNull();
+    expect(got!.agent.avatarUrl).toBe(''); // a present '' is stored as-given (the clear the form sends)
+  });
+
+  it('a conflicting identity edit does NOT half-apply — neither the agent row NOR the profile changes', async () => {
+    const { agent } = await make();
+    await repo.setAgentStatus(agent.id, 'paused', 0); // bump to version 1 out-of-band
+    const stale = await repo.updateCapabilityProfile(
+      agent.id,
+      { maxTier: 'ultra', concurrencyLimit: 9, costCeiling: 99, name: 'SHOULD-NOT-LAND', description: 'nope' },
+      0
+    );
+    expect(stale).toEqual({ ok: false, reason: 'version_conflict', currentVersion: 1 });
+    const got = await repo.getAgentWithProfile(agent.id);
+    expect(got!.agent.name).toBe('Elvis'); // identity untouched
+    expect(got!.agent.description).toBeNull();
+    expect(got!.profile).toBeNull(); // the profile UPSERT never ran either
+  });
 });

@@ -117,6 +117,13 @@ CREATE OR REPLACE RULE audit_event_no_update AS ON UPDATE TO audit_event DO INST
 CREATE OR REPLACE RULE audit_event_no_delete AS ON DELETE TO audit_event DO INSTEAD NOTHING;`;
 
 /**
+ * Add the agent's instructions/definition (Anthropic agent.md markdown). Stored
+ * only — not yet wired into the run (see issue 362). Nullable, idempotent
+ * `ADD COLUMN IF NOT EXISTS` so it re-applies safely over an existing agent table.
+ */
+export const AGENT_DESCRIPTION_DDL = `ALTER TABLE agent ADD COLUMN IF NOT EXISTS description text;`;
+
+/**
  * All identity DDL in dependency order (roles → agent → dependents). Apply this
  * to a clean Postgres to materialize the primitive. FK order matters: rbac_role
  * and agent must exist before the tables that reference them.
@@ -129,4 +136,5 @@ export const IDENTITY_SCHEMA_DDL: readonly string[] = [
   IDENTITY_BINDING_TABLE_DDL,
   DELEGATION_TABLE_DDL,
   AUDIT_EVENT_TABLE_DDL,
+  AGENT_DESCRIPTION_DDL,
 ];
