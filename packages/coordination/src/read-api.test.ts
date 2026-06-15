@@ -101,6 +101,7 @@ function agent(id: string, name: string, withProfile = true): AgentWithProfile {
       avatarUrl: null,
       vendor: 'claude',
       model: 'sonnet',
+      description: null,
       status: 'active',
       rbacRoleId: null,
       humanOfRecordUserId: null,

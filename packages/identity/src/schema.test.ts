@@ -4,17 +4,24 @@ import {
   RBAC_ROLE_TABLE_DDL,
   AGENT_TABLE_DDL,
   SERVICE_USER_TABLE_DDL,
+  AGENT_DESCRIPTION_DDL,
 } from './index';
 
 // Pure (no DB): the FK dependency order must hold so the bundle applies cleanly
 // to an empty Postgres — referenced tables (rbac_role, agent) precede the tables
 // that reference them.
 describe('IDENTITY_SCHEMA_DDL ordering', () => {
-  it('lists every table-creating statement', () => {
-    expect(IDENTITY_SCHEMA_DDL).toHaveLength(7);
-    for (const ddl of IDENTITY_SCHEMA_DDL) {
-      expect(ddl).toContain('CREATE TABLE IF NOT EXISTS');
-    }
+  it('creates the seven core tables, then runs additive migrations after them', () => {
+    // The seven CREATE TABLE statements come first (FK order), followed by additive
+    // ALTERs (idempotent column adds) that must run after the table they extend exists.
+    const creators = IDENTITY_SCHEMA_DDL.filter((d) => d.includes('CREATE TABLE IF NOT EXISTS'));
+    expect(creators).toHaveLength(7);
+    expect(IDENTITY_SCHEMA_DDL.slice(0, 7)).toEqual(creators); // creators precede migrations
+    // The description migration is an idempotent ADD COLUMN, ordered after agent exists.
+    expect(IDENTITY_SCHEMA_DDL.indexOf(AGENT_DESCRIPTION_DDL)).toBeGreaterThan(
+      IDENTITY_SCHEMA_DDL.indexOf(AGENT_TABLE_DDL)
+    );
+    expect(AGENT_DESCRIPTION_DDL).toContain('ADD COLUMN IF NOT EXISTS');
   });
 
   it('puts rbac_role and agent before their dependents', () => {

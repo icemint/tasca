@@ -298,6 +298,7 @@ async function handleWrite(
       let body: {
         version?: unknown; maxTier?: unknown; concurrencyLimit?: unknown; costCeiling?: unknown;
         tiersCovered?: unknown; languageSpecialties?: unknown; frameworkSpecialties?: unknown;
+        name?: unknown; vendor?: unknown; model?: unknown; avatarUrl?: unknown; description?: unknown;
       };
       try {
         body = (await readJsonBody(req)) as typeof body;
@@ -330,11 +331,38 @@ async function handleWrite(
         const langs = cleanSpecialties(body.languageSpecialties, isLanguageSpecialty);
         const frameworks = cleanSpecialties(body.frameworkSpecialties, isFrameworkSpecialty);
         const tiers = cleanTiersCovered(body.tiersCovered, maxTier as Tier);
-        if (langs === 'invalid' || frameworks === 'invalid' || tiers === 'invalid') {
+        if (langs === INVALID_FIELD || frameworks === INVALID_FIELD || tiers === INVALID_FIELD) {
           sendJson(res, 400, { error: 'specialties must come from the known taxonomy; tiersCovered must be valid tiers ≤ maxTier' });
           await audit('agent.profile', 'bad_request');
           return;
         }
+        // Optional identity fields (the editor's name/vendor/model/avatar/description). All edited under
+        // the same agent-version CAS downstream, preserve-if-absent. name/vendor/model are NOT NULL so a
+        // present value must be non-empty; avatarUrl/description are nullable (null/'' = clear, omit =
+        // preserve). `description` is the agent's instructions/definition (agent.md markdown) — stored,
+        // not yet wired into the run (see issue 362).
+        const name = cleanRequiredText(body.name, 80);
+        const model = cleanRequiredText(body.model, 120);
+        const avatarUrl = cleanNullableText(body.avatarUrl, 500);
+        const description = cleanNullableText(body.description, 20000);
+        if (name === INVALID_FIELD || model === INVALID_FIELD || avatarUrl === INVALID_FIELD || description === INVALID_FIELD) {
+          sendJson(res, 400, { error: 'name (≤80) and model (≤120) must be non-empty; avatarUrl (≤500) and description (≤20000) must be a string or null' });
+          await audit('agent.profile', 'bad_request');
+          return;
+        }
+        if (body.vendor !== undefined && !isVendor(body.vendor)) {
+          sendJson(res, 400, { error: 'vendor must be one of claude, openai, local' });
+          await audit('agent.profile', 'bad_request');
+          return;
+        }
+        const vendor = body.vendor as 'claude' | 'openai' | 'local' | undefined;
+        const identityPatch = {
+          ...(name !== undefined ? { name } : {}),
+          ...(vendor !== undefined ? { vendor } : {}),
+          ...(model !== undefined ? { model } : {}),
+          ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+          ...(description !== undefined ? { description } : {}),
+        };
         const outcome = await deps.identity.updateCapabilityProfile(
           route.id,
           {
@@ -344,6 +372,7 @@ async function handleWrite(
             ...(tiers !== undefined ? { tiersCovered: tiers } : {}),
             ...(langs !== undefined ? { languageSpecialties: langs } : {}),
             ...(frameworks !== undefined ? { frameworkSpecialties: frameworks } : {}),
+            ...identityPatch,
           },
           body.version
         );
@@ -354,6 +383,7 @@ async function handleWrite(
           ...(tiers !== undefined ? { tiersCovered: tiers } : {}),
           ...(langs !== undefined ? { languageSpecialties: langs } : {}),
           ...(frameworks !== undefined ? { frameworkSpecialties: frameworks } : {}),
+          ...identityPatch,
         });
         return;
       }
@@ -370,28 +400,58 @@ function isIntOrNull(v: unknown): v is number | null {
   return v === null || (typeof v === 'number' && Number.isInteger(v));
 }
 
+const VENDORS = ['claude', 'openai', 'local'] as const;
+function isVendor(v: unknown): v is (typeof VENDORS)[number] {
+  return typeof v === 'string' && (VENDORS as readonly string[]).includes(v);
+}
+
+/** Rejection sentinel for the field validators. A unique symbol — NOT the string 'invalid' — so it can
+ *  never collide with a legitimate user value (an agent literally named "invalid", or agent.md prose
+ *  containing the word). The caller discriminates with `=== INVALID_FIELD`. */
+const INVALID_FIELD = Symbol('invalid-field');
+
+/** Validate an optional NOT-NULL text field (name/model). Returns undefined when absent (→ preserve),
+ *  INVALID_FIELD when present-but-not a non-empty string within `max` chars, else the trimmed value. */
+function cleanRequiredText(v: unknown, max: number): string | undefined | typeof INVALID_FIELD {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string') return INVALID_FIELD;
+  const trimmed = v.trim();
+  if (trimmed.length === 0 || trimmed.length > max) return INVALID_FIELD;
+  return trimmed;
+}
+
+/** Validate an optional NULLABLE text field (avatarUrl/description). Returns undefined when absent
+ *  (→ preserve), null when explicitly null (→ clear), INVALID_FIELD when over `max` or not a
+ *  string/null, else the string as-given (a present '' is a deliberate clear). */
+function cleanNullableText(v: unknown, max: number): string | null | undefined | typeof INVALID_FIELD {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v !== 'string' || v.length > max) return INVALID_FIELD;
+  return v;
+}
+
 /** Validate an optional specialty array against a domain-taxonomy guard. Returns undefined when the
- *  field was absent (→ leave unchanged), 'invalid' on any non-taxonomy entry, else the deduped list. */
-function cleanSpecialties(v: unknown, guard: (s: string) => boolean): string[] | undefined | 'invalid' {
+ *  field was absent (→ leave unchanged), INVALID_FIELD on any non-taxonomy entry, else the deduped list. */
+function cleanSpecialties(v: unknown, guard: (s: string) => boolean): string[] | undefined | typeof INVALID_FIELD {
   if (v === undefined) return undefined;
   // Bound the work before walking/stringifying: a valid set can't exceed the taxonomy size, so a
   // long array is malformed (dupes/garbage) — reject it rather than process an unbounded payload.
-  if (!Array.isArray(v) || v.length > 64) return 'invalid';
-  if (v.some((x) => typeof x !== 'string' || !guard(x))) return 'invalid';
+  if (!Array.isArray(v) || v.length > 64) return INVALID_FIELD;
+  if (v.some((x) => typeof x !== 'string' || !guard(x))) return INVALID_FIELD;
   return [...new Set(v as string[])];
 }
 
 /** Validate an optional tiers-covered array. Each entry must be a known tier and not exceed maxTier
- *  (a covered tier above the cap is incoherent). Returns undefined when absent, 'invalid' on a bad
+ *  (a covered tier above the cap is incoherent). Returns undefined when absent, INVALID_FIELD on a bad
  *  entry, else the deduped list. */
-function cleanTiersCovered(v: unknown, maxTier: Tier): Tier[] | undefined | 'invalid' {
+function cleanTiersCovered(v: unknown, maxTier: Tier): Tier[] | undefined | typeof INVALID_FIELD {
   if (v === undefined) return undefined;
-  if (!Array.isArray(v) || v.length > TIERS.length) return 'invalid';
+  if (!Array.isArray(v) || v.length > TIERS.length) return INVALID_FIELD;
   const maxIdx = TIERS.indexOf(maxTier);
   const out: Tier[] = [];
   for (const t of v) {
-    if (typeof t !== 'string' || !(TIERS as readonly string[]).includes(t)) return 'invalid';
-    if (TIERS.indexOf(t as Tier) > maxIdx) return 'invalid';
+    if (typeof t !== 'string' || !(TIERS as readonly string[]).includes(t)) return INVALID_FIELD;
+    if (TIERS.indexOf(t as Tier) > maxIdx) return INVALID_FIELD;
     out.push(t as Tier);
   }
   return [...new Set(out)];

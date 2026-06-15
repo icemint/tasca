@@ -101,6 +101,8 @@ interface AgentJson {
    *  loses with a 409 so the UI reconciles instead of overwriting. */
   version: number;
   avatarUrl: string | null;
+  /** Instructions/definition (agent.md markdown). Stored; not yet wired into the run — see issue 362. */
+  description: string | null;
   capability: CapabilityJson;
   currentTaskId: string | null;
   state: AgentState;
@@ -144,6 +146,7 @@ function agentJson(
     status: a.agent.status,
     version: a.agent.version,
     avatarUrl: a.agent.avatarUrl,
+    description: a.agent.description,
     capability: capabilityJson(a.profile),
     currentTaskId,
     state: currentTaskId ? 'working' : 'idle',
