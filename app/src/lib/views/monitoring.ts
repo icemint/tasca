@@ -58,16 +58,13 @@ function column(col: BoardColumn, tasks: TaskSummary[]): string {
 }
 
 function kpis(tasks: TaskSummary[]): string {
-  // The tiles MIRROR the 5 board columns (same labels, same status sets) plus a Total — derived from
-  // COLUMNS so the strip and the columns can never disagree again.
-  const tiles = [
-    { k: 'Total', v: tasks.length, g: 'var(--fg-faint)' },
-    ...COLUMNS.map((col) => ({
-      k: col.label,
-      v: tasks.filter((t) => col.statuses.includes(t.status)).length,
-      g: col.glyph,
-    })),
-  ];
+  // The tiles MIRROR the 5 board columns (same labels, same status sets) — derived from COLUMNS so the
+  // strip and the columns can never disagree. No Total tile: the five state tiles already sum to it.
+  const tiles = COLUMNS.map((col) => ({
+    k: col.label,
+    v: tasks.filter((t) => col.statuses.includes(t.status)).length,
+    g: col.glyph,
+  }));
   return `<div class="mon-kpis">${tiles
     .map(
       (t) =>
