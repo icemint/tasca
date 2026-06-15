@@ -95,6 +95,7 @@ class CountingStore implements CoordinationStore {
   async setManagerShortcutIdentity(): Promise<void> {}
   async setProjectManager(): Promise<'ok' | 'not_found'> { return 'ok'; }
   async getManagerForProject(): Promise<string | null> { return null; }
+  async countActiveByAgent(): Promise<Map<string, number>> { return new Map(); }
   async getTask() { return null; }
   async getTaskOrigin(): Promise<TaskOrigin | null> { return null; }
   async setTierEstimate(_org: string, _id: string, _e: TierEstimate) {}

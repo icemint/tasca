@@ -93,7 +93,14 @@ class FakeStore implements CoordinationStore {
   async listManagers() { return []; }
   async setManagerShortcutIdentity(): Promise<void> {}
   async setProjectManager(): Promise<'ok' | 'not_found'> { return 'ok'; }
-  async getManagerForProject(): Promise<string | null> { return null; }
+  // EM router (EM v1 slice 1). Default null → legacy rank path (this suite's existing routing tests stay
+  // unchanged). Settable so an EM-path unit test can opt a project into a manager.
+  managerForProject: string | null = null;
+  async getManagerForProject(): Promise<string | null> { return this.managerForProject; }
+  // Active-load signal (EM v1 slice 1). Default empty (every agent idle); settable per agent so a unit
+  // test can drive the least-loaded pick. The directory fake reads activeCount independently here.
+  activeByAgent = new Map<string, number>();
+  async countActiveByAgent(): Promise<Map<string, number>> { return this.activeByAgent; }
   async getTask(_orgId: string, taskId: string) {
     return this.tasks.get(taskId) ?? null;
   }

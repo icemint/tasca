@@ -341,6 +341,28 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(read).toMatchObject({ emCleared: false, emClarificationRound: 0 });
   });
 
+  it('countActiveByAgent: counts claimed+executing, ignores other statuses, org-scoped (EM v1 slice 1)', async () => {
+    // agentId gets one claimed + one executing (both active); a routable + a done row are NOT active.
+    const a1 = await store.getOrCreateTask(ORG, { externalStoryId: 'ca-1', platform: 'shortcut', repoRef: '/r' });
+    const a2 = await store.getOrCreateTask(ORG, { externalStoryId: 'ca-2', platform: 'shortcut', repoRef: '/r' });
+    const a3 = await store.getOrCreateTask(ORG, { externalStoryId: 'ca-3', platform: 'shortcut', repoRef: '/r' });
+    const a4 = await store.getOrCreateTask(ORG, { externalStoryId: 'ca-4', platform: 'shortcut', repoRef: '/r' });
+    await pool.query(`UPDATE task SET status='claimed',   claimed_by=$2 WHERE id=$1`, [a1.id, agentId]);
+    await pool.query(`UPDATE task SET status='executing', claimed_by=$2 WHERE id=$1`, [a2.id, agentId]);
+    await pool.query(`UPDATE task SET status='done',      claimed_by=$2 WHERE id=$1`, [a3.id, agentId]); // not active
+    // a4 stays routable (claimed_by null) — not active.
+    void a4;
+
+    const counts = await store.countActiveByAgent(ORG);
+    expect(counts.get(agentId)).toBe(2);
+
+    // ORG-SCOPED: an active row in another org is never counted in this org's map.
+    const other = await store.getOrCreateTask('org_other', { externalStoryId: 'ca-other', platform: 'shortcut', repoRef: '/r' });
+    await pool.query(`UPDATE task SET status='executing', claimed_by=$2 WHERE id=$1`, [other.id, agentId]);
+    expect((await store.countActiveByAgent(ORG)).get(agentId)).toBe(2); // unchanged
+    expect((await store.countActiveByAgent('org_other')).get(agentId)).toBe(1);
+  });
+
   it('setTaskTitle persists + round-trips through getTask/listTasks; null by default; org-scoped (QA item 325)', async () => {
     const task = await store.getOrCreateTask(ORG, { externalStoryId: 'sc-title', platform: 'shortcut', repoRef: '/r' });
     // A fresh task has no title.
@@ -531,6 +553,179 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     expect(after?.status).toBe('in_review'); // reached in_review, not stranded in claimed
     const prs = await pool.query('SELECT count(*)::int AS c FROM pull_request WHERE task_id=$1', [task.id]);
     expect(prs.rows[0].c).toBe(1); // dispatch skipped — no second PR opened
+  });
+
+  // ── EM router: least-loaded autonomous dispatch (EM v1 slice 1) ─────────────
+  describe('EM router — least-loaded, deterministic, override-respecting', () => {
+    // The router only engages on an EM-managed project; the project key is the task's repoRef, so all
+    // these tests share one repoRef and bind a manager to its project. Slice 1 is TIER-ONLY: a tier:<x>
+    // label pins the estimate (no classifier wired) so eligibility is deterministic per agent maxTier.
+    const REPO = '/repos/em';
+    const TIER_MEDIUM_CONTENT: TaskContentSource = {
+      async fetch() { return { title: 'Build it', body: 'task body', labels: ['tier:medium'] }; },
+    };
+
+    /** Create a second hired agent with a chosen capability profile, returning its id. The beforeEach
+     *  already created `agentId` (Elvis, maxTier ultra, successRate 0.9). */
+    async function addAgent(name: string, over: Partial<CapabilityProfile>): Promise<string> {
+      const created = await identity.createAgent({ name, model: 'claude-sonnet', vendor: 'claude' });
+      const profile: CapabilityProfile = {
+        agentId: created.agent.id,
+        maxTier: 'ultra',
+        tiersCovered: ['basic', 'low', 'medium', 'hard', 'ultra'],
+        languageSpecialties: ['typescript'],
+        frameworkSpecialties: [],
+        concurrencyLimit: 4,
+        costCeiling: 100,
+        successRate: 0.9,
+        avgLatencyMs: 1000,
+        ...over,
+      };
+      await identity.setCapabilityProfile(profile);
+      return created.agent.id;
+    }
+
+    /** A directory over the given hired agent ids — the SAME shape the factory's IdentityAgentDirectory
+     *  uses: real per-agent activeCount from the store's countActiveByAgent (not a hardcoded 0). */
+    function directoryOver(ids: string[]): AgentDirectory {
+      return {
+        async listCandidates(orgId: string): Promise<MatchCandidate[]> {
+          const active = await store.countActiveByAgent(orgId);
+          const out: MatchCandidate[] = [];
+          for (const id of ids) {
+            const profile = await identity.getCapabilityProfile(id);
+            if (profile) out.push({ profile, state: 'idle', activeCount: active.get(id) ?? 0 });
+          }
+          return out;
+        },
+        async findHiredAgentByName(_orgId: string, name: string) {
+          for (const id of ids) {
+            const a = await identity.getAgentWithProfile(id);
+            if (a && a.agent.name.toLowerCase() === name.toLowerCase()) return id;
+          }
+          return null;
+        },
+        async principalIdFor(id: string) {
+          const su = await identity.getServiceUser(id);
+          return su?.principalId ?? null;
+        },
+        async descriptionFor(id: string) {
+          const found = await identity.getAgentWithProfile(id);
+          return found?.agent.description ?? null;
+        },
+      };
+    }
+
+    /** Bind a manager to REPO's project so the router engages. */
+    async function bindManager(): Promise<void> {
+      const projectId = await store.getOrCreateProject(ORG, REPO);
+      const { managerId } = await store.createManager(ORG, 'EM');
+      const r = await store.setProjectManager(ORG, projectId, managerId);
+      expect(r).toBe('ok');
+    }
+
+    /** Seed `n` ACTIVE (claimed) tasks for an agent, so countActiveByAgent reflects real load. */
+    async function seedActive(agent: string, n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        const t = await store.getOrCreateTask(ORG, { externalStoryId: `active-${agent}-${i}`, platform: 'shortcut', repoRef: REPO });
+        await pool.query(`UPDATE task SET status='claimed', claimed_by=$2 WHERE id=$1`, [t.id, agent]);
+      }
+    }
+
+    const emEvent: AdapterEvent = { ...EVENT, externalStoryId: 'sc-em-route', repoHint: REPO };
+
+    // perProjectLimit defaults to 1 in orchestrate; the override tests intentionally route to a LOADED
+    // agent, so they raise it past that agent's load to prove the WINNER-PICK (not the dispatch gate).
+    function deps(directory: AgentDirectory, content: TaskContentSource = TIER_MEDIUM_CONTENT, perProjectLimit?: number): OrchestrationDeps {
+      return {
+        store, claim: new PgClaimRepository(pool), execution: okExecution, status, directory, audit: auditSink, content,
+        ...(perProjectLimit !== undefined ? { perProjectLimit } : {}),
+      };
+    }
+
+    it('dispatches to the LEAST-LOADED eligible agent (the core EM pick)', async () => {
+      await bindManager();
+      const busy = await addAgent('Busy', {}); // Elvis (agentId) idle; Busy has 2 active
+      await seedActive(busy, 2);
+
+      const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, busy])));
+      expect(outcome.kind).toBe('dispatched');
+      if (outcome.kind !== 'dispatched') return;
+      expect(outcome.agentId).toBe(agentId); // idle Elvis beats the 2-active Busy
+      expect((await store.getTask(ORG, outcome.taskId))!.claimedBy).toBe(agentId);
+    });
+
+    it('tie on active-count → higher successRate wins; tie on that → lower agent id (deterministic)', async () => {
+      await bindManager();
+      // Two agents, both idle (active 0). Higher successRate must win regardless of insertion order.
+      const lower = await addAgent('Lo', { successRate: 0.5 });
+      const higher = await addAgent('Hi', { successRate: 0.95 });
+      const out1 = await orchestrateTaskAssigned(emEvent, deps(directoryOver([lower, higher, agentId])));
+      expect(out1.kind === 'dispatched' && out1.agentId).toBe(higher);
+
+      // Now make Elvis (0.9) and another agent BOTH 0.9 + idle → lowest agent id wins (final tie-break).
+      await pool.query('TRUNCATE task CASCADE');
+      const twin = await addAgent('Twin', { successRate: 0.9 });
+      const expectedId = [agentId, twin].sort()[0];
+      const out2 = await orchestrateTaskAssigned(
+        { ...emEvent, externalStoryId: 'sc-em-tie2' },
+        deps(directoryOver([agentId, twin]))
+      );
+      expect(out2.kind === 'dispatched' && out2.agentId).toBe(expectedId);
+    });
+
+    it('NO eligible agent (all below tier) → no_em_match + needs_attention with the EM-voiced reason', async () => {
+      await bindManager();
+      // Both agents cap at `basic`; the task estimates `medium` → nobody tier-eligible.
+      await identity.setCapabilityProfile({
+        agentId, maxTier: 'basic', tiersCovered: ['basic'], languageSpecialties: ['typescript'],
+        frameworkSpecialties: [], concurrencyLimit: 4, costCeiling: 100, successRate: 0.9, avgLatencyMs: 1000,
+      });
+      const low = await addAgent('Low', { maxTier: 'basic', tiersCovered: ['basic'] });
+
+      const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, low])));
+      expect(outcome.kind).toBe('no_em_match'); // NOT a silent no_candidate
+      if (outcome.kind !== 'no_em_match') return;
+      const task = await store.getTask(ORG, outcome.taskId);
+      expect(task?.status).toBe('needs_attention');
+      expect(task?.lastError).toContain('medium tier'); // EM voice names the missing tier (slice 1 = tier-only)
+      expect(task?.lastError).toContain("I don't have an agent matching this");
+    });
+
+    it('NO manager → the legacy rank path is unchanged (regression guard: top-ranked wins)', async () => {
+      // No bindManager(). Two idle agents; the legacy score ranks the higher-successRate one first.
+      const top = await addAgent('Top', { successRate: 0.99 });
+      await identity.setCapabilityProfile({
+        agentId, maxTier: 'ultra', tiersCovered: ['basic', 'low', 'medium', 'hard', 'ultra'],
+        languageSpecialties: ['typescript'], frameworkSpecialties: [], concurrencyLimit: 4,
+        costCeiling: 100, successRate: 0.6, avgLatencyMs: 1000,
+      });
+      const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, top])));
+      expect(outcome.kind === 'dispatched' && outcome.agentId).toBe(top); // legacy top-rank, not least-loaded
+    });
+
+    it('explicit agent:<name> label OVERRIDES the EM (autonomous-with-override)', async () => {
+      await bindManager();
+      // The label names Busy even though Busy is the MOST loaded — the explicit preference wins.
+      const busy = await addAgent('Busy', {});
+      await seedActive(busy, 3);
+      const labelled: TaskContentSource = {
+        async fetch() { return { title: 'Build it', body: 'task body', labels: ['tier:medium', 'agent:Busy'] }; },
+      };
+      const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, busy]), labelled, 10));
+      expect(outcome.kind === 'dispatched' && outcome.agentId).toBe(busy);
+    });
+
+    it('preferredAgentId OVERRIDES the EM (autonomous-with-override)', async () => {
+      await bindManager();
+      const busy = await addAgent('Busy', {});
+      await seedActive(busy, 3);
+      // Seed the task first, set its preference, then orchestrate the same story.
+      const t = await store.getOrCreateTask(ORG, { externalStoryId: emEvent.externalStoryId, platform: 'shortcut', repoRef: REPO });
+      await pool.query(`UPDATE task SET preferred_agent_id=$2 WHERE id=$1`, [t.id, busy]);
+      const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, busy]), TIER_MEDIUM_CONTENT, 10));
+      expect(outcome.kind === 'dispatched' && outcome.agentId).toBe(busy);
+    });
   });
 
   // ── PM-assistant proposals (slice W3-S1) ────────────────────────────────────

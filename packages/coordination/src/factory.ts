@@ -137,15 +137,19 @@ export interface CreateCoordinationDeps {
 class IdentityAgentDirectory implements AgentDirectory {
   constructor(
     private readonly identity: PgIdentityRepository,
-    private readonly roster: OrgRosterRepo
+    private readonly roster: OrgRosterRepo,
+    private readonly load: { countActiveByAgent(orgId: string): Promise<Map<string, number>> }
   ) {}
 
   async listCandidates(orgId: string, _task: Task) {
+    // One org-scoped active-count read fills every candidate's headroom (EM v1 slice 1). Previously
+    // hardcoded 0, which made every agent look fully idle to BOTH the legacy rank and the new EM pick.
+    const activeByAgent = await this.load.countActiveByAgent(orgId);
     const out = [];
     for (const agentId of await this.roster.hiredAgentIds(orgId)) {
       const profile = await this.identity.getCapabilityProfile(agentId);
       if (!profile) continue;
-      out.push({ profile, state: 'idle' as const, activeCount: 0 });
+      out.push({ profile, state: 'idle' as const, activeCount: activeByAgent.get(agentId) ?? 0 });
     }
     return out;
   }
@@ -214,7 +218,7 @@ export function createCoordination(
   // candidate filter AND the hire/unhire API.
   const roster = new PgOrgRosterRepo(input.pool);
   const identity = new PgIdentityRepository(input.pool);
-  const directory = new IdentityAgentDirectory(identity, roster);
+  const directory = new IdentityAgentDirectory(identity, roster, store);
   const audit = new IdentityAuditSink(identity);
   // One queue instance shared by the dispatch path (enqueue/cancel) and the reaper
   // (sweep/finalize) so they operate on the same table wiring.

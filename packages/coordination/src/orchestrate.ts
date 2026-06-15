@@ -309,7 +309,12 @@ export type OrchestrationOutcome =
   | { kind: 'awaiting_clarification'; taskId: string }
   // The EM gate has parked this task EM_CLARIFICATION_CAP times and it is STILL unclear → retired to
   // needs_attention for an operator (the EM stops asking — a perpetually-unclear story needs a human).
-  | { kind: 'needs_clarification_capped'; taskId: string };
+  | { kind: 'needs_clarification_capped'; taskId: string }
+  // On an EM-managed project (project.manager_id set) the EM found NO eligible agent for the task —
+  // the roster is non-empty but nobody is tier-eligible/available (EM v1 slice 1). The EM retired the
+  // task to needs_attention with an EM-voiced reason (and posts it on the story); distinct from the
+  // silent `no_candidate` so an EM project's no-fit is a visible, operator-actionable block.
+  | { kind: 'no_em_match'; taskId: string };
 
 /**
  * Resolve the org a webhook event acts in (slice 5c). A CONNECTED workspace resolves to its real
@@ -327,6 +332,29 @@ export function agentLabel(labels: string[] | undefined): string | null {
     if (m) return m[1]!.trim();
   }
   return null;
+}
+
+/** The EM's least-loaded winner-pick (EM v1 slice 1): from a set of ELIGIBLE candidates, the one with
+ *  the fewest active tasks. Ties → highest successRate, then agent id ascending — fully deterministic so
+ *  the same roster + load always yields the same pick. Empty input → null (no eligible agent). The
+ *  capability SCORE is intentionally NOT consulted; load is the EM's signal. */
+function leastLoaded(eligible: MatchCandidate[]): string | null {
+  let best: MatchCandidate | null = null;
+  for (const c of eligible) {
+    if (best === null || lessLoaded(c, best)) best = c;
+  }
+  return best?.profile.agentId ?? null;
+}
+
+/** Strict "a should win over b" comparator for leastLoaded: fewer active tasks, then higher successRate,
+ *  then lower agent id (the deterministic final tie-break). successRate defaults to 0.5 (matching the
+ *  routing match's `successRate ?? 0.5`) so an unset rate doesn't sort unpredictably. */
+function lessLoaded(a: MatchCandidate, b: MatchCandidate): boolean {
+  if (a.activeCount !== b.activeCount) return a.activeCount < b.activeCount;
+  const ar = a.profile.successRate ?? 0.5;
+  const br = b.profile.successRate ?? 0.5;
+  if (ar !== br) return ar > br;
+  return a.profile.agentId < b.profile.agentId;
 }
 
 export async function resolveWebhookOrg(
@@ -535,8 +563,14 @@ export async function orchestrateTaskAssigned(
     let winnerId: string | null = null;
     let unhiredPreference = false;
     let requestedAgent: string | null = null;
+    // §EM v1 slice 1 — an EM project's no-fit (manager set, roster non-empty, nobody eligible) is a
+    // VISIBLE block (no_em_match), not the silent no_candidate. Tracked here, acted on below — only the
+    // EM-router path (no explicit preference/label) can set it; an explicit preference fails closed
+    // through its own unhiredPreference path.
+    let noEmMatch = false;
     if (task.preferredAgentId) {
-      // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time.
+      // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time. An
+      // explicit preference OVERRIDES the EM (autonomous-with-override): the EM branch is in the `else`.
       requestedAgent = task.preferredAgentId;
       if (candidates.some((c) => c.profile.agentId === task.preferredAgentId)) {
         winnerId = task.preferredAgentId;
@@ -544,7 +578,7 @@ export async function orchestrateTaskAssigned(
         unhiredPreference = true; // unhired since accept → fail closed (never route elsewhere silently)
       }
     } else if (labelName) {
-      // (2) platform `agent:<name>` label — resolve by name within the hired set.
+      // (2) platform `agent:<name>` label — resolve by name within the hired set. Also OVERRIDES the EM.
       requestedAgent = labelName;
       const namedId = await deps.directory.findHiredAgentByName(orgId, labelName);
       if (namedId && candidates.some((c) => c.profile.agentId === namedId)) {
@@ -553,7 +587,29 @@ export async function orchestrateTaskAssigned(
         unhiredPreference = true; // labeled an agent the org hasn't hired → fail closed below
       }
     } else {
-      winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
+      // (3) no explicit preference → the routing engine picks. On an EM-managed project the EM is the
+      // router: it picks the LEAST-LOADED eligible agent (deterministic tie-breaks), independent of the
+      // legacy capability SCORE. Off an EM project, the legacy top-ranked pick is unchanged. The manager
+      // is re-resolved FRESH each pass (a project that lost its EM mid-flight cleanly falls back to
+      // legacy on the re-drive); the project key is the SAME getOrCreateProject the gate resolves, so
+      // the two reads cannot disagree.
+      const projectId = await deps.store.getOrCreateProject(orgId, task.repoRef);
+      const managerId = await deps.store.getManagerForProject(orgId, projectId);
+      if (managerId) {
+        // Eligibility comes from matchCapability (tier-eligible + idle/under-concurrency); the SCORE is
+        // NOT consulted. Among the eligible, pick the lowest activeCount; ties → highest successRate,
+        // then agent id asc (deterministic). em_cleared is irrelevant here — a cleared task still routes.
+        const eligibleIds = new Set(ranked.filter((m) => m.eligible).map((m) => m.agentId));
+        const eligible = candidates.filter((c) => eligibleIds.has(c.profile.agentId));
+        const winner = leastLoaded(eligible);
+        if (winner) {
+          winnerId = winner;
+        } else {
+          noEmMatch = true; // EM project, non-empty roster, nobody eligible → visible block below
+        }
+      } else {
+        winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
+      }
     }
 
     await deps.store.recordRoutingDecision(orgId, {
@@ -569,6 +625,17 @@ export async function orchestrateTaskAssigned(
       deps.logger?.info?.('coordination: requested agent not hired — task → needs_attention', { taskId: task.id, requested: requestedAgent });
       await explainBlock(deps, orgId, task, content, notHiredReason);
       return { kind: 'agent_not_hired', taskId: task.id };
+    }
+    if (noEmMatch) {
+      // §EM v1 slice 1 — an EM project with NO eligible agent: park it VISIBLY (needs_attention) with an
+      // EM-voiced reason on the story, never the silent no_candidate. Slice 1 is tier-only, so the reason
+      // names the tier the task needs (the specialty half lands in slice 2). The EM voice mirrors the
+      // gate's clarifying comments — first person, no tooling/provenance text.
+      const noFitReason = `I don't have an agent matching this yet — needs an agent at ${estimate.tier} tier. Hire or configure one and I'll route it.`;
+      await deps.store.retireUnroutable(orgId, task.id, noFitReason);
+      deps.logger?.info?.('coordination: EM found no eligible agent — task → needs_attention', { taskId: task.id, tier: estimate.tier });
+      await explainBlock(deps, orgId, task, content, noFitReason);
+      return { kind: 'no_em_match', taskId: task.id };
     }
     if (winnerId === null) {
       return { kind: 'no_candidate', taskId: task.id };
