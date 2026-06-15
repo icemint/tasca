@@ -31,6 +31,7 @@ import {
 } from '@tasca/routing';
 import type { AdapterEvent, TaskAssignedEvent } from '@tasca/contracts';
 import type { Task, TaskStatus } from '@tasca/domain';
+import { tierAtLeast } from '@tasca/domain';
 import type { DispatchQueue } from '@tasca/db';
 import { ExecutionError, type ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
@@ -314,7 +315,13 @@ export type OrchestrationOutcome =
   // the roster is non-empty but nobody is tier-eligible/available (EM v1 slice 1). The EM retired the
   // task to needs_attention with an EM-voiced reason (and posts it on the story); distinct from the
   // silent `no_candidate` so an EM project's no-fit is a visible, operator-actionable block.
-  | { kind: 'no_em_match'; taskId: string };
+  | { kind: 'no_em_match'; taskId: string }
+  // EM project — tier-eligible agents EXIST but all are at their concurrency limit (transient). The
+  // task is left ROUTABLE for a soft wait (re-drives on the next event), NOT parked: parking would be a
+  // staffing-gap lie ("hire one") when the agents are merely busy. Distinct from no_em_match (a real
+  // gap) and from no_candidate (the silent non-EM no-capacity). The proactive capacity-freed re-drive +
+  // the EM "all busy" story-note are a fast-follow.
+  | { kind: 'no_em_capacity'; taskId: string };
 
 /**
  * Resolve the org a webhook event acts in (slice 5c). A CONNECTED workspace resolves to its real
@@ -568,6 +575,7 @@ export async function orchestrateTaskAssigned(
     // EM-router path (no explicit preference/label) can set it; an explicit preference fails closed
     // through its own unhiredPreference path.
     let noEmMatch = false;
+    let emBusy = false;
     if (task.preferredAgentId) {
       // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time. An
       // explicit preference OVERRIDES the EM (autonomous-with-override): the EM branch is in the `else`.
@@ -605,7 +613,14 @@ export async function orchestrateTaskAssigned(
         if (winner) {
           winnerId = winner;
         } else {
-          noEmMatch = true; // EM project, non-empty roster, nobody eligible → visible block below
+          // No eligible agent — but WHY matters. A real STAFFING GAP (no agent reaches this tier) parks
+          // the task with an honest "hire one" reason. TRANSIENT CAPACITY (tier-eligible agents exist but
+          // all at their concurrency limit) must NOT park — it's not a gap; leave the task routable for a
+          // soft wait (the non-EM no-capacity path does the same). Parking busy-as-gap would tell the
+          // operator to hire someone they already have.
+          const anyTierEligible = candidates.some((c) => tierAtLeast(c.profile.maxTier, estimate.tier));
+          if (anyTierEligible) emBusy = true;
+          else noEmMatch = true;
         }
       } else {
         winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
@@ -636,6 +651,14 @@ export async function orchestrateTaskAssigned(
       deps.logger?.info?.('coordination: EM found no eligible agent — task → needs_attention', { taskId: task.id, tier: estimate.tier });
       await explainBlock(deps, orgId, task, content, noFitReason);
       return { kind: 'no_em_match', taskId: task.id };
+    }
+    if (emBusy) {
+      // Tier-eligible agents exist but all at capacity → transient. Leave the task ROUTABLE (no claim ran,
+      // so it stays in its pre-dispatch status), matching the non-EM no-capacity path; it re-routes on the
+      // next event. Do NOT retireUnroutable. The EM "all busy" story-note + a proactive capacity-freed
+      // re-drive are the fast-follow (they need manager-comment plumbing the dispatch path lacks today).
+      deps.logger?.info?.('coordination: EM agents all at capacity — task left routable (soft wait)', { taskId: task.id, tier: estimate.tier });
+      return { kind: 'no_em_capacity', taskId: task.id };
     }
     if (winnerId === null) {
       return { kind: 'no_candidate', taskId: task.id };

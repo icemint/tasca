@@ -692,6 +692,26 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(task?.lastError).toContain("I don't have an agent matching this");
     });
 
+    it('tier-eligible agents ALL at capacity → no_em_capacity, task LEFT ROUTABLE (busy ≠ gap, not parked)', async () => {
+      await bindManager();
+      // One agent, tier-eligible (ultra ≥ medium) but concurrencyLimit 1 and already 1 active → at capacity.
+      // This is TRANSIENT (busy), not a staffing GAP — it must NOT park (that would say "hire one" falsely).
+      await identity.setCapabilityProfile({
+        agentId, maxTier: 'ultra', tiersCovered: ['basic', 'low', 'medium', 'hard', 'ultra'],
+        languageSpecialties: ['typescript'], frameworkSpecialties: [], concurrencyLimit: 1,
+        costCeiling: 100, successRate: 0.9, avgLatencyMs: 1000,
+      });
+      await seedActive(agentId, 1); // at its limit of 1
+
+      const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId])));
+      expect(outcome.kind).toBe('no_em_capacity'); // NOT no_em_match (gap) and NOT a silent no_candidate
+      if (outcome.kind !== 'no_em_capacity') return;
+      const task = await store.getTask(ORG, outcome.taskId);
+      expect(task?.status).not.toBe('needs_attention'); // NOT parked — left routable for a soft wait
+      expect(task?.status).not.toBe('failed');
+      expect(task?.lastError).toBeNull(); // no staffing-gap reason written (it's not a gap)
+    });
+
     it('NO manager → the legacy rank path is unchanged (regression guard: top-ranked wins)', async () => {
       // No bindManager(). Two idle agents; the legacy score ranks the higher-successRate one first.
       const top = await addAgent('Top', { successRate: 0.99 });
