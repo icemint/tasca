@@ -146,6 +146,25 @@ describe('makeRunnerExecute — clone → spawn → commit → openPr with the s
     expect(spawnInput.env).toBeUndefined();
   });
 
+  it('forwards the payload appendSystemPrompt (agent.md persona) into the spawn input (issue 362)', async () => {
+    const { execution, spawns } = fakeExecution();
+    const payload: DispatchPayload = { ...PAYLOAD, appendSystemPrompt: 'You are Elvis, a careful reviewer.' };
+    await makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) })(
+      { ...JOB, payload },
+      payload,
+      TOKEN,
+      ctl()
+    );
+    // ADDITIVE: the task prompt is still forwarded AND the persona rides alongside it.
+    expect(spawns[0]).toMatchObject({ prompt: 'Fix the bug', appendSystemPrompt: 'You are Elvis, a careful reviewer.' });
+  });
+
+  it('omits appendSystemPrompt from the spawn input when the payload carries none (issue 362)', async () => {
+    const { execution, spawns } = fakeExecution();
+    await makeRunnerExecute({ execution, reposDir: '/repos', prepareWorktree: fakePrepare(), removeWorktree: vi.fn(async () => {}) })(JOB, PAYLOAD, TOKEN, ctl());
+    expect(spawns[0]!.appendSystemPrompt).toBeUndefined();
+  });
+
   it('no committed change → terminal fail, no PR opened — and the worktree is still reclaimed', async () => {
     const { execution, prs } = fakeExecution({ async commitAgentWork() { return { changed: false }; } });
     const removeWorktree = vi.fn(async () => {});

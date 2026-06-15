@@ -30,6 +30,9 @@ export interface DispatchPayload {
   externalStoryId: string;
   /** The agent prompt (the real story content). */
   prompt: string;
+  /** The agent's standing persona (its agent.md `description`), forwarded into the `claude`
+   *  command as `--append-system-prompt` (issue 362). Absent when the agent has no description. */
+  appendSystemPrompt?: string;
   /** Deterministic PR head branch (idempotent re-drive). */
   headBranch: string;
   /** Projection-model PR body, precomputed coordination-side (GitHub `Closes #N`, Shortcut `[sc-<id>]`,

@@ -187,6 +187,7 @@ const emptyDirectory: AgentDirectory = {
   async listCandidates() { return []; },
   async findHiredAgentByName() { return null; },
   async principalIdFor() { return null; },
+  async descriptionFor() { return null; },
 };
 
 function verifierFor(eventId: string): WebhookVerifier {

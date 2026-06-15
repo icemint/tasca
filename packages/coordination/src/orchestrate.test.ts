@@ -441,7 +441,9 @@ class FakeDirectory implements AgentDirectory {
   // ONLY within the candidate (hired) set. CapabilityProfile carries no name, so the map supplies it.
   constructor(
     private readonly candidates: MatchCandidate[],
-    private readonly names: Record<string, string> = {}
+    private readonly names: Record<string, string> = {},
+    // agentId → agent.md description (the standing persona). Absent ⇒ descriptionFor returns null.
+    private readonly descriptions: Record<string, string> = {}
   ) {}
   async listCandidates() {
     return this.candidates;
@@ -456,6 +458,9 @@ class FakeDirectory implements AgentDirectory {
   }
   async principalIdFor(agentId: string) {
     return `prn_${agentId}`;
+  }
+  async descriptionFor(agentId: string) {
+    return this.descriptions[agentId] ?? null;
   }
 }
 
@@ -481,6 +486,7 @@ function makeDeps(opts: {
   candidates?: MatchCandidate[];
   content?: TaskContentSource;
   names?: Record<string, string>;
+  descriptions?: Record<string, string>;
   classifierFor?: OrchestrationDeps['classifierFor'];
   agentVendorResolver?: OrchestrationDeps['agentVendorResolver'];
   startAgentProxy?: OrchestrationDeps['startAgentProxy'];
@@ -493,7 +499,7 @@ function makeDeps(opts: {
     claim: new FakeClaimPort(opts.store),
     execution: opts.execution,
     status: opts.status,
-    directory: new FakeDirectory(candidates, opts.names),
+    directory: new FakeDirectory(candidates, opts.names, opts.descriptions),
     audit: opts.audit,
     content: opts.content ?? content,
     ...(opts.classifierFor ? { classifierFor: opts.classifierFor } : {}),
@@ -567,6 +573,23 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     expect(actions).toContain('task.claim');
     expect(actions).toContain('pr.create');
     expect(actions).toContain('status.post');
+  });
+
+  it("threads the winner's agent.md description into the in-process spawn input (issue 362)", async () => {
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, descriptions: { [ELVIS]: 'You are Elvis, a careful reviewer.' } })
+    );
+    expect(outcome.kind).toBe('dispatched');
+    // The persona rides the spawn input as appendSystemPrompt, ADDITIVE to the task prompt.
+    expect(execution.spawnInputs[0]!.prompt).toContain('Fix the thing');
+    expect(execution.spawnInputs[0]!.appendSystemPrompt).toBe('You are Elvis, a careful reviewer.');
+  });
+
+  it('sets no appendSystemPrompt on the spawn input when the agent has no description (issue 362)', async () => {
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit }));
+    expect(outcome.kind).toBe('dispatched');
+    expect(execution.spawnInputs[0]!.appendSystemPrompt).toBeUndefined();
   });
 
   it('persists the fetched content title onto the task (QA item 325)', async () => {
@@ -1516,9 +1539,17 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     store: FakeStore,
     execution: FakeExecution,
     queue: FakeDispatchQueue,
-    emBlockExplainer?: OrchestrationDeps['emBlockExplainer']
+    emBlockExplainer?: OrchestrationDeps['emBlockExplainer'],
+    descriptions?: Record<string, string>
   ): OrchestrationDeps => ({
-    ...makeDeps({ store, execution, status: new FakeStatus(), audit: new FakeAudit(), ...(emBlockExplainer ? { emBlockExplainer } : {}) }),
+    ...makeDeps({
+      store,
+      execution,
+      status: new FakeStatus(),
+      audit: new FakeAudit(),
+      ...(emBlockExplainer ? { emBlockExplainer } : {}),
+      ...(descriptions ? { descriptions } : {}),
+    }),
     provisioner: passingProvisioner,
     dispatchQueue: queue,
     runnerWaitMs: 5, // tiny bound so the no-claim timeout fires fast
@@ -1562,6 +1593,37 @@ describe('orchestrateTaskAssigned — split dispatch + in-process fallback', () 
     expect(store.noCapacityCalls).toHaveLength(0);
     expect(outcome.kind).toBe('dispatched');
     if (outcome.kind === 'dispatched') expect(outcome.prUrl).toBe('(runner)');
+  });
+
+  it("puts the winner's agent.md description on the enqueued DispatchPayload as appendSystemPrompt (issue 362)", async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const queue = new FakeDispatchQueue(false);
+    queue.status = 'claimed';
+
+    await orchestrateTaskAssigned(
+      GITHUB_EVENT,
+      queueDeps(store, execution, queue, undefined, { [ELVIS]: 'You are Elvis, a careful reviewer.' })
+    );
+
+    expect(queue.enqueued).toHaveLength(1);
+    const payload = queue.enqueued[0]!.payload as { prompt: string; appendSystemPrompt?: string };
+    // ADDITIVE: the task prompt is still there AND the persona rides alongside it.
+    expect(payload.prompt).toContain('Implement the task');
+    expect(payload.appendSystemPrompt).toBe('You are Elvis, a careful reviewer.');
+  });
+
+  it('omits appendSystemPrompt from the enqueued DispatchPayload when the agent has no description (issue 362)', async () => {
+    const store = new FakeStore();
+    const execution = new FakeExecution();
+    const queue = new FakeDispatchQueue(false);
+    queue.status = 'claimed';
+
+    await orchestrateTaskAssigned(GITHUB_EVENT, queueDeps(store, execution, queue));
+
+    expect(queue.enqueued).toHaveLength(1);
+    const payload = queue.enqueued[0]!.payload as { appendSystemPrompt?: string };
+    expect(payload.appendSystemPrompt).toBeUndefined();
   });
 
   it('an operator cancel/reassign flips the job to cancelled mid-wait → preempted (task untouched by orchestration)', async () => {

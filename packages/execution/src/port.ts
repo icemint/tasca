@@ -94,6 +94,12 @@ export interface SpawnAgentInput {
   prompt?: string;
   /** Tool allowlist for the built `claude` command (only used with `prompt`). */
   allowedTools?: string;
+  /**
+   * The agent's standing persona (its agent.md `description`), forwarded into the
+   * built `claude` command as `--append-system-prompt` (only used with `prompt`).
+   * Operator-authored and ADDITIVE to the task prompt; omitted when absent/empty.
+   */
+  appendSystemPrompt?: string;
   /** Working directory — normally a reserved worktree path. */
   cwd: string;
   /** Extra environment for the spawned process (merged over the parent env). */

@@ -54,6 +54,10 @@ export interface AgentDirectory {
   findHiredAgentByName(orgId: string, name: string): Promise<string | null>;
   /** The agent's stable audit principal id (for audit_event attribution). */
   principalIdFor(agentId: string): Promise<string | null>;
+  /** The agent's standing persona (its agent.md `description`), or null when it has none. Threaded
+   *  into the run as `--append-system-prompt` so the agent.md actually shapes behavior (issue 362).
+   *  null → no persona flag (the run is byte-identical to a description-less agent). */
+  descriptionFor(agentId: string): Promise<string | null>;
 }
 
 /** The narrow slice of OrchestrationDeps the finalize seam needs — also what the reaper
@@ -240,6 +244,9 @@ export interface DispatchPayload {
   externalStoryId: string;
   agentId: string;
   prompt: string;
+  /** The winner agent's standing persona (its agent.md `description`), forwarded by the runner into the
+   *  `claude` command as `--append-system-prompt` (issue 362). Absent when the agent has no description. */
+  appendSystemPrompt?: string;
   headBranch: string;
   /** The projection-model PR body (precomputed like headBranch so the runner doesn't re-derive it):
    *  GitHub `Closes #N`, Shortcut `[sc-<id>]`, else absent. See prBodyReference. */
@@ -602,6 +609,10 @@ export async function orchestrateTaskAssigned(
     // Past the claim: this worker owns the task — record who, for failure audit.
     winnerAgentId = winner.agentId;
     principalId = await deps.directory.principalIdFor(winner.agentId);
+    // The winner's standing persona (agent.md description) — threaded into the run as
+    // --append-system-prompt so the agent.md actually shapes behavior (issue 362). A null
+    // description just means no persona flag; never fatal.
+    const appendSystemPrompt = (await deps.directory.descriptionFor(winner.agentId)) ?? undefined;
     await audit(deps, principalId, winner.agentId, event, {
       action: 'task.claim',
       target: task.id,
@@ -655,6 +666,7 @@ export async function orchestrateTaskAssigned(
         externalStoryId: event.externalStoryId,
         agentId: winner.agentId,
         prompt,
+        ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         headBranch: deterministicHeadBranch(event.platform, event.externalStoryId, content.title),
         ...(prBodyReference(event) ? { prBody: prBodyReference(event)! } : {}),
       };
@@ -800,6 +812,7 @@ export async function orchestrateTaskAssigned(
           id: task.id,
           cwd: worktree.path,
           prompt,
+          ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
           ...(agentProxy ? { env: { ANTHROPIC_BASE_URL: agentProxy.baseUrl } } : {}),
         },
         agentTimeoutMs
@@ -1097,7 +1110,7 @@ const AGENT_OUTPUT_TAIL_CHARS = 4000;
 
 function runAgentToCompletion(
   execution: ExecutionPort,
-  input: { id: string; cwd: string; prompt: string; env?: Record<string, string> },
+  input: { id: string; cwd: string; prompt: string; appendSystemPrompt?: string; env?: Record<string, string> },
   timeoutMs: number
 ): Promise<AgentRunResult> {
   return new Promise((resolve, reject) => {
