@@ -14,6 +14,7 @@ import type {
   MembersResponse,
   OrgInfo,
   SessionResponse,
+  ShortcutConnectionStatus,
   TaskDetail,
   TaskSummary,
   VendorCredentialsResponse,
@@ -193,6 +194,20 @@ export const VENDOR_CREDS_ACTIVE: VendorCredentialsResponse = {
 };
 
 export const VENDOR_CREDS_EMPTY: VendorCredentialsResponse = { credentials: [] };
+
+// ── Shortcut connection (Settings → Connections & credentials) — status + fingerprint only, no secret. ──
+export const SHORTCUT_CONN_ACTIVE: ShortcutConnectionStatus = {
+  connected: true,
+  workspaceId: 'ws-eltexsoft',
+  projectId: 'proj_1',
+  webhookUrl: '/webhooks/shortcut/conn_1',
+  credentials: [
+    { kind: 'webhook_secret', status: 'active', fingerprint: 'aa11', lastValidatedAt: new Date().toISOString() },
+    { kind: 'read_token', status: 'active', fingerprint: 'bb22', lastValidatedAt: new Date().toISOString() },
+  ],
+};
+
+export const SHORTCUT_CONN_NONE: ShortcutConnectionStatus = { connected: false };
 
 export const CREDENTIAL_AUDIT_OK: CredentialAuditResponse = {
   events: [

@@ -1,15 +1,22 @@
-// Settings (C8). Three panels are now LIVE: "Workspace" (slice 3.5-B.2) lets an admin rename the
-// instance + manage members and roles (list / change-role / remove; owner-only for role + remove);
-// "Vendor keys" (slice 3.5-A.2c.2) lets an admin set / replace / remove a per-org vendor key
-// (Anthropic today) WITHOUT ever seeing a stored key (the read shape carries only a status + a
-// non-reversible fingerprint); "Audit log" shows the credential governance trail (admin+). Billing
-// stays an honest `Planned` row. The key input is WRITE-ONLY: never pre-filled, never echoed,
-// cleared + re-rendered from server truth on save.
+// Settings (C8). LIVE panels: "Workspace" (slice 3.5-B.2) lets an admin rename the instance + manage
+// members and roles (list / change-role / remove; owner-only for role + remove); "Connections &
+// credentials" groups the workspace credential surfaces — the Anthropic vendor key (slice 3.5-A.2c.2,
+// set / replace / remove WITHOUT ever seeing a stored key — the read shape carries only a status + a
+// non-reversible fingerprint), the Shortcut connection (its webhook secret + read token + workspace→
+// project binding, with a live connection test + a two-step disconnect), and a status-only GitHub App
+// card (its secrets are deploy-level, not editable here); "Audit log" shows the credential governance
+// trail (admin+). Billing stays an honest `Planned` row. Every secret input is WRITE-ONLY: never
+// pre-filled, never echoed, cleared + re-rendered from server truth on save.
 
 import {
   getVendorCredentials,
   setVendorCredential,
   deleteVendorCredential,
+  getShortcutConnection,
+  setShortcutConnection,
+  testShortcutConnection,
+  deleteShortcutConnection,
+  getConnections,
   getCredentialAudit,
   getOrgInfo,
   getMembers,
@@ -21,15 +28,17 @@ import {
   revokeInvite,
   getSession,
   canManageActiveOrg,
+  activeOrgId,
   redirectToLogin,
   type WriteResult,
 } from '../api';
 import { liveAction, showBanner } from '../live';
 import { error, empty } from '../states';
 import type { LoadResult } from '../mount';
-import { I, esc, roControl, RO_GATE_VENDOR_KEYS, RO_GATE_WORKSPACE } from '../ui';
+import { I, esc, roControl, RO_GATE_VENDOR_KEYS, RO_GATE_WORKSPACE, RO_GATE_CONNECTIONS } from '../ui';
 import type { ApiResult } from '../api';
 import type {
+  ConnectionsResponse,
   CredentialAuditEvent,
   InvitesResponse,
   MembersResponse,
@@ -37,6 +46,8 @@ import type {
   OrgMember,
   OrgRole,
   PendingInvite,
+  ShortcutConnectionStatus,
+  ShortcutConnectionCredentialStatus,
   VendorCredentialStatus,
   VendorCredentialsResponse,
 } from '../contract';
@@ -165,9 +176,157 @@ function vendorPanel(res: ApiResult<VendorCredentialsResponse>, canManage: boole
   }
 
   return `<div class="pcard vk-panel">
-      <div class="pc-h">Vendor keys</div>
+      <div class="pc-h">Anthropic vendor key</div>
       <div class="pc-sub">A per-workspace API key Tasca seals and uses on your behalf. The stored key is write-only — it is never shown again.</div>
       ${body}
+    </div>`;
+}
+
+// ── Shortcut connection card (Connections & credentials) ───────────────────────
+// ONE combined card managing BOTH secrets (the POST takes the webhook secret + read token + the
+// workspace→project binding together — per-kind replace is out of scope). Per-secret status (set /
+// not-set + fingerprint + last-validated), the webhook URL to paste into Shortcut, an admin-only
+// set/replace form (both secrets + workspace/project), a connection Test (idle→testing→pass/fail,
+// probing the read token), and a two-step disconnect. The secret inputs are WRITE-ONLY (never
+// pre-filled). A non-admin sees the read-only status + a single gated control, never a form.
+
+const SC_KIND_LABEL: Record<ShortcutConnectionCredentialStatus['kind'], string> = {
+  webhook_secret: 'Webhook signing secret',
+  read_token: 'Read token',
+};
+
+/** One per-secret status line inside the Shortcut card — fingerprint (•••• + hash) + last-validated
+ *  when set, else an honest "Not set" — NEVER color-alone (a labelled badge accompanies it). */
+function shortcutSecretRow(kind: ShortcutConnectionCredentialStatus['kind'], cred: ShortcutConnectionCredentialStatus | undefined): string {
+  const active = cred?.status === 'active';
+  const meta = active
+    ? `<span class="vk-fp mono">••••${esc(cred?.fingerprint ?? '')}</span><span class="vk-when">Validated ${esc(relTime(cred?.lastValidatedAt ?? null))}</span>`
+    : `<span class="vk-when">Not set yet.</span>`;
+  return `<div class="vk-row">
+      <div class="vk-id"><div class="vk-name">${esc(SC_KIND_LABEL[kind])}</div><div class="vk-meta">${meta}</div></div>
+      <div class="vk-status">${statusBadge(active)}</div>
+    </div>`;
+}
+
+function shortcutCard(res: ApiResult<ShortcutConnectionStatus>, canManage: boolean): string {
+  let body: string;
+  if (res.kind === 'error') {
+    body = error('Could not load the Shortcut connection. ' + res.message);
+  } else if (res.kind === 'unauth') {
+    body = empty('Shortcut connection unavailable', 'Sign in again to manage the connection.', I.plug);
+  } else {
+    const status = res.data;
+    const connected = status.connected;
+    const byKind = new Map(
+      (connected ? status.credentials : []).map((c) => [c.kind, c] as const)
+    );
+    const secretRows =
+      shortcutSecretRow('webhook_secret', byKind.get('webhook_secret')) +
+      shortcutSecretRow('read_token', byKind.get('read_token'));
+
+    // The webhook URL the operator pastes into Shortcut — only meaningful once connected.
+    const webhookBlock = connected
+      ? `<div class="sc-webhook">
+          <div class="vk-name">Webhook URL</div>
+          <input class="vk-input mono" type="text" readonly aria-label="Shortcut webhook URL" value="${esc(status.webhookUrl)}" />
+          <p class="vk-future">Paste this into your Shortcut workspace's outgoing-webhook settings.</p>
+        </div>`
+      : `<p class="vk-future">No Shortcut workspace is connected yet. Bind one below to start receiving stories.</p>`;
+
+    // Reveal-on-demand set/replace form — admin only, BLANK write-only secret inputs (never pre-filled).
+    // The workspace/project inputs ARE pre-filled with the bound values (they are not secrets).
+    const ws = connected ? status.workspaceId : '';
+    const proj = connected ? (status.projectId ?? '') : '';
+    const form = canManage
+      ? `<form class="vk-form sc-form" data-sc-form hidden>
+          <label class="vk-label" for="sc-ws">Workspace ID</label>
+          <input id="sc-ws" class="vk-input" type="text" name="workspaceId" autocomplete="off" spellcheck="false"
+            value="${esc(ws)}" placeholder="The Shortcut workspace id" aria-label="Shortcut workspace id" />
+          <label class="vk-label" for="sc-proj">Project ID</label>
+          <input id="sc-proj" class="vk-input" type="text" name="projectId" autocomplete="off" spellcheck="false"
+            value="${esc(proj)}" placeholder="The Tasca project to route stories to" aria-label="Project id" />
+          <label class="vk-label" for="sc-hook">${connected ? 'Replace' : 'Set'} webhook signing secret</label>
+          <input id="sc-hook" class="vk-input mono" type="password" name="webhookSecret" autocomplete="off" spellcheck="false"
+            placeholder="Paste the webhook signing secret" aria-label="Shortcut webhook signing secret" data-sc-input="webhookSecret" />
+          <label class="vk-label" for="sc-read">${connected ? 'Replace' : 'Set'} read token</label>
+          <input id="sc-read" class="vk-input mono" type="password" name="readToken" autocomplete="off" spellcheck="false"
+            placeholder="Paste the read token" aria-label="Shortcut read token" data-sc-input="readToken" />
+          <div class="conn-test" data-sc-test>
+            <button class="ictl" type="button" data-act="sc-test" aria-label="Test the Shortcut read token">Test connection</button>
+            <span class="conn-test-result" data-sc-result role="status" aria-live="polite"></span>
+          </div>
+          <div class="vk-form-actions">
+            <button class="btn-add" type="submit" data-act="sc-save">Save connection</button>
+            <button class="ictl" type="button" data-act="sc-cancel">Cancel</button>
+          </div>
+          <p class="vk-err" data-sc-err hidden role="alert"></p>
+        </form>`
+      : '';
+
+    let controls: string;
+    if (!canManage) {
+      controls = roControl(connected ? 'Replace secrets' : 'Connect Shortcut', { gate: RO_GATE_CONNECTIONS });
+    } else if (connected) {
+      controls =
+        `<button class="ictl signal" type="button" data-act="sc-edit" aria-label="Replace the Shortcut connection secrets">Replace secrets</button>` +
+        `<button class="ictl vk-danger" type="button" data-act="sc-remove" aria-label="Disconnect Shortcut">Disconnect</button>`;
+    } else {
+      controls = `<button class="ictl signal" type="button" data-act="sc-edit" aria-label="Connect a Shortcut workspace">${I.plus} Connect Shortcut</button>`;
+    }
+
+    const confirm = canManage && connected
+      ? `<div class="vk-confirm" data-sc-confirm hidden>
+          <span class="vk-confirm-q">Remove the Shortcut connection? Intake stops — incoming stories are rejected until you reconnect.</span>
+          <div class="vk-confirm-actions">
+            <button class="ictl vk-danger" type="button" data-act="sc-remove-confirm" aria-label="Confirm disconnecting Shortcut">Confirm disconnect</button>
+            <button class="ictl" type="button" data-act="sc-remove-cancel">Cancel</button>
+          </div>
+        </div>`
+      : '';
+
+    body = `${secretRows}
+      ${webhookBlock}
+      <div class="vk-actions sc-actions">${controls}</div>
+      ${form}${confirm}`;
+  }
+
+  return `<div class="pcard vk-panel" data-sc-card>
+      <div class="pc-h">Shortcut connection</div>
+      <div class="pc-sub">Bind a Shortcut workspace to a Tasca project and seal its webhook secret + read token. The stored secrets are write-only — they are never shown again.</div>
+      ${body}
+    </div>`;
+}
+
+// ── GitHub App status card (Connections & credentials) ─────────────────────────
+// Status-only. The GitHub App secrets (GITHUB_APP_ID / _PRIVATE_KEY / _WEBHOOK_SECRET) are DEPLOY-LEVEL
+// — one app per deployment — and are NOT editable here. We surface the EXISTING connection health from
+// GET /api/connections (no re-derivation) + a link to the Connections page for full webhook detail.
+
+function githubCard(res: ApiResult<ConnectionsResponse>): string {
+  let badge: string;
+  if (res.kind === 'ok') {
+    const gh = res.data.platforms.find((p) => p.platform === 'github');
+    if (!gh) {
+      badge = statusBadge(false);
+    } else if (gh.health === 'healthy') {
+      badge = `<span class="conn-status ok"><span class="d"></span>Connected</span>`;
+    } else if (gh.health === 'degraded') {
+      badge = `<span class="conn-status warn"><span class="d"></span>Degraded</span>`;
+    } else {
+      badge = `<span class="conn-status off"><span class="d hollow"></span>Revoked</span>`;
+    }
+  } else {
+    // A read failure degrades to an honest "unknown" badge — never a falsely-green status.
+    badge = `<span class="conn-status off"><span class="d hollow"></span>Status unavailable</span>`;
+  }
+  return `<div class="pcard vk-panel">
+      <div class="pc-h">GitHub App</div>
+      <div class="pc-sub">The GitHub App's secrets are deploy-level — one app per deployment — and are not editable here.</div>
+      <div class="vk-row">
+        <div class="vk-id"><div class="vk-name">GitHub App</div><div class="vk-meta"><span class="vk-when">App ID, private key and webhook secret are set at deploy time.</span></div></div>
+        <div class="vk-status">${badge}</div>
+        <div class="vk-actions"><a class="ictl signal" href="/connections" aria-label="Open the Connections page for full health and webhook detail">View details</a></div>
+      </div>
     </div>`;
 }
 
@@ -425,13 +584,18 @@ function invitesSection(invitesRes: ApiResult<InvitesResponse>, callerRole: OrgR
 
 export async function loadSettings(): Promise<LoadResult> {
   const canManage = await canManageActiveOrg();
-  // Workspace name + members are member+ (always fetched); the vendor read is member+ (always);
-  // the audit read + invites list are admin+ (only fetched for an admin — a member fetch would 403).
-  // All run concurrently. The session resolves the caller's own id (the `(you)` marker).
-  const [orgRes, membersRes, credRes, auditRes, invitesRes, sessionRes] = await Promise.all([
+  // The Shortcut connection routes are org-scoped in the PATH, so resolve the active org first; a null
+  // (read failure) renders the Shortcut card disabled rather than hitting a wrong-org 403.
+  const orgId = await activeOrgId();
+  // Workspace name + members are member+ (always fetched); the vendor + Shortcut + GitHub-connections
+  // reads are member+ (always); the audit read + invites list are admin+ (only fetched for an admin — a
+  // member fetch would 403). All run concurrently. The session resolves the caller's own id (the `(you)`).
+  const [orgRes, membersRes, credRes, shortcutRes, connRes, auditRes, invitesRes, sessionRes] = await Promise.all([
     getOrgInfo(),
     getMembers(),
     getVendorCredentials(),
+    orgId ? getShortcutConnection(orgId) : Promise.resolve(null),
+    getConnections(),
     canManage ? getCredentialAudit() : Promise.resolve(null),
     canManage ? getInvites() : Promise.resolve(null),
     getSession(),
@@ -447,10 +611,19 @@ export async function loadSettings(): Promise<LoadResult> {
 
   const auditHtml = canManage && auditRes ? auditPanel(auditRes) : '';
 
+  // The Shortcut card needs the active org id stamped on it so the wiring can build the org-scoped paths.
+  // When the org couldn't be resolved, render an honest error in place of the card (never a wrong-org write).
+  const shortcutHtml = shortcutRes
+    ? shortcutCard(shortcutRes, canManage)
+    : `<div class="pcard vk-panel"><div class="pc-h">Shortcut connection</div>${error('Could not resolve your workspace — reload to manage the Shortcut connection.')}</div>`;
+
   const html = `<div class="roster-head"><div><h1>Settings</h1><div class="sub">Workspace configuration</div></div></div>
-    <div class="settings-stack">
+    <div class="settings-stack"${orgId ? ` data-org-id="${esc(orgId)}"` : ''}>
       ${workspacePanel(orgRes, membersRes, invitesRes, canManage, selfUserId)}
+      <div class="pc-section-head">Connections &amp; credentials</div>
       ${vendorPanel(credRes, canManage)}
+      ${shortcutHtml}
+      ${githubCard(connRes)}
       ${auditHtml}
       <div class="pcard">
         <div class="pc-h">Configuration</div>
@@ -566,6 +739,174 @@ export function wireSettings(el: HTMLElement, rerun: () => Promise<void>): void 
   });
 
   wireWorkspace(el, rerun);
+  wireShortcutConnection(el, rerun);
+}
+
+/** Honest failure copy for a Shortcut connection write. A rejected read token arrives as a 400
+ *  (the conflict channel) carrying the server's message; the rest map to honest reasons. */
+function describeShortcutFailure(r: WriteResult<unknown>): string {
+  if (r.kind === 'conflict') {
+    const err = (r.data as { error?: string } | undefined)?.error;
+    return err ? `Couldn’t save: ${err}` : 'The Shortcut connection changed elsewhere — showing the latest. Review and retry.';
+  }
+  switch (r.kind) {
+    case 'forbidden':
+      return 'Couldn’t save — you may not have admin rights, or your session token expired. Showing the latest.';
+    case 'notfound':
+      return 'There’s no Shortcut connection to change — showing the latest.';
+    case 'unconfigured':
+      return 'Connections aren’t enabled on this workspace yet.';
+    case 'error':
+      return `Couldn’t save the connection (${r.message}). Showing the latest.`;
+    default:
+      return 'Couldn’t apply the change. Showing the latest.';
+  }
+}
+
+/** Wire the admin+ Shortcut connection card: the reveal-on-demand set/replace form (both secrets +
+ *  workspace/project), the connection Test (idle→testing→pass/fail, probing the read token), and the
+ *  two-step disconnect. The secret inputs are write-only — cleared on save/cancel so nothing typed
+ *  lingers in the DOM. Controls absent for a non-admin simply have no listeners (server is authority). */
+function wireShortcutConnection(el: HTMLElement, rerun: () => Promise<void>): void {
+  const card = el.querySelector<HTMLElement>('[data-sc-card]');
+  if (!card) return;
+  const orgId = el.querySelector<HTMLElement>('.settings-stack')?.dataset.orgId ?? null;
+
+  const form = card.querySelector<HTMLFormElement>('[data-sc-form]');
+  const confirm = card.querySelector<HTMLElement>('[data-sc-confirm]');
+  const errBox = card.querySelector<HTMLElement>('[data-sc-err]');
+  const result = card.querySelector<HTMLElement>('[data-sc-result]');
+  const wsInput = form?.querySelector<HTMLInputElement>('input[name="workspaceId"]') ?? null;
+  const projInput = form?.querySelector<HTMLInputElement>('input[name="projectId"]') ?? null;
+  const hookInput = form?.querySelector<HTMLInputElement>('[data-sc-input="webhookSecret"]') ?? null;
+  const readInput = form?.querySelector<HTMLInputElement>('[data-sc-input="readToken"]') ?? null;
+
+  const showErr = (msg: string): void => {
+    if (!errBox) return;
+    errBox.textContent = msg;
+    errBox.hidden = false;
+  };
+  const clearErr = (): void => {
+    if (errBox) { errBox.textContent = ''; errBox.hidden = true; }
+  };
+  const resetResult = (): void => {
+    if (!result) return;
+    result.className = 'conn-test-result';
+    result.textContent = '';
+  };
+  const setResult = (state: 'testing' | 'pass' | 'fail', reason?: string): void => {
+    if (!result) return;
+    if (state === 'testing') { result.className = 'conn-test-result testing'; result.innerHTML = `<span class="d"></span>Testing…`; }
+    else if (state === 'pass') { result.className = 'conn-test-result pass'; result.innerHTML = `${I.check} Connection OK`; }
+    else { result.className = 'conn-test-result fail'; result.innerHTML = `<span class="d hollow"></span>Couldn’t connect${reason ? ` — ${esc(reason)}` : ''}`; }
+  };
+  // Clear the write-only secret inputs so nothing typed lingers in the DOM.
+  const clearSecrets = (): void => {
+    if (hookInput) hookInput.value = '';
+    if (readInput) readInput.value = '';
+  };
+
+  // Reveal the set/replace form; hide the confirm + reset prior error/test state.
+  card.querySelector<HTMLButtonElement>('[data-act="sc-edit"]')?.addEventListener('click', () => {
+    confirm?.setAttribute('hidden', '');
+    clearErr();
+    resetResult();
+    if (form) form.hidden = false;
+    wsInput?.focus();
+  });
+  card.querySelector<HTMLButtonElement>('[data-act="sc-cancel"]')?.addEventListener('click', () => {
+    clearSecrets();
+    clearErr();
+    resetResult();
+    if (form) form.hidden = true;
+  });
+
+  // Two-step disconnect (the codebase avoids window.confirm).
+  card.querySelector<HTMLButtonElement>('[data-act="sc-remove"]')?.addEventListener('click', () => {
+    if (form) form.hidden = true;
+    confirm?.removeAttribute('hidden');
+  });
+  card.querySelector<HTMLButtonElement>('[data-act="sc-remove-cancel"]')?.addEventListener('click', () => {
+    confirm?.setAttribute('hidden', '');
+  });
+
+  // Re-typing the read token invalidates a prior test result (idle).
+  readInput?.addEventListener('input', () => resetResult());
+
+  // Connection test: idle → testing → pass/fail. Probes the SUBMITTED read token (never a stored one).
+  card.querySelector<HTMLButtonElement>('[data-act="sc-test"]')?.addEventListener('click', () => {
+    const btn = card.querySelector<HTMLButtonElement>('[data-act="sc-test"]');
+    if (!btn) return;
+    const token = readInput?.value.trim() ?? '';
+    if (!token) { showErr('Paste a read token to test.'); return; }
+    if (!orgId) { showErr('Couldn’t resolve your workspace — reload and retry.'); return; }
+    if (btn.dataset.busy === '1') return;
+    clearErr();
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    setResult('testing');
+    void (async () => {
+      let res: Awaited<ReturnType<typeof testShortcutConnection>>;
+      try {
+        res = await testShortcutConnection(orgId, token);
+      } catch {
+        res = { kind: 'error', message: 'Unexpected error' };
+      }
+      btn.dataset.busy = '';
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      if (res.kind === 'unauth') { redirectToLogin(); return; }
+      if (res.kind === 'ok') {
+        const data = res.data as { ok: boolean; reason?: string };
+        if (data.ok) setResult('pass');
+        else setResult('fail', data.reason);
+        return;
+      }
+      setResult('fail');
+      showErr(describeShortcutFailure(res));
+    })();
+  });
+
+  // Save (set/replace): both secrets + workspace/project sealed together. The secret inputs are
+  // write-only — cleared BEFORE the write resolves so they never linger; the view re-renders from truth.
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!orgId) { showErr('Couldn’t resolve your workspace — reload and retry.'); return; }
+    const workspaceId = wsInput?.value.trim() ?? '';
+    const projectId = projInput?.value.trim() ?? '';
+    const webhookSecret = hookInput?.value.trim() ?? '';
+    const readToken = readInput?.value.trim() ?? '';
+    if (!workspaceId || !projectId) { showErr('Enter the workspace and project before saving.'); return; }
+    if (!webhookSecret || !readToken) { showErr('Enter both the webhook secret and the read token.'); return; }
+    const saveBtn = form.querySelector<HTMLButtonElement>('[data-act="sc-save"]');
+    if (!saveBtn) return;
+    clearErr();
+    clearSecrets(); // clear before the write resolves — the local consts are the only copies
+    void liveAction({
+      button: saveBtn,
+      pendingLabel: 'Saving…',
+      view: el,
+      rerun,
+      write: (): Promise<WriteResult<unknown>> => setShortcutConnection(orgId, { workspaceId, projectId, webhookSecret, readToken }),
+      describe: describeShortcutFailure,
+    });
+  });
+
+  // Confirm disconnect.
+  card.querySelector<HTMLButtonElement>('[data-act="sc-remove-confirm"]')?.addEventListener('click', () => {
+    const btn = card.querySelector<HTMLButtonElement>('[data-act="sc-remove-confirm"]');
+    if (!btn) return;
+    if (!orgId) { showErr('Couldn’t resolve your workspace — reload and retry.'); return; }
+    void liveAction({
+      button: btn,
+      pendingLabel: 'Disconnecting…',
+      view: el,
+      rerun,
+      write: (): Promise<WriteResult<unknown>> => deleteShortcutConnection(orgId),
+      describe: describeShortcutFailure,
+    });
+  });
 }
 
 /** Honest failure copy for workspace member writes. The last-owner guard arrives as a 409

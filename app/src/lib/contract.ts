@@ -332,3 +332,30 @@ export interface AgentCredentialStatus {
 export interface AgentCredentialsResponse {
   credentials: AgentCredentialStatus[];
 }
+
+// ── Shortcut connection (Settings → Connections & credentials) ─────────────────
+// GET /api/orgs/:orgId/connections/shortcut returns the connection STATUS — the bound workspace +
+// project + the webhook URL to paste into Shortcut + per-secret status. WRITE-ONLY for the secrets:
+// the read carries only a status + a non-reversible fingerprint, never a secret. `connected:false` is
+// the not-configured shape (no Shortcut connection yet).
+export type ConnectionCredentialKind = 'webhook_secret' | 'read_token';
+
+/** One connection-secret status — status + fingerprint only, never the secret. */
+export interface ShortcutConnectionCredentialStatus {
+  kind: ConnectionCredentialKind;
+  status: 'active' | 'invalid';
+  /** A short non-reversible fingerprint of the sealed secret (never the secret itself). */
+  fingerprint: string;
+  lastValidatedAt: string | null;
+}
+
+export type ShortcutConnectionStatus =
+  | { connected: false }
+  | {
+      connected: true;
+      workspaceId: string;
+      projectId: string | null;
+      /** The path to paste into Shortcut as the webhook URL for this connection. */
+      webhookUrl: string;
+      credentials: ShortcutConnectionCredentialStatus[];
+    };

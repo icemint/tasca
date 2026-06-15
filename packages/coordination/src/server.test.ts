@@ -128,6 +128,8 @@ class CountingStore implements CoordinationStore {
   // route a delivery to that connection's org + repo.
   shortcutConnection: { orgId: string; repoRef: string | null } | null = null;
   async getShortcutConnectionById(_connectionId: string) { return this.shortcutConnection; }
+  async getShortcutConnectionForOrg(_orgId: string): Promise<{ connectionId: string; workspaceId: string; projectId: string | null } | null> { return null; }
+  async deleteShortcutConnection(_orgId: string, _connectionId: string) { return false; }
   async projectExistsInOrg() { return true; }
   taskFor(platform: string, externalStoryId: string) {
     return this.tasksByStory.get(`${platform}:${externalStoryId}`);

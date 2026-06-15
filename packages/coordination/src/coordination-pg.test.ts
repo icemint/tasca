@@ -14,7 +14,7 @@ import type {
 import type { MatchCandidate } from '@tasca/routing';
 import { PgCoordinationStore } from './store';
 import { COORDINATION_SCHEMA_DDL } from './schema';
-import { sealVendorKey, openVendorKey, fingerprintVendorKey } from './vendor-credential';
+import { sealVendorKey, openVendorKey, fingerprintVendorKey, fingerprintConnectionKey } from './vendor-credential';
 import { orchestrateTaskAssigned, type OrchestrationDeps, type AgentDirectory, type AuditSink, type TaskContentSource } from './orchestrate';
 import type { StatusReporter, StatusUpdate } from './ports';
 
@@ -1138,6 +1138,43 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(await store.deleteVendorCredential(ORG, 'anthropic')).toBe(true);
       expect(await store.getVendorCredentialStatuses(ORG)).toEqual([]);
       expect(await store.deleteVendorCredential(ORG, 'anthropic')).toBe(false);
+    });
+  });
+
+  describe('per-connection credentials — sealed at rest, status read returns fingerprints only', () => {
+    const MASTER = Buffer.alloc(32, 9);
+    const WEBHOOK_SECRET = 'shortcut-webhook-PG-secret-do-not-leak-aabbcc';
+    const READ_TOKEN = 'shortcut-read-PG-token-do-not-leak-ddeeff';
+
+    it('set both kinds → status read returns fingerprint + status, NEVER the ciphertext/secret; delete cascades', async () => {
+      const projectId = await store.getOrCreateProject(ORG, 'eltexsoft/demo');
+      const { connectionId } = await store.upsertShortcutConnection(ORG, { workspaceId: 'ws-pg', projectId });
+      const hookFp = fingerprintConnectionKey('webhook_secret', WEBHOOK_SECRET);
+      const readFp = fingerprintConnectionKey('read_token', READ_TOKEN);
+      await store.setConnectionCredential(ORG, connectionId, 'webhook_secret', sealVendorKey(WEBHOOK_SECRET, MASTER), hookFp, 'u1');
+      await store.setConnectionCredential(ORG, connectionId, 'read_token', sealVendorKey(READ_TOKEN, MASTER), readFp, 'u1');
+
+      // status read: fingerprint + status ONLY (ordered by kind), never the ciphertext/secret
+      const statuses = await store.getConnectionCredentialStatuses(ORG, connectionId);
+      expect(statuses.map((s) => s.kind)).toEqual(['read_token', 'webhook_secret']);
+      expect(statuses).toContainEqual(expect.objectContaining({ kind: 'webhook_secret', status: 'active', fingerprint: hookFp }));
+      expect(statuses).toContainEqual(expect.objectContaining({ kind: 'read_token', status: 'active', fingerprint: readFp }));
+      const serialized = JSON.stringify(statuses);
+      expect(serialized).not.toContain(WEBHOOK_SECRET);
+      expect(serialized).not.toContain(READ_TOKEN);
+
+      // the org's connection resolves for the Settings status read
+      expect(await store.getShortcutConnectionForOrg(ORG)).toMatchObject({ connectionId, workspaceId: 'ws-pg', projectId });
+
+      // ORG ISOLATION: another org sees neither the connection nor its credential statuses
+      expect(await store.getShortcutConnectionForOrg('org_other')).toBeNull();
+      expect(await store.getConnectionCredentialStatuses('org_other', connectionId)).toEqual([]);
+
+      // delete the connection → the credential rows cascade via the FK ON DELETE CASCADE
+      expect(await store.deleteShortcutConnection(ORG, connectionId)).toBe(true);
+      expect(await store.getShortcutConnectionForOrg(ORG)).toBeNull();
+      expect(await store.getConnectionCredentialStatuses(ORG, connectionId)).toEqual([]);
+      expect(await store.deleteShortcutConnection(ORG, connectionId)).toBe(false); // idempotent no-op
     });
   });
 
