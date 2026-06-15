@@ -464,3 +464,41 @@ describe('agent wiring — description (agent.md) + cost/concurrency validation 
     expect(posted()).toBe(false);
   });
 });
+
+describe('agent wiring — Current-work task actions are FUNCTIONAL, not inert (#317/#327)', () => {
+  // A working agent (currentTaskId set) renders Interrupt / Force reset / Reassign as live controls.
+  const WORKING = { ...AGENT_ELVIS_DETAIL_FULL, currentTaskId: 'task-x', state: 'working' as const };
+
+  it('Interrupt and Force reset POST the real task endpoints (not inert roControls)', async () => {
+    _resetCsrfForTest();
+    const posts: string[] = [];
+    vi.stubGlobal('location', { search: '?id=agent-elvis' });
+    vi.stubGlobal('fetch', async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      if (init?.method === 'POST') posts.push(u);
+      if (u.includes('/api/csrf')) return new Response(JSON.stringify({ token: 'tok-1' }), { status: 200 });
+      if (u.includes('/interrupt') || u.includes('/force-reset')) return new Response(JSON.stringify({ ok: true, status: 'needs_attention' }), { status: 200 });
+      if (u.includes('/api/orgs') && !u.includes('agents')) return new Response(JSON.stringify({ orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] }), { status: 200 });
+      if (u.includes('/credentials')) return new Response(JSON.stringify({ credentials: [] }), { status: 200 });
+      return new Response(JSON.stringify(WORKING), { status: 200 }); // GET /api/agents/agent-elvis
+    });
+
+    const el = document.createElement('div');
+    el.innerHTML = htmlOf(await loadAgent());
+    wireAgent(el, async () => { el.innerHTML = htmlOf(await loadAgent()); wireAgent(el, async () => {}); });
+
+    // The controls exist as live buttons (data-task-action), not disabled roControls.
+    const interrupt = el.querySelector<HTMLButtonElement>('[data-task-action="interrupt"]');
+    const forceReset = el.querySelector<HTMLButtonElement>('[data-task-action="force-reset"]');
+    expect(interrupt).not.toBeNull();
+    expect(forceReset).not.toBeNull();
+
+    interrupt!.click();
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    forceReset!.click();
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+
+    expect(posts.some((u) => u.includes('/api/tasks/task-x/interrupt'))).toBe(true);
+    expect(posts.some((u) => u.includes('/api/tasks/task-x/force-reset'))).toBe(true);
+  });
+});
