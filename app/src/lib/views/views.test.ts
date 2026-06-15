@@ -11,6 +11,9 @@ import {
   stubFetch,
   AGENT_ELVIS,
   AGENT_ELVIS_DETAIL,
+  AGENT_ELVIS_DETAIL_FULL,
+  AGENT_CREDS_GITHUB,
+  AGENT_CREDS_EMPTY,
   TASK_LRU,
   TASK_RETRY_ATTN,
   TASK_LRU_DETAIL,
@@ -365,6 +368,124 @@ describe('agent detail — bindings, recent work, live + read-only controls', ()
     expect(htmlOf(r)).toContain('status-chip paused');
     expect(htmlOf(r)).toContain('data-action="resume"');
     expect(htmlOf(r)).toContain('data-version="3"');
+  });
+});
+
+describe('agent detail — Slice D editable surfaces (identity / capability / description / credentials)', () => {
+  const ADMIN_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'owner', active: true }] };
+  const MEMBER_ORGS = { orgs: [{ id: 'o1', name: 'A', role: 'member', active: true }] };
+
+  /** Stub an admin viewing agent-elvis with the FULL detail fixture + a github credential. */
+  function adminRoutes(creds = AGENT_CREDS_GITHUB) {
+    return {
+      '/api/agents/agent-elvis': { body: AGENT_ELVIS_DETAIL_FULL },
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/o1/agents/agent-elvis/credentials': { body: creds },
+    };
+  }
+
+  it('header shows the specific MODEL in mono (issue 324), not just the vendor chip', async () => {
+    withId('agent-elvis');
+    stubFetch(adminRoutes());
+    const html = htmlOf(await loadAgent());
+    // the vh-meta carries the model string in a mono span (not only the vendor chip)
+    expect(html).toContain('<span class="mono dim">claude-opus-4-8</span>');
+    expect(html).toContain('class="vendor"'); // vendor chip still present
+    expect(html).toContain('<h1 class="vh-name">Elvis</h1>'); // semantic h1
+  });
+
+  it('admin: editable controls render for identity, capability, description, and credentials', async () => {
+    withId('agent-elvis');
+    stubFetch(adminRoutes());
+    const html = htmlOf(await loadAgent());
+    // header Edit profile is a LIVE control (not the gated roControl)
+    expect(html).toContain('data-act="id-edit"');
+    expect(html).not.toContain('Agent settings are managed by an admin');
+    // each card's Edit + its reveal-on-demand form
+    expect(html).toContain('data-id-form');
+    expect(html).toContain('data-cap-form');
+    expect(html).toContain('data-desc-form');
+    expect(html).toContain('data-cred-card');
+    // the capability form carries the taxonomy specialty inputs + tier preview + cost "No cap" toggle
+    expect(html).toContain('data-spec-entry="lang"');
+    expect(html).toContain('data-spec-entry="fw"');
+    expect(html).toContain('data-cap-ramp');
+    expect(html).toContain('data-cap-nocap');
+    expect(html).not.toContain('Coming soon');
+  });
+
+  it('non-admin: every editable control degrades to a gated roControl; NO forms, NO token input', async () => {
+    withId('agent-elvis');
+    stubFetch({
+      '/api/agents/agent-elvis': { body: AGENT_ELVIS_DETAIL_FULL },
+      '/api/orgs': { body: MEMBER_ORGS },
+      '/api/orgs/o1/agents/agent-elvis/credentials': { body: AGENT_CREDS_GITHUB },
+    });
+    const html = htmlOf(await loadAgent());
+    expect(html).toContain('Agent settings are managed by an admin'); // gated identity/capability/description
+    expect(html).toContain('Agent credentials are managed by an admin'); // gated credential control
+    expect(html).not.toContain('data-id-form');
+    expect(html).not.toContain('data-cap-form');
+    expect(html).not.toContain('data-desc-form');
+    expect(html).not.toContain('type="password"'); // no credential form for a non-admin
+    expect(html).not.toContain('data-act="cred-edit"');
+  });
+
+  it('description: a written agent.md renders raw-only (escaped, mono) with a Rendered|Raw toggle', async () => {
+    withId('agent-elvis');
+    stubFetch(adminRoutes());
+    const html = htmlOf(await loadAgent());
+    expect(html).toContain('data-desc-body');
+    expect(html).toContain('data-act="desc-mode"'); // the segmented toggle
+    expect(html).toContain('You ship boring, readable TypeScript.'); // the raw text shows
+  });
+
+  it('description: an empty agent.md shows the add-instructions block', async () => {
+    withId('agent-elvis');
+    stubFetch({
+      '/api/agents/agent-elvis': { body: { ...AGENT_ELVIS_DETAIL_FULL, description: null } },
+      '/api/orgs': { body: ADMIN_ORGS },
+      '/api/orgs/o1/agents/agent-elvis/credentials': { body: AGENT_CREDS_GITHUB },
+    });
+    const html = htmlOf(await loadAgent());
+    expect(html).toContain('No instructions yet');
+    expect(html).toContain('Add instructions');
+  });
+
+  it('capability read shows the structured specialties (human labels) and the tier ramp', async () => {
+    withId('agent-elvis');
+    stubFetch(adminRoutes());
+    const html = htmlOf(await loadAgent());
+    // lowercase wire tokens render as human labels in the read view
+    expect(html).toContain('>TypeScript<');
+    expect(html).toContain('>Node<');
+    expect(html).toContain('class="tierbar"'); // tier ramp
+    expect(html).toContain('$25 / day'); // cost ceiling via money()
+  });
+
+  it('credentials card: GitHub set (masked fingerprint) + Shortcut not-configured; never the token', async () => {
+    withId('agent-elvis');
+    stubFetch(adminRoutes());
+    const html = htmlOf(await loadAgent());
+    expect(html).toContain('token ••••9f3c'); // masked fingerprint, never a token
+    expect(html).toContain('GitHub');
+    expect(html).toContain('Shortcut');
+    expect(html).toContain('Active'); // github status
+    expect(html).toContain('Not configured'); // shortcut status
+    expect(html).toContain('data-act="cred-edit" data-provider="github"'); // Replace
+    expect(html).toContain('data-act="cred-remove" data-provider="github"'); // two-step remove available
+    expect(html).toContain('data-conn-test="github"'); // the connection-test affordance
+    expect(html).toContain('data-conn-test="shortcut"');
+  });
+
+  it('credentials: a not-configured platform offers Set (no Remove); the read failed → both Not configured', async () => {
+    withId('agent-elvis');
+    stubFetch(adminRoutes(AGENT_CREDS_EMPTY));
+    const html = htmlOf(await loadAgent());
+    // both providers unset → Set token, no Remove
+    expect((html.match(/Not configured/g) ?? []).length).toBe(2);
+    expect(html).toContain('Set token');
+    expect(html).not.toContain('data-act="cred-remove"');
   });
 });
 

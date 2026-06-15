@@ -1,0 +1,78 @@
+/* Agent detail (Slice D) — the NEW surfaces only: the specialty tag-input, the connection-test result,
+   the description block, and the capability edit helpers (number suffixes, the "No cap" check, the tier
+   preview). Everything else reuses .ca-* (roster.css), .vk-* / .conn-status (settings.css/connections.css),
+   .seg / .logs / .pcols / .pcard (app-views.css). Tokens only, both themes — no raw hex/rgb here. */
+
+/* ── Identity read block ─────────────────────────────────────────────────────── */
+.id-read { display: flex; gap: 16px; align-items: flex-start; }
+.id-read-av { flex: none; }
+.id-read-meta { flex: 1; min-width: 0; }
+.id-read-meta .cap-row:first-of-type { border-top: none; padding-top: 0; }
+
+/* ── 2. Description block (raw-only v1; Rendered|Raw toggle swaps a wrap class, never HTML) ───────── */
+.desc-view { display: flex; flex-direction: column; gap: 12px; }
+.desc-seg { align-self: flex-start; }
+.desc-body {
+  margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--bg-sub); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--fs-sm);
+  line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto;
+}
+/* The Raw pane is visually identical text (escaped, mono); the class is a hook for a future renderer. */
+.desc-body.raw { background: var(--surface-2); }
+.desc-form { margin-top: 14px; }
+.desc-text { min-height: 200px; resize: vertical; line-height: 1.6; }
+
+/* ── 5a. Specialty tag-input (taxonomy-bound: removable chips + a constrained entry) ──────────────── */
+.spec-input {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface);
+}
+.spec-input:focus-within { border-color: color-mix(in srgb, var(--signal) 55%, transparent); box-shadow: var(--focus-ring-soft); }
+.spec-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.spec-chips:empty { display: none; }
+.spec-chip { display: inline-flex; align-items: center; gap: 6px; padding-right: 5px; }
+.spec-x {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 3px; margin: -3px -2px -3px 0;
+  border: none; border-radius: var(--radius-xs); background: transparent; color: var(--fg-4);
+  font-size: var(--fs-2xs); line-height: 1; cursor: pointer;
+}
+.spec-x:hover { color: var(--fg); background: var(--surface-2); }
+.spec-x:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.spec-entry { flex: 1; min-width: 140px; border: none; background: transparent; padding: 4px 6px; box-shadow: none; }
+.spec-entry:focus { outline: none; box-shadow: none; border: none; }
+
+/* ── 5b. Tier-range preview + reset-to-default link ───────────────────────────── */
+.tier-preview { padding: 6px 0 2px; }
+.ca-reset {
+  align-self: flex-start; margin-top: 6px; padding: 0; border: none; background: transparent;
+  color: var(--signal-2); font-size: var(--fs-2xs); font-family: inherit; cursor: pointer; text-decoration: underline;
+}
+.ca-reset:hover { color: var(--signal); }
+.ca-reset:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: var(--radius-xs); }
+
+/* ── 5c/5d. Number inputs with a unit prefix/suffix + the "No cap" check ──────── */
+.ca-suffixed { display: flex; align-items: center; gap: 8px; }
+.ca-suffixed .ca-input { flex: 1; min-width: 0; }
+.ca-prefix, .ca-suffix { font-size: var(--fs-sm); color: var(--fg-4); flex: none; }
+.ca-check { display: inline-flex; align-items: center; gap: 7px; margin-top: 8px; font-size: var(--fs-xs); color: var(--fg-3); cursor: pointer; }
+.ca-check input { accent-color: var(--signal); }
+.ca-err[data-spec-err], .ca-err[data-spec-err]:empty { margin-top: 4px; }
+.ca-err[data-spec-err]:empty { display: none; }
+
+/* ── 6. Connection-test result (idle → testing → pass/fail) — reuses the .conn-status token set so the
+      label+glyph+color treatment matches; status is NEVER color-alone (a label + a glyph always show). */
+.conn-test { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.conn-test-result {
+  display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+}
+.conn-test-result:empty { display: none; }
+.conn-test-result .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.conn-test-result .d.hollow { background: transparent; border: 1.5px solid currentColor; }
+.conn-test-result svg { width: 13px; height: 13px; }
+.conn-test-result.testing { color: var(--fg-4); }
+.conn-test-result.pass { color: var(--green); }
+.conn-test-result.fail { color: var(--amber); text-transform: none; letter-spacing: normal; }
+@media (prefers-reduced-motion: no-preference) {
+  .conn-test-result.testing .d { animation: astate-pulse 1.6s var(--ease) infinite; }
+}

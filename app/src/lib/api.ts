@@ -16,6 +16,7 @@
 
 import type {
   Agent,
+  AgentCredentialsResponse,
   AgentDetail,
   ConnectionsResponse,
   CredentialAuditResponse,
@@ -472,6 +473,124 @@ export const deleteVendorCredential = (provider: string) =>
   del<{ ok: true } | { error: string }>(`/api/orgs/credentials/${encodeURIComponent(provider)}`);
 /** Read the credential governance audit trail (admin+; newest first). */
 export const getCredentialAudit = () => get<CredentialAuditResponse>('/api/orgs/credentials/audit');
+
+// ── per-agent platform credentials (slice SC-3-B / Slice D: agent-detail "Platform credentials") ──
+// An agent's OWN GitHub/Shortcut token (so it acts on a ticket/PR AS ITSELF). WRITE-ONLY: the read shape
+// never carries a token, only a status + fingerprint; `set` validates the token live before sealing (a
+// rejected token → 400 code:'key_invalid', lifted to the conflict channel like the vendor path). The
+// routes are org-scoped in the PATH (/api/orgs/:orgId/agents/:agentId/credentials); the server fails
+// closed if the path org ≠ the caller's active org, so the orgId here must be the active one. Reads are
+// member+; writes + /test are admin+ (the server enforces it — the UI gate is UX, not the boundary).
+
+/** Resolve the caller's active org id (for the org-scoped credential routes). Returns null on any read
+ *  failure — the caller renders the credential card disabled rather than hitting a wrong-org 403. */
+export async function activeOrgId(): Promise<string | null> {
+  const res = await getOrgs();
+  if (res.kind !== 'ok') return null;
+  const active = res.data.orgs.find((o) => o.active) ?? res.data.orgs[0];
+  return active?.id ?? null;
+}
+
+/** Read an agent's platform-credential statuses (no token — status + fingerprint only). */
+export const getAgentCredentials = (orgId: string, agentId: string) =>
+  get<AgentCredentialsResponse>(
+    `/api/orgs/${encodeURIComponent(orgId)}/agents/${encodeURIComponent(agentId)}/credentials`
+  );
+
+type AgentCredentialSetBody =
+  | { ok: true; provider: string; fingerprint: string }
+  | { error: string; code?: string };
+
+/**
+ * Set (or replace) an agent's token for a platform. The server VALIDATES the token live before sealing
+ * it — a rejected token is a 400 `{error, code:'key_invalid'}`. Mirrors `setVendorCredential` exactly
+ * (CSRF + one self-healing 403 retry) INCLUDING the 400-lift: the shared `classify` collapses a 400 to
+ * an opaque 'error', so this lifts a parseable 400 into the `conflict` channel carrying its code, leaving
+ * the shared write path untouched. The token is WRITE-ONLY: sent once, never echoed back.
+ */
+export async function setAgentCredential(
+  orgId: string,
+  agentId: string,
+  provider: string,
+  token: string
+): Promise<WriteResult<AgentCredentialSetBody>> {
+  let csrf = await ensureCsrf();
+  if (csrf === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const path = `/api/orgs/${encodeURIComponent(orgId)}/agents/${encodeURIComponent(agentId)}/credentials`;
+  const send = (t: string): Promise<Response> =>
+    fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify({ provider, token }),
+    });
+  let res: Response;
+  try {
+    res = await send(csrf);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  // A live-rejected token (400, parseable) surfaces via the conflict channel so the view can read its
+  // `code`. An unparseable 400 stays an honest 'error' (never a fabricated conflict).
+  if (res.status === 400) {
+    try {
+      return { kind: 'conflict', data: (await res.json()) as AgentCredentialSetBody };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  return classify<AgentCredentialSetBody>(res);
+}
+
+/** Remove an agent's token for a platform. */
+export const deleteAgentCredential = (orgId: string, agentId: string, provider: string) =>
+  del<{ ok: true } | { error: string }>(
+    `/api/orgs/${encodeURIComponent(orgId)}/agents/${encodeURIComponent(agentId)}/credentials/${encodeURIComponent(provider)}`
+  );
+
+/**
+ * Live-probe a SUBMITTED (just-entered) token for an agent's platform, pre-save. Never unseals a stored
+ * token; never persists. The 200 body is `{ok:true}` or `{ok:false, reason}` (a curated reason string —
+ * never the token). A bad provider/token is a 400; this lifts a parseable 400 into the conflict channel
+ * (mirroring `setAgentCredential`) so the caller can surface the server's message.
+ */
+export async function testAgentCredential(
+  orgId: string,
+  agentId: string,
+  provider: string,
+  token: string
+): Promise<WriteResult<{ ok: true } | { ok: false; reason: string } | { error: string }>> {
+  let csrf = await ensureCsrf();
+  if (csrf === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const path = `/api/orgs/${encodeURIComponent(orgId)}/agents/${encodeURIComponent(agentId)}/credentials/${encodeURIComponent(provider)}/test`;
+  const send = (t: string): Promise<Response> =>
+    fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify({ token }),
+    });
+  let res: Response;
+  try {
+    res = await send(csrf);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  if (res.status === 400) {
+    try {
+      return { kind: 'conflict', data: (await res.json()) as { error: string } };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  return classify<{ ok: true } | { ok: false; reason: string }>(res);
+}
 
 /** Begin the GitHub App install/connect flow (slice 5c). A REDIRECT-OUT (session+admin gated
  *  server-side), NOT an in-page write — the browser leaves to GitHub and returns via the Setup URL. */

@@ -309,3 +309,24 @@ export interface CredentialAuditEvent {
 export interface CredentialAuditResponse {
   events: CredentialAuditEvent[];
 }
+
+// ── per-agent platform credentials (slice SC-3-B / Slice D: agent-detail "Platform credentials") ──
+// An agent's OWN platform token (its GitHub token, its Shortcut Agent-User token) so it acts on a
+// ticket/PR AS ITSELF. WRITE-ONLY, exactly like the vendor key: the read shape NEVER carries a token,
+// only a status + a non-reversible fingerprint. The provider taxonomy is 'github' | 'shortcut'
+// (mirrors the server's isAgentCredentialProvider — anthropic/linear are NOT agent-credential providers).
+export type AgentCredentialProvider = 'github' | 'shortcut';
+
+/** One agent platform-credential status (GET .../credentials) — status + fingerprint only, never a token.
+ *  `status` is 'active' when a token is sealed for the provider, 'invalid' when the last validation failed. */
+export interface AgentCredentialStatus {
+  provider: AgentCredentialProvider;
+  status: 'active' | 'invalid';
+  /** A short non-reversible fingerprint of the sealed token (never the token itself). */
+  fingerprint: string | null;
+  lastValidatedAt: string | null;
+}
+
+export interface AgentCredentialsResponse {
+  credentials: AgentCredentialStatus[];
+}
