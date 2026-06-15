@@ -624,10 +624,12 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       expect(r).toBe('ok');
     }
 
-    /** Seed `n` ACTIVE (claimed) tasks for an agent, so countActiveByAgent reflects real load. */
-    async function seedActive(agent: string, n: number): Promise<void> {
+    /** Seed `n` ACTIVE (claimed) tasks for an agent, so countActiveByAgent reflects real load. The repo
+     *  defaults to REPO; pass a different repo to load the AGENT without loading REPO's per-project gate
+     *  (per-project active is per-REPO, so off-REPO tasks raise the agent's count but not REPO's). */
+    async function seedActive(agent: string, n: number, repoRef: string = REPO): Promise<void> {
       for (let i = 0; i < n; i++) {
-        const t = await store.getOrCreateTask(ORG, { externalStoryId: `active-${agent}-${i}`, platform: 'shortcut', repoRef: REPO });
+        const t = await store.getOrCreateTask(ORG, { externalStoryId: `active-${agent}-${i}-${repoRef}`, platform: 'shortcut', repoRef });
         await pool.query(`UPDATE task SET status='claimed', claimed_by=$2 WHERE id=$1`, [t.id, agent]);
       }
     }
@@ -646,7 +648,10 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
     it('dispatches to the LEAST-LOADED eligible agent (the core EM pick)', async () => {
       await bindManager();
       const busy = await addAgent('Busy', {}); // Elvis (agentId) idle; Busy has 2 active
-      await seedActive(busy, 2);
+      // Load Busy on a DIFFERENT repo: this isolates the WINNER-PICK (Busy's agent-load makes it the
+      // worse pick) WITHOUT firing REPO's per-project gate, which is per-REPO and would otherwise (limit 1)
+      // block the dispatch the moment REPO has any active task.
+      await seedActive(busy, 2, '/repos/other');
 
       const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, busy])));
       expect(outcome.kind).toBe('dispatched');
@@ -745,6 +750,51 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
       await pool.query(`UPDATE task SET preferred_agent_id=$2 WHERE id=$1`, [t.id, busy]);
       const outcome = await orchestrateTaskAssigned(emEvent, deps(directoryOver([agentId, busy]), TIER_MEDIUM_CONTENT, 10));
       expect(outcome.kind === 'dispatched' && outcome.agentId).toBe(busy);
+    });
+
+    it('per-project gate is per-REPO: a 2nd task on a DIFFERENT repo dispatches even with REPO at limit', async () => {
+      await bindManager();
+      // Bind the SAME manager to a second project so its router engages too. REPO is at its limit (1
+      // active), but OTHER is empty — the gate counts per-REPO, so the OTHER task must dispatch.
+      const OTHER = '/repos/em-other';
+      const otherProject = await store.getOrCreateProject(ORG, OTHER);
+      const { managerId } = await store.createManager(ORG, 'EM2');
+      expect(await store.setProjectManager(ORG, otherProject, managerId)).toBe('ok');
+      await identity.setCapabilityProfile({
+        agentId, maxTier: 'ultra', tiersCovered: ['basic', 'low', 'medium', 'hard', 'ultra'],
+        languageSpecialties: ['typescript'], frameworkSpecialties: [], concurrencyLimit: 4,
+        costCeiling: 100, successRate: 0.9, avgLatencyMs: 1000,
+      });
+      await seedActive(agentId, 1, REPO); // REPO at its per-project limit of 1
+
+      const outcome = await orchestrateTaskAssigned(
+        { ...emEvent, externalStoryId: 'sc-em-other-repo', repoHint: OTHER },
+        deps(directoryOver([agentId]), TIER_MEDIUM_CONTENT)
+      );
+      expect(outcome.kind === 'dispatched' && outcome.agentId).toBe(agentId);
+    });
+
+    it('per-project gate FIRES: a 2nd task on the SAME repo at limit → no_em_capacity (left routable)', async () => {
+      await bindManager();
+      // Elvis is tier-eligible AND has agent headroom (concurrencyLimit 4), so the winner-pick succeeds.
+      // But REPO already has 1 active task and perProjectLimit defaults to 1 → the per-PROJECT gate blocks
+      // the dispatch. This must be VISIBLE as no_em_capacity (a transient repo-busy soft-wait), not parked.
+      await identity.setCapabilityProfile({
+        agentId, maxTier: 'ultra', tiersCovered: ['basic', 'low', 'medium', 'hard', 'ultra'],
+        languageSpecialties: ['typescript'], frameworkSpecialties: [], concurrencyLimit: 4,
+        costCeiling: 100, successRate: 0.9, avgLatencyMs: 1000,
+      });
+      await seedActive(agentId, 1, REPO); // REPO at its per-project limit of 1 (agent still has slots)
+
+      const outcome = await orchestrateTaskAssigned(
+        { ...emEvent, externalStoryId: 'sc-em-same-repo' },
+        deps(directoryOver([agentId]), TIER_MEDIUM_CONTENT)
+      );
+      expect(outcome.kind).toBe('no_em_capacity'); // the per-PROJECT gate, made visible
+      if (outcome.kind !== 'no_em_capacity') return;
+      const task = await store.getTask(ORG, outcome.taskId);
+      expect(task?.status).not.toBe('needs_attention'); // NOT parked — routable for a soft wait
+      expect(task?.lastError).toBeNull();
     });
   });
 

@@ -559,6 +559,16 @@ export async function orchestrateTaskAssigned(
 
     const ranked = matchCapability(estimate, candidates);
 
+    // §EM v1 slice 1 — resolve the task's PROJECT + its MANAGER ONCE, here, so the winner-pick (the EM
+    // router) and the dispatch gate (the EM-visible block) read the SAME values and cannot disagree. The
+    // project is re-resolved FRESH each pass (a project that lost its EM mid-flight cleanly falls back to
+    // legacy on the next re-drive). A null repoRef means there is no project — getOrCreateProject still
+    // resolves the per-org "Unassigned" bucket for routing, but the per-PROJECT gate treats null as 0
+    // (no repo → no merge-safety throttle). isEmProject decides EM-visible-vs-legacy at BOTH sites.
+    const projectId = await deps.store.getOrCreateProject(orgId, task.repoRef);
+    const managerId = await deps.store.getManagerForProject(orgId, projectId);
+    const isEmProject = managerId !== null;
+
     // §5d + W3-S1 — ASSIGNMENT INTAKE: a routing PREFERENCE picks a specific agent; otherwise the
     // routing engine (the crown jewel) picks the top eligible candidate. Two preference sources, in
     // precedence order: (1) the Tasca-side `preferred_agent_id` — an accepted PM-assistant routing
@@ -598,12 +608,8 @@ export async function orchestrateTaskAssigned(
       // (3) no explicit preference → the routing engine picks. On an EM-managed project the EM is the
       // router: it picks the LEAST-LOADED eligible agent (deterministic tie-breaks), independent of the
       // legacy capability SCORE. Off an EM project, the legacy top-ranked pick is unchanged. The manager
-      // is re-resolved FRESH each pass (a project that lost its EM mid-flight cleanly falls back to
-      // legacy on the re-drive); the project key is the SAME getOrCreateProject the gate resolves, so
-      // the two reads cannot disagree.
-      const projectId = await deps.store.getOrCreateProject(orgId, task.repoRef);
-      const managerId = await deps.store.getManagerForProject(orgId, projectId);
-      if (managerId) {
+      // was resolved ONCE above (shared with the gate), so the two reads cannot disagree.
+      if (isEmProject) {
         // Eligibility comes from matchCapability (tier-eligible + idle/under-concurrency); the SCORE is
         // NOT consulted. Among the eligible, pick the lowest activeCount; ties → highest successRate,
         // then agent id asc (deterministic). em_cleared is irrelevant here — a cleared task still routes.
@@ -667,17 +673,35 @@ export async function orchestrateTaskAssigned(
     const winner = { agentId: winnerId };
     const winningCandidate = candidates.find((c) => c.profile.agentId === winner.agentId)!;
 
-    // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out).
+    // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out). Two ORTHOGONAL limits:
+    //  - perAgentActive: the winner's ORG-WIDE active count (the per-AGENT concurrencyLimit — eligibility).
+    //  - perProjectActive: the real count of active tasks ON this repo, ANY agent (per-PROJECT merge-safety:
+    //    two agents on one repo risk PR conflicts). A null repoRef has no project → 0 (gate can't fire).
+    // The mis-wired version fed activeCount (org-wide per-agent) into BOTH, which silently serialized any
+    // multi-slot agent. These are separate counts now.
+    const perProjectActive = task.repoRef !== null ? await deps.store.countActiveOnProject(orgId, task.repoRef) : 0;
     const gate = canDispatch(
       winningCandidate.profile,
       {
         perAgentActive: winningCandidate.activeCount,
-        perProjectActive: winningCandidate.activeCount,
+        perProjectActive,
         repoBusy: false,
       },
       { perProjectLimit }
     );
     if (!gate.ok) {
+      // The winner is eligible but the REPO is at capacity — a transient soft-wait, not a staffing gap. On
+      // an EM project make it VISIBLE as no_em_capacity (same as all-agents-busy): leave the task ROUTABLE
+      // (no claim ran), it re-drives when the repo frees. Off an EM project keep the legacy no_candidate
+      // (also routable, as today). The manager was resolved ONCE above so this matches the winner-pick.
+      if (isEmProject) {
+        deps.logger?.info?.('coordination: EM project repo at capacity — task left routable (soft wait)', {
+          taskId: task.id,
+          repoRef: task.repoRef,
+          perProjectActive,
+        });
+        return { kind: 'no_em_capacity', taskId: task.id };
+      }
       return { kind: 'no_candidate', taskId: task.id };
     }
 
