@@ -2,6 +2,7 @@
 export * from './ports';
 export * from './tier';
 export * from './match';
+export * from './specialty';
 export * from './claim';
 export * from './concurrency';
 export * from './breaker';
