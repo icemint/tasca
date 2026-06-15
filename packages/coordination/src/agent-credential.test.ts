@@ -50,10 +50,11 @@ describe('agent credential fingerprint — domain-separated from the vendor fing
 });
 
 describe('isAgentCredentialProvider', () => {
-  it('accepts shortcut, rejects anything else', () => {
+  it('accepts shortcut + github, rejects anything else', () => {
     expect(isAgentCredentialProvider('shortcut')).toBe(true);
+    expect(isAgentCredentialProvider('github')).toBe(true);
     expect(isAgentCredentialProvider('anthropic')).toBe(false);
-    expect(isAgentCredentialProvider('github')).toBe(false);
+    expect(isAgentCredentialProvider('linear')).toBe(false);
   });
 });
 

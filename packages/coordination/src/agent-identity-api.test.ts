@@ -36,6 +36,12 @@ class FakeStore implements AgentCredentialStore {
   async getSealedAgentCredential(org: string, agent: string, p: AgentCredentialProvider) {
     return this.rows.get(this.key(org, agent, p))?.sealed ?? null;
   }
+  async getAgentCredentialStatuses() {
+    return [];
+  }
+  async deleteAgentCredential(org: string, agent: string, p: AgentCredentialProvider) {
+    return this.rows.delete(this.key(org, agent, p));
+  }
 }
 
 class FakeIdentity implements IdentityBindingWriter {

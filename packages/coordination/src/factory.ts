@@ -17,7 +17,7 @@ import { makeUsageSink } from './usage-context';
 import { PgCoordinationStore } from './store';
 import { PgOrgMembershipRepo } from './membership';
 import { PgGitHubInstallStateRepo, type InstallAccountResolver } from './github-connect';
-import { VendorKeyResolver, ManagerCredentialResolver, type VendorValidator, type AgentCredentialResolver, type ConnectionCredentialResolver } from './vendor-credential';
+import { VendorKeyResolver, ManagerCredentialResolver, type VendorValidator, type AgentCredentialResolver, type AgentCredentialValidator, type ConnectionCredentialResolver } from './vendor-credential';
 import { makeEmReviewGate, type ShortcutCommentReader } from './em-review-gate';
 import { makeEmBlockExplainer } from './em-block-explainer';
 import type { ShortcutWriteBack } from './shortcut-status-reporter';
@@ -63,10 +63,12 @@ export interface CreateCoordinationDeps {
    *  validate-on-input probe. Absent → the credential API is not wired. */
   vendorCredential?: { masterKey: Buffer | null; validator: VendorValidator };
   /** Per-agent platform identity (slice SC-3): the env-held master key (null → the set surface 503s).
-   *  Wires POST /api/orgs/:orgId/agents/:agentId/identity/shortcut and shares the AgentCredentialResolver
-   *  the host's Shortcut status reporter reads (so a set busts the reporter's cache on this node).
-   *  Absent → the agent-identity API is not wired. */
-  agentCredential?: { masterKey: Buffer | null; resolver: AgentCredentialResolver };
+   *  Wires POST /api/orgs/:orgId/agents/:agentId/identity/shortcut and the per-agent credential API
+   *  (slice SC-3-B: GET/POST/DELETE .../credentials + .../:provider/test), sharing the
+   *  AgentCredentialResolver the host's Shortcut status reporter reads (so a set busts the reporter's
+   *  cache on this node). `validator` is the live per-provider platform probe (validate-on-input).
+   *  Absent → neither agent-credential surface is wired. */
+  agentCredential?: { masterKey: Buffer | null; resolver: AgentCredentialResolver; validator: AgentCredentialValidator };
   /** Per-connection secrets (slice SC-1): the env-held master key (null → the set surface 503s) + the
    *  shared ConnectionCredentialResolver. Wires POST /api/orgs/:orgId/connections/shortcut (admin-gated,
    *  write-only set of a workspace→project binding + its sealed secrets) AND the connection-scoped
@@ -400,6 +402,21 @@ export function createCoordination(
             store,
             resolver: input.agentCredential.resolver,
             identity,
+            roster,
+            masterKey: input.agentCredential.masterKey,
+            membership,
+            // Governance audit trail: the same store implements GovernanceAuditSink.
+            audit: store,
+            ...(input.verifySession !== undefined ? { verifySession: input.verifySession } : {}),
+            ...(input.logger !== undefined ? { logger: input.logger } : {}),
+          },
+          // The per-agent platform-credential API (slice SC-3-B) — GET/POST/DELETE an agent's own
+          // GitHub + Shortcut tokens (+ /:provider/test). Admin-gated mutations, write-only, sharing
+          // the same resolver (a set/delete busts the reporter's cache on this node) + validator.
+          agentCredentialApi: {
+            store,
+            resolver: input.agentCredential.resolver,
+            validator: input.agentCredential.validator,
             roster,
             masterKey: input.agentCredential.masterKey,
             membership,

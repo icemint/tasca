@@ -14,6 +14,7 @@ import type {
   VendorCredentialStatus,
   VendorCredentialStore,
   AgentCredentialProvider,
+  AgentCredentialStatus,
   AgentCredentialStore,
   ConnectionCredentialKind,
   ConnectionCredentialStore,
@@ -971,6 +972,29 @@ export class PgCoordinationStore
     );
     const row = res.rows[0];
     return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
+  }
+
+  async getAgentCredentialStatuses(orgId: string, agentId: string): Promise<AgentCredentialStatus[]> {
+    // ORG+agent-SCOPED; returns status + fingerprint ONLY (never the ciphertext/token).
+    const res = await this.db.query<{ provider: string; status: string; key_fingerprint: string; last_validated_at: Date | null }>(
+      `SELECT provider, status, key_fingerprint, last_validated_at
+         FROM org_agent_credential WHERE org_id = $1 AND agent_id = $2 ORDER BY provider`,
+      [orgId, agentId]
+    );
+    return res.rows.map((r) => ({
+      provider: r.provider as AgentCredentialProvider,
+      status: r.status as 'active' | 'invalid',
+      fingerprint: r.key_fingerprint,
+      lastValidatedAt: r.last_validated_at ? toIso(r.last_validated_at) : null,
+    }));
+  }
+
+  async deleteAgentCredential(orgId: string, agentId: string, provider: AgentCredentialProvider): Promise<boolean> {
+    const res = await this.db.query(
+      `DELETE FROM org_agent_credential WHERE org_id = $1 AND agent_id = $2 AND provider = $3`,
+      [orgId, agentId, provider]
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   // ── Per-connection platform credentials (slice SC-1) — sealed at rest; no method returns plaintext ─

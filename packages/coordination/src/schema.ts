@@ -440,6 +440,23 @@ CREATE TABLE IF NOT EXISTS org_agent_credential (
 CREATE INDEX IF NOT EXISTS org_agent_credential_org_idx ON org_agent_credential (org_id);`;
 
 /**
+ * Widen org_agent_credential.provider to include 'github' (slice SC-3-B) on an ALREADY-MIGRATED DB. The
+ * CREATE TABLE above only fires on a fresh DB (IF NOT EXISTS), so its inline CHECK never re-applies — an
+ * existing prod table keeps the OLD constraint (which rejects 'github') unless we drop+recreate it here.
+ * (The repo has hit this exact "inline CHECK never re-applies on a prod table" bug before — see the
+ * task_status / usage_event widenings.) The inline CHECK is auto-named `org_agent_credential_provider_check`
+ * by Postgres; we drop it IF EXISTS and re-add the widened set. Idempotent + safe to re-run (DROP ... IF
+ * EXISTS, then a named ADD guarded by the duplicate_object catch). Applied AFTER AGENT_CREDENTIAL_TABLE_DDL
+ * so the table exists either way.
+ */
+export const AGENT_CREDENTIAL_PROVIDER_DDL = `
+ALTER TABLE org_agent_credential DROP CONSTRAINT IF EXISTS org_agent_credential_provider_check;
+DO $$ BEGIN
+  ALTER TABLE org_agent_credential ADD CONSTRAINT org_agent_credential_provider_check
+    CHECK (provider IN ('shortcut','github'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;`;
+
+/**
  * Per-connection platform credentials (slice SC-1): one row per (org, connection, kind). Stores ONLY
  * the AEAD ciphertext + nonce + auth tag (sealed under the env-held master key — see vendor-credential.ts)
  * + a non-reversible fingerprint + status. NO plaintext secret. This is the per-connection secret vault

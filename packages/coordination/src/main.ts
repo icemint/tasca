@@ -40,14 +40,14 @@ import { parseInstallationEvent } from '@tasca/contracts';
 import type { TaskInput } from '@tasca/routing';
 import { createCoordination } from './factory';
 import { PgCoordinationStore } from './store';
-import { loadMasterKey, liveVendorValidator, AgentCredentialResolver, ConnectionCredentialResolver } from './vendor-credential';
+import { loadMasterKey, liveVendorValidator, liveAgentCredentialValidator, AgentCredentialResolver, ConnectionCredentialResolver } from './vendor-credential';
 import { ShortcutStatusReporter } from './shortcut-status-reporter';
 import { ORG_MEMBERSHIP_DDL, PgOrgMembershipRepo } from './membership';
 import { singleTenantEnabled, resolveInstanceOrgId } from './instance';
 import { GITHUB_INSTALL_STATE_TABLE_DDL, GITHUB_CONNECTION_UNIQUE_DDL, PgGitHubInstallStateRepo } from './github-connect';
 import { ORG_AGENT_TABLE_DDL } from './roster';
 import { GitHubStatusReporter, routingStatusReporter } from './github-status-reporter';
-import { COORDINATION_SCHEMA_DDL, AGENT_CREDENTIAL_TABLE_DDL } from './schema';
+import { COORDINATION_SCHEMA_DDL, AGENT_CREDENTIAL_TABLE_DDL, AGENT_CREDENTIAL_PROVIDER_DDL } from './schema';
 import type { StatusReporter, WebhookVerifier, Logger } from './ports';
 import type { RepoProvisioner, TaskContentSource } from './orchestrate';
 import { GitAppRepoProvisioner } from './repo-provisioner';
@@ -106,6 +106,7 @@ async function applySchema(pool: Pool): Promise<void> {
     GITHUB_CONNECTION_UNIQUE_DDL, // slice 5c: one github account → one connection (DB-enforced re-bind guard)
     ORG_AGENT_TABLE_DDL, // slice 5d: org↔agent roster join (FKs organization + agent)
     AGENT_CREDENTIAL_TABLE_DDL, // slice SC-3: per-agent platform tokens (FKs organization + agent → after both)
+    AGENT_CREDENTIAL_PROVIDER_DDL, // slice SC-3-B: widen the provider CHECK to add 'github' on an already-migrated DB
   ];
   for (const ddl of statements) {
     await pool.query(ddl);
@@ -568,7 +569,7 @@ async function main(): Promise<void> {
     // Per-agent identity (slice SC-3): wire the agent-identity set-API only when the shortcut write-back
     // resolver was built (master key + shortcut secret present), sharing that resolver for cache-bust.
     ...(agentCredentialResolver
-      ? { agentCredential: { masterKey: agentMasterKey, resolver: agentCredentialResolver } }
+      ? { agentCredential: { masterKey: agentMasterKey, resolver: agentCredentialResolver, validator: liveAgentCredentialValidator() } }
       : {}),
     // Per-connection secrets (slice SC-1): wire the connection set-API + the connection-scoped webhook
     // route when the vault master key is present, sharing the resolver (so a set busts its cache) and
