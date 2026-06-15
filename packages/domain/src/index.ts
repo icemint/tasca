@@ -150,6 +150,27 @@ export const isLanguageSpecialty = (s: string): s is LanguageSpecialty =>
 export const isFrameworkSpecialty = (s: string): s is FrameworkSpecialty =>
   (FRAMEWORK_SPECIALTIES as readonly string[]).includes(s);
 
+// File-extension → specialty, for the EM router's specialty deriver (EM v1 slice 2). A file mention is a
+// precise signal: `src/foo.py` names Python whether it appears in a title or a body. Every value here MUST
+// already be a term in LANGUAGE_SPECIALTIES/FRAMEWORK_SPECIALTIES above — the deriver only ever produces
+// specialties the capability editor can offer, so a derived requirement is always one an agent can carry.
+export const EXTENSION_TO_SPECIALTY: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  py: 'python', go: 'go', rs: 'rust', java: 'java', kt: 'kotlin', kts: 'kotlin',
+  swift: 'swift', rb: 'ruby', cs: 'csharp', cpp: 'cpp', cxx: 'cpp', cc: 'cpp', php: 'php', sql: 'sql',
+  vue: 'vue', svelte: 'svelte', astro: 'astro',
+};
+
+// Common written aliases → canonical specialty, for the TITLE keyword pass. Keys are the form a human
+// types ('golang', '.net', 'reactjs'); values are the canonical taxonomy term. Like the extension map,
+// every value MUST already be in the taxonomy above.
+export const SPECIALTY_SYNONYMS: Record<string, string> = {
+  py: 'python', golang: 'go', ts: 'typescript', js: 'javascript',
+  'react.js': 'react', reactjs: 'react', nodejs: 'node', 'node.js': 'node',
+  dotnet: 'dotnet', '.net': 'dotnet', rails: 'rails',
+};
+
 export interface Agent {
   id: string;
   name: string;
