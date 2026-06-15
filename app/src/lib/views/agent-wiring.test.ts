@@ -353,9 +353,114 @@ describe('agent wiring — platform credentials (issue 319, mirrors vendor-keys)
     expect(confirm.hidden).toBe(false); // revealed, awaiting confirmation
   });
 
+  it('confirming Remove fires a DELETE to the org-scoped per-agent provider path and re-renders', async () => {
+    let deletedPath: string | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0]!;
+        if (init?.method === 'DELETE') { deletedPath = path; return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }); }
+        const r = (CRED_ROUTES as Record<string, { status?: number; body?: unknown }>)[path];
+        if (!r) return new Response('not found', { status: 404 });
+        return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
+      })
+    );
+    withId('agent-elvis');
+    const el = document.createElement('div');
+    el.innerHTML = htmlOf(await loadAgent());
+    let reruns = 0;
+    wireAgent(el, async () => { reruns++; el.innerHTML = htmlOf(await loadAgent()); wireAgent(el, async () => {}); });
+
+    el.querySelector<HTMLButtonElement>('[data-act="cred-remove"][data-provider="github"]')!.click();
+    el.querySelector<HTMLButtonElement>('[data-act="cred-remove-confirm"][data-provider="github"]')!.click();
+    await tick(); await tick();
+
+    expect(deletedPath).toBe('/api/orgs/o1/agents/agent-elvis/credentials/github'); // the destructive leg actually fired
+    expect(reruns).toBeGreaterThan(0); // reconciled from server truth
+  });
+
   it('a not-configured provider offers Set token but renders no Remove + no confirm', async () => {
     const { el } = await mountAdmin({ ...CRED_ROUTES, '/api/orgs/o1/agents/agent-elvis/credentials': { body: AGENT_CREDS_EMPTY } });
     expect(el.querySelector('[data-act="cred-edit"][data-provider="shortcut"]')).toBeTruthy();
     expect(el.querySelector('[data-cred-confirm="shortcut"]')).toBeNull();
+  });
+});
+
+describe('agent wiring — description (agent.md) + cost/concurrency validation (issues 329/337/320)', () => {
+  /** Mount + capture the profile POST body (or null). Returns the live el + a getter. */
+  async function mountCapturingPost() {
+    let postBody: Record<string, unknown> | null = null;
+    let posted = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0]!;
+        if (init?.method === 'POST' && path === '/api/agents/agent-elvis/profile') {
+          posted = true;
+          postBody = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ ok: true, version: 1 }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        const r = (CRED_ROUTES as Record<string, { status?: number; body?: unknown }>)[path];
+        if (!r) return new Response('not found', { status: 404 });
+        return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
+      })
+    );
+    withId('agent-elvis');
+    const el = document.createElement('div');
+    el.innerHTML = htmlOf(await loadAgent());
+    wireAgent(el, async () => { el.innerHTML = htmlOf(await loadAgent()); wireAgent(el, async () => {}); });
+    return { el, body: () => postBody, posted: () => posted };
+  }
+
+  it('Description Save sends the markdown in the full profile patch (and keeps the capability fields)', async () => {
+    const { el, body } = await mountCapturingPost();
+    el.querySelector<HTMLButtonElement>('[data-act="desc-edit"]')!.click();
+    el.querySelector<HTMLTextAreaElement>('[data-desc-form] textarea[name="description"]')!.value = '# Elvis\nFocus on TS.';
+    el.querySelector<HTMLFormElement>('[data-desc-form]')!.dispatchEvent(new Event('submit'));
+    await tick(); await tick();
+    expect(body()!.description).toBe('# Elvis\nFocus on TS.');
+    expect(body()).toHaveProperty('maxTier'); // full coherent patch, never a partial that drops capability
+    expect(body()).toHaveProperty('costCeiling');
+  });
+
+  it('Description Save with an empty/whitespace textarea clears it to null (not "")', async () => {
+    const { el, body } = await mountCapturingPost();
+    el.querySelector<HTMLButtonElement>('[data-act="desc-edit"]')!.click();
+    el.querySelector<HTMLTextAreaElement>('[data-desc-form] textarea[name="description"]')!.value = '   ';
+    el.querySelector<HTMLFormElement>('[data-desc-form]')!.dispatchEvent(new Event('submit'));
+    await tick(); await tick();
+    expect(body()!.description).toBeNull();
+  });
+
+  it('the "No cap" toggle disables + clears the cost field and Save sends costCeiling 0', async () => {
+    const { el, body } = await mountCapturingPost();
+    el.querySelector<HTMLButtonElement>('[data-act="cap-edit"]')!.click();
+    const cost = el.querySelector<HTMLInputElement>('[data-cap-cost]')!;
+    const noCap = el.querySelector<HTMLInputElement>('[data-cap-nocap]')!;
+    noCap.checked = true;
+    noCap.dispatchEvent(new Event('change'));
+    expect(cost.disabled).toBe(true);
+    expect(cost.value).toBe(''); // cleared
+    el.querySelector<HTMLFormElement>('[data-cap-form]')!.dispatchEvent(new Event('submit'));
+    await tick(); await tick();
+    expect(body()!.costCeiling).toBe(0); // local agent — no cap
+  });
+
+  it('rejects concurrency < 1 and a negative cost ceiling inline, without writing', async () => {
+    const { el, posted } = await mountCapturingPost();
+    el.querySelector<HTMLButtonElement>('[data-act="cap-edit"]')!.click();
+    el.querySelector<HTMLInputElement>('[data-cap-conc]')!.value = '0';
+    el.querySelector<HTMLFormElement>('[data-cap-form]')!.dispatchEvent(new Event('submit'));
+    await tick();
+    expect(el.querySelector<HTMLElement>('[data-cap-err]')!.textContent).toContain('1 or more');
+    expect(posted()).toBe(false);
+
+    // reset concurrency, now a negative cost
+    el.querySelector<HTMLInputElement>('[data-cap-conc]')!.value = '2';
+    el.querySelector<HTMLInputElement>('[data-cap-cost]')!.value = '-5';
+    el.querySelector<HTMLFormElement>('[data-cap-form]')!.dispatchEvent(new Event('submit'));
+    await tick();
+    expect(el.querySelector<HTMLElement>('[data-cap-err]')!.textContent).toContain('negative');
+    expect(posted()).toBe(false);
   });
 });

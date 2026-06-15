@@ -169,7 +169,7 @@ function identityCard(a: AgentDetail, canManage: boolean): string {
     ? `<button class="ictl signal" type="button" data-act="id-edit" aria-label="Edit identity and model">Edit</button>`
     : roControl('Edit', { gate: RO_GATE_AGENT_EDIT });
 
-  const read = `<div class="id-read">
+  const read = `<div class="id-read" data-id-read>
       <div class="id-read-av">${avatar(a, 'av-lg')}</div>
       <div class="id-read-meta">
         <div class="cap-row"><span class="cap-k">Name</span><span class="cap-v">${esc(a.name)}</span></div>
@@ -617,9 +617,11 @@ function wireIdentity(el: HTMLElement, rerun: () => Promise<void>): void {
   modelInput?.addEventListener('input', syncHint);
   vendorSel?.addEventListener('change', syncHint);
 
+  const idRead = el.querySelector<HTMLElement>('[data-id-read]');
   el.querySelectorAll<HTMLButtonElement>('[data-act="id-edit"]').forEach((b) =>
     b.addEventListener('click', () => {
       clearErr();
+      if (idRead) idRead.hidden = true; // edit REPLACES the read block (mirrors description + capability cards)
       form.hidden = false;
       nameInput?.focus();
     })
@@ -627,6 +629,7 @@ function wireIdentity(el: HTMLElement, rerun: () => Promise<void>): void {
   el.querySelector<HTMLButtonElement>('[data-act="id-cancel"]')?.addEventListener('click', () => {
     clearErr();
     form.hidden = true;
+    if (idRead) idRead.hidden = false;
     el.querySelector<HTMLButtonElement>('[data-act="id-edit"]')?.focus();
   });
 
