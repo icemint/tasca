@@ -165,6 +165,9 @@ export interface RoutingDecisionRecord {
   tierEstimate: TierEstimate;
   candidates: CapabilityMatch[];
   winnerAgentId: string | null;
+  /** Who routed this task: 'em' (the EM's autonomous least-loaded pick) or 'rank' (the
+   *  legacy ranking, or an operator override). Historical/null rows read as 'rank'. */
+  policy: 'em' | 'rank';
   createdAt: string;
 }
 
@@ -465,6 +468,7 @@ export interface CoordinationStore {
       tierEstimate: TierEstimate;
       candidates: CapabilityMatch[];
       winnerAgentId: string | null;
+      policy: 'em' | 'rank';
     }
   ): Promise<void>;
 
@@ -2061,11 +2065,12 @@ export class PgCoordinationStore
       tierEstimate: TierEstimate;
       candidates: CapabilityMatch[];
       winnerAgentId: string | null;
+      policy: 'em' | 'rank';
     }
   ): Promise<void> {
     await this.db.query(
-      `INSERT INTO routing_decision (id, org_id, task_id, tier_estimate, candidates, winner_agent_id)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,
+      `INSERT INTO routing_decision (id, org_id, task_id, tier_estimate, candidates, winner_agent_id, policy)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7)`,
       [
         randomUUID(),
         orgId,
@@ -2073,6 +2078,7 @@ export class PgCoordinationStore
         JSON.stringify(input.tierEstimate),
         JSON.stringify(input.candidates),
         input.winnerAgentId,
+        input.policy,
       ]
     );
   }
@@ -2316,7 +2322,7 @@ export class PgCoordinationStore
 
   async getRoutingDecisionForTask(orgId: string, taskId: string): Promise<RoutingDecisionRecord | null> {
     const res = await this.db.query<RoutingDecisionRow>(
-      `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, created_at
+      `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, policy, created_at
          FROM routing_decision WHERE org_id = $1 AND task_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1`,
       [orgId, taskId]
     );
@@ -2327,7 +2333,7 @@ export class PgCoordinationStore
   async listRoutingDecisions(orgId: string, limit?: number): Promise<RoutingDecisionRecord[]> {
     const capped = clampLimit(limit, 50, 200);
     const res = await this.db.query<RoutingDecisionRow>(
-      `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, created_at
+      `SELECT id, task_id, tier_estimate, candidates, winner_agent_id, policy, created_at
          FROM routing_decision WHERE org_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
       [orgId, capped]
     );
@@ -2418,6 +2424,7 @@ interface RoutingDecisionRow {
   tier_estimate: TierEstimate;
   candidates: CapabilityMatch[];
   winner_agent_id: string | null;
+  policy: string | null;
   created_at: Date | string;
 }
 
@@ -2428,6 +2435,8 @@ function mapRoutingDecision(row: RoutingDecisionRow): RoutingDecisionRecord {
     tierEstimate: row.tier_estimate,
     candidates: row.candidates ?? [],
     winnerAgentId: row.winner_agent_id,
+    // Null/legacy rows predate the column — render as the legacy ranking path.
+    policy: row.policy === 'em' ? 'em' : 'rank',
     createdAt: toIso(row.created_at),
   };
 }

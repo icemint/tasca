@@ -178,6 +178,7 @@ function routingDecisionJson(d: RoutingDecisionRecord) {
     tierEstimate: d.tierEstimate.tier,
     candidates: d.candidates,
     winnerAgentId: d.winnerAgentId,
+    policy: d.policy,
     createdAt: d.createdAt,
   };
 }

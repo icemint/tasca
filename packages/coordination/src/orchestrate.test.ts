@@ -33,7 +33,7 @@ import type { MatchCandidate } from '@tasca/routing';
 
 class FakeStore implements CoordinationStore {
   tasks = new Map<string, Task>();
-  routingDecisions: Array<{ taskId: string; winnerAgentId: string | null }> = [];
+  routingDecisions: Array<{ taskId: string; winnerAgentId: string | null; policy: 'em' | 'rank' }> = [];
   pullRequests: Array<{ taskId: string; url: string }> = [];
   events = new Map<string, 'received' | 'processed'>();
 
@@ -246,8 +246,11 @@ class FakeStore implements CoordinationStore {
     t.version += 1;
     return true;
   }
-  async recordRoutingDecision(_orgId: string, input: { taskId: string; winnerAgentId: string | null }) {
-    this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId });
+  async recordRoutingDecision(
+    _orgId: string,
+    input: { taskId: string; winnerAgentId: string | null; policy: 'em' | 'rank' }
+  ) {
+    this.routingDecisions.push({ taskId: input.taskId, winnerAgentId: input.winnerAgentId, policy: input.policy });
   }
   failRecordOnce = false;
   async recordPullRequest(_orgId: string, input: { taskId: string; url: string }) {
@@ -557,6 +560,7 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     // routing decision persisted with the winner
     expect(store.routingDecisions).toHaveLength(1);
     expect(store.routingDecisions[0]!.winnerAgentId).toBe(ELVIS);
+    expect(store.routingDecisions[0]!.policy).toBe('rank'); // no manager → legacy rank path
 
     // execution + PR
     expect(execution.spawnCalls).toBe(1);
@@ -959,6 +963,7 @@ describe('orchestrateTaskAssigned — EM router pure decision logic (EM v1 slice
     ];
     const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
     expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-idle');
+    expect(store.routingDecisions[0]!.policy).toBe('em'); // #339: the EM router made the pick
   });
 
   it('(b) tie on active-count → higher successRate, then lower agent id', async () => {
@@ -1041,6 +1046,7 @@ describe('orchestrateTaskAssigned — EM router pure decision logic (EM v1 slice
       makeDeps({ store, execution, status, audit, candidates, content: labelled, names: { 'agent-busy': 'Busy' } })
     );
     expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-busy'); // the label wins over the EM
+    expect(store.routingDecisions[0]!.policy).toBe('rank'); // #339: an operator override is 'rank', not the EM's policy
   });
 
   it('(f2) an explicit preferredAgentId OVERRIDES the EM', async () => {
@@ -1056,6 +1062,7 @@ describe('orchestrateTaskAssigned — EM router pure decision logic (EM v1 slice
     ];
     const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
     expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-busy'); // the preference wins over the EM
+    expect(store.routingDecisions[0]!.policy).toBe('rank'); // #339: an operator override is 'rank', not the EM's policy
   });
 
   it('(headroom) NON-EM project: a now-live activeCount headroom term shifts the legacy rank', async () => {

@@ -247,6 +247,22 @@ describe('task inspector — the agent-authored PR actually shows', () => {
     expect(htmlOf(r)).toContain('merged');
   });
 
+  it('shows "Assigned by EM" only when the EM routed the task (issue 339 slice 3)', async () => {
+    // policy:'rank' (the default fixture) → no badge.
+    withId('task-lru');
+    stubFetch({ '/api/tasks/task-lru': { body: TASK_LRU_DETAIL } });
+    expect(htmlOf(await loadTask())).not.toContain('Assigned by EM');
+
+    // policy:'em' → the badge renders next to the routed-to agent.
+    const emRouted = {
+      ...TASK_LRU_DETAIL,
+      routingDecision: { ...TASK_LRU_DETAIL.routingDecision!, policy: 'em' as const },
+    };
+    withId('task-lru');
+    stubFetch({ '/api/tasks/task-lru': { body: emRouted } });
+    expect(htmlOf(await loadTask())).toContain('Assigned by EM');
+  });
+
   it('headers the inspector with the task TITLE when present, falling back to the story ref (QA item 325)', async () => {
     // titled: TASK_LRU_DETAIL carries a title → it heads the inspector, not the raw UUID
     withId('task-lru');

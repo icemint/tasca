@@ -108,6 +108,7 @@ export const TASK_LRU_DETAIL: TaskDetail = {
     taskId: 'task-lru',
     tierEstimate: 'medium',
     winnerAgentId: 'agent-elvis',
+    policy: 'rank',
     createdAt: '2026-06-08T00:00:00Z',
     candidates: [
       { agentId: 'agent-elvis', score: 0.92, eligible: true, reasons: ['TypeScript match'] },
