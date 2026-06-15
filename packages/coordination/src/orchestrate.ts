@@ -31,6 +31,7 @@ import {
 } from '@tasca/routing';
 import type { AdapterEvent, TaskAssignedEvent } from '@tasca/contracts';
 import type { Task, TaskStatus } from '@tasca/domain';
+import { tierAtLeast } from '@tasca/domain';
 import type { DispatchQueue } from '@tasca/db';
 import { ExecutionError, type ExecutionPort } from '@tasca/execution';
 import type { CoordinationStore } from './store';
@@ -309,7 +310,18 @@ export type OrchestrationOutcome =
   | { kind: 'awaiting_clarification'; taskId: string }
   // The EM gate has parked this task EM_CLARIFICATION_CAP times and it is STILL unclear → retired to
   // needs_attention for an operator (the EM stops asking — a perpetually-unclear story needs a human).
-  | { kind: 'needs_clarification_capped'; taskId: string };
+  | { kind: 'needs_clarification_capped'; taskId: string }
+  // On an EM-managed project (project.manager_id set) the EM found NO eligible agent for the task —
+  // the roster is non-empty but nobody is tier-eligible/available (EM v1 slice 1). The EM retired the
+  // task to needs_attention with an EM-voiced reason (and posts it on the story); distinct from the
+  // silent `no_candidate` so an EM project's no-fit is a visible, operator-actionable block.
+  | { kind: 'no_em_match'; taskId: string }
+  // EM project — tier-eligible agents EXIST but all are at their concurrency limit (transient). The
+  // task is left ROUTABLE for a soft wait (re-drives on the next event), NOT parked: parking would be a
+  // staffing-gap lie ("hire one") when the agents are merely busy. Distinct from no_em_match (a real
+  // gap) and from no_candidate (the silent non-EM no-capacity). The proactive capacity-freed re-drive +
+  // the EM "all busy" story-note are a fast-follow.
+  | { kind: 'no_em_capacity'; taskId: string };
 
 /**
  * Resolve the org a webhook event acts in (slice 5c). A CONNECTED workspace resolves to its real
@@ -327,6 +339,29 @@ export function agentLabel(labels: string[] | undefined): string | null {
     if (m) return m[1]!.trim();
   }
   return null;
+}
+
+/** The EM's least-loaded winner-pick (EM v1 slice 1): from a set of ELIGIBLE candidates, the one with
+ *  the fewest active tasks. Ties → highest successRate, then agent id ascending — fully deterministic so
+ *  the same roster + load always yields the same pick. Empty input → null (no eligible agent). The
+ *  capability SCORE is intentionally NOT consulted; load is the EM's signal. */
+function leastLoaded(eligible: MatchCandidate[]): string | null {
+  let best: MatchCandidate | null = null;
+  for (const c of eligible) {
+    if (best === null || lessLoaded(c, best)) best = c;
+  }
+  return best?.profile.agentId ?? null;
+}
+
+/** Strict "a should win over b" comparator for leastLoaded: fewer active tasks, then higher successRate,
+ *  then lower agent id (the deterministic final tie-break). successRate defaults to 0.5 (matching the
+ *  routing match's `successRate ?? 0.5`) so an unset rate doesn't sort unpredictably. */
+function lessLoaded(a: MatchCandidate, b: MatchCandidate): boolean {
+  if (a.activeCount !== b.activeCount) return a.activeCount < b.activeCount;
+  const ar = a.profile.successRate ?? 0.5;
+  const br = b.profile.successRate ?? 0.5;
+  if (ar !== br) return ar > br;
+  return a.profile.agentId < b.profile.agentId;
 }
 
 export async function resolveWebhookOrg(
@@ -524,6 +559,16 @@ export async function orchestrateTaskAssigned(
 
     const ranked = matchCapability(estimate, candidates);
 
+    // §EM v1 slice 1 — resolve the task's PROJECT + its MANAGER ONCE, here, so the winner-pick (the EM
+    // router) and the dispatch gate (the EM-visible block) read the SAME values and cannot disagree. The
+    // project is re-resolved FRESH each pass (a project that lost its EM mid-flight cleanly falls back to
+    // legacy on the next re-drive). A null repoRef means there is no project — getOrCreateProject still
+    // resolves the per-org "Unassigned" bucket for routing, but the per-PROJECT gate treats null as 0
+    // (no repo → no merge-safety throttle). isEmProject decides EM-visible-vs-legacy at BOTH sites.
+    const projectId = await deps.store.getOrCreateProject(orgId, task.repoRef);
+    const managerId = await deps.store.getManagerForProject(orgId, projectId);
+    const isEmProject = managerId !== null;
+
     // §5d + W3-S1 — ASSIGNMENT INTAKE: a routing PREFERENCE picks a specific agent; otherwise the
     // routing engine (the crown jewel) picks the top eligible candidate. Two preference sources, in
     // precedence order: (1) the Tasca-side `preferred_agent_id` — an accepted PM-assistant routing
@@ -535,8 +580,15 @@ export async function orchestrateTaskAssigned(
     let winnerId: string | null = null;
     let unhiredPreference = false;
     let requestedAgent: string | null = null;
+    // §EM v1 slice 1 — an EM project's no-fit (manager set, roster non-empty, nobody eligible) is a
+    // VISIBLE block (no_em_match), not the silent no_candidate. Tracked here, acted on below — only the
+    // EM-router path (no explicit preference/label) can set it; an explicit preference fails closed
+    // through its own unhiredPreference path.
+    let noEmMatch = false;
+    let emBusy = false;
     if (task.preferredAgentId) {
-      // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time.
+      // (1) accepted PM-assistant routing proposal — a resolved hired agent id at accept time. An
+      // explicit preference OVERRIDES the EM (autonomous-with-override): the EM branch is in the `else`.
       requestedAgent = task.preferredAgentId;
       if (candidates.some((c) => c.profile.agentId === task.preferredAgentId)) {
         winnerId = task.preferredAgentId;
@@ -544,7 +596,7 @@ export async function orchestrateTaskAssigned(
         unhiredPreference = true; // unhired since accept → fail closed (never route elsewhere silently)
       }
     } else if (labelName) {
-      // (2) platform `agent:<name>` label — resolve by name within the hired set.
+      // (2) platform `agent:<name>` label — resolve by name within the hired set. Also OVERRIDES the EM.
       requestedAgent = labelName;
       const namedId = await deps.directory.findHiredAgentByName(orgId, labelName);
       if (namedId && candidates.some((c) => c.profile.agentId === namedId)) {
@@ -553,7 +605,32 @@ export async function orchestrateTaskAssigned(
         unhiredPreference = true; // labeled an agent the org hasn't hired → fail closed below
       }
     } else {
-      winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
+      // (3) no explicit preference → the routing engine picks. On an EM-managed project the EM is the
+      // router: it picks the LEAST-LOADED eligible agent (deterministic tie-breaks), independent of the
+      // legacy capability SCORE. Off an EM project, the legacy top-ranked pick is unchanged. The manager
+      // was resolved ONCE above (shared with the gate), so the two reads cannot disagree.
+      if (isEmProject) {
+        // Eligibility comes from matchCapability (tier-eligible + idle/under-concurrency); the SCORE is
+        // NOT consulted. Among the eligible, pick the lowest activeCount; ties → highest successRate,
+        // then agent id asc (deterministic). em_cleared is irrelevant here — a cleared task still routes.
+        const eligibleIds = new Set(ranked.filter((m) => m.eligible).map((m) => m.agentId));
+        const eligible = candidates.filter((c) => eligibleIds.has(c.profile.agentId));
+        const winner = leastLoaded(eligible);
+        if (winner) {
+          winnerId = winner;
+        } else {
+          // No eligible agent — but WHY matters. A real STAFFING GAP (no agent reaches this tier) parks
+          // the task with an honest "hire one" reason. TRANSIENT CAPACITY (tier-eligible agents exist but
+          // all at their concurrency limit) must NOT park — it's not a gap; leave the task routable for a
+          // soft wait (the non-EM no-capacity path does the same). Parking busy-as-gap would tell the
+          // operator to hire someone they already have.
+          const anyTierEligible = candidates.some((c) => tierAtLeast(c.profile.maxTier, estimate.tier));
+          if (anyTierEligible) emBusy = true;
+          else noEmMatch = true;
+        }
+      } else {
+        winnerId = ranked.find((m) => m.eligible)?.agentId ?? null;
+      }
     }
 
     await deps.store.recordRoutingDecision(orgId, {
@@ -570,6 +647,25 @@ export async function orchestrateTaskAssigned(
       await explainBlock(deps, orgId, task, content, notHiredReason);
       return { kind: 'agent_not_hired', taskId: task.id };
     }
+    if (noEmMatch) {
+      // §EM v1 slice 1 — an EM project with NO eligible agent: park it VISIBLY (needs_attention) with an
+      // EM-voiced reason on the story, never the silent no_candidate. Slice 1 is tier-only, so the reason
+      // names the tier the task needs (the specialty half lands in slice 2). The EM voice mirrors the
+      // gate's clarifying comments — first person, no tooling/provenance text.
+      const noFitReason = `I don't have an agent matching this yet — needs an agent at ${estimate.tier} tier. Hire or configure one and I'll route it.`;
+      await deps.store.retireUnroutable(orgId, task.id, noFitReason);
+      deps.logger?.info?.('coordination: EM found no eligible agent — task → needs_attention', { taskId: task.id, tier: estimate.tier });
+      await explainBlock(deps, orgId, task, content, noFitReason);
+      return { kind: 'no_em_match', taskId: task.id };
+    }
+    if (emBusy) {
+      // Tier-eligible agents exist but all at capacity → transient. Leave the task ROUTABLE (no claim ran,
+      // so it stays in its pre-dispatch status), matching the non-EM no-capacity path; it re-routes on the
+      // next event. Do NOT retireUnroutable. The EM "all busy" story-note + a proactive capacity-freed
+      // re-drive are the fast-follow (they need manager-comment plumbing the dispatch path lacks today).
+      deps.logger?.info?.('coordination: EM agents all at capacity — task left routable (soft wait)', { taskId: task.id, tier: estimate.tier });
+      return { kind: 'no_em_capacity', taskId: task.id };
+    }
     if (winnerId === null) {
       return { kind: 'no_candidate', taskId: task.id };
     }
@@ -577,17 +673,35 @@ export async function orchestrateTaskAssigned(
     const winner = { agentId: winnerId };
     const winningCandidate = candidates.find((c) => c.profile.agentId === winner.agentId)!;
 
-    // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out).
+    // §6.7 — concurrency + same-repo gate (advisory pre-claim early-out). Two ORTHOGONAL limits:
+    //  - perAgentActive: the winner's ORG-WIDE active count (the per-AGENT concurrencyLimit — eligibility).
+    //  - perProjectActive: the real count of active tasks ON this repo, ANY agent (per-PROJECT merge-safety:
+    //    two agents on one repo risk PR conflicts). A null repoRef has no project → 0 (gate can't fire).
+    // The mis-wired version fed activeCount (org-wide per-agent) into BOTH, which silently serialized any
+    // multi-slot agent. These are separate counts now.
+    const perProjectActive = task.repoRef !== null ? await deps.store.countActiveOnProject(orgId, task.repoRef) : 0;
     const gate = canDispatch(
       winningCandidate.profile,
       {
         perAgentActive: winningCandidate.activeCount,
-        perProjectActive: winningCandidate.activeCount,
+        perProjectActive,
         repoBusy: false,
       },
       { perProjectLimit }
     );
     if (!gate.ok) {
+      // The winner is eligible but the REPO is at capacity — a transient soft-wait, not a staffing gap. On
+      // an EM project make it VISIBLE as no_em_capacity (same as all-agents-busy): leave the task ROUTABLE
+      // (no claim ran), it re-drives when the repo frees. Off an EM project keep the legacy no_candidate
+      // (also routable, as today). The manager was resolved ONCE above so this matches the winner-pick.
+      if (isEmProject) {
+        deps.logger?.info?.('coordination: EM project repo at capacity — task left routable (soft wait)', {
+          taskId: task.id,
+          repoRef: task.repoRef,
+          perProjectActive,
+        });
+        return { kind: 'no_em_capacity', taskId: task.id };
+      }
       return { kind: 'no_candidate', taskId: task.id };
     }
 

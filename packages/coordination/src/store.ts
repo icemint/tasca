@@ -331,6 +331,20 @@ export interface CoordinationStore {
    *  Org-scoped — never reveals another tenant's project→manager link. */
   getManagerForProject(orgId: string, projectId: string): Promise<string | null>;
 
+  /** Active-task count per agent for an org (EM v1 slice 1 — the routing load signal). Counts the
+   *  post-claim, pre-finish states (`claimed`/`executing`) grouped by the claiming agent. Org-scoped.
+   *  An agent with no active task is simply absent from the map (callers default to 0). Used to fill
+   *  each routing candidate's `activeCount` so both the legacy rank and the EM least-loaded pick see
+   *  real headroom, not a constant 0. */
+  countActiveByAgent(orgId: string): Promise<Map<string, number>>;
+
+  /** Active-task count ON a project's repo (EM v1 slice 1 — the per-PROJECT dispatch gate). Counts the
+   *  post-claim, pre-finish states (`claimed`/`executing`) whose `repo_ref` matches, regardless of which
+   *  agent holds them — this is per-REPO merge-safety (two agents on one repo risk PR conflicts), NOT
+   *  per-agent load. The task being routed is pre-dispatch (no row in those states yet) so it is never
+   *  self-counted. Org-scoped. A null `repoRef` has no project → callers skip the gate (treat as 0). */
+  countActiveOnProject(orgId: string, repoRef: string): Promise<number>;
+
   getTask(orgId: string, taskId: string): Promise<Task | null>;
 
   /** A task's content/status origin (slice W3-S1c): stored content + the parent's platform story
@@ -1359,6 +1373,34 @@ export class PgCoordinationStore
       [orgId, projectId]
     );
     return res.rows[0]?.manager_id ?? null;
+  }
+
+  async countActiveByAgent(orgId: string): Promise<Map<string, number>> {
+    // ORG-SCOPED active load: one grouped read over the post-claim, pre-finish states. `claimed_by IS
+    // NOT NULL` is implied by those states but kept explicit (a null-keyed group would be meaningless).
+    const res = await this.db.query<{ claimed_by: string; n: string }>(
+      `SELECT claimed_by, count(*) AS n
+         FROM task
+        WHERE org_id = $1 AND status IN ('claimed','executing') AND claimed_by IS NOT NULL
+        GROUP BY claimed_by`,
+      [orgId]
+    );
+    const out = new Map<string, number>();
+    for (const row of res.rows) out.set(row.claimed_by, Number(row.n));
+    return out;
+  }
+
+  async countActiveOnProject(orgId: string, repoRef: string): Promise<number> {
+    // ORG-SCOPED per-REPO active count: tasks in the post-claim, pre-finish states on this repo,
+    // regardless of claiming agent. Drives the per-project dispatch gate (merge-safety). The routed
+    // task is pre-dispatch (not yet in these states), so it never self-counts.
+    const res = await this.db.query<{ n: string }>(
+      `SELECT count(*) AS n
+         FROM task
+        WHERE org_id = $1 AND repo_ref = $2 AND status IN ('claimed','executing')`,
+      [orgId, repoRef]
+    );
+    return Number(res.rows[0]?.n ?? 0);
   }
 
   async getTaskOrigin(orgId: string, taskId: string): Promise<TaskOrigin | null> {

@@ -93,7 +93,18 @@ class FakeStore implements CoordinationStore {
   async listManagers() { return []; }
   async setManagerShortcutIdentity(): Promise<void> {}
   async setProjectManager(): Promise<'ok' | 'not_found'> { return 'ok'; }
-  async getManagerForProject(): Promise<string | null> { return null; }
+  // EM router (EM v1 slice 1). Default null → legacy rank path (this suite's existing routing tests stay
+  // unchanged). Settable so an EM-path unit test can opt a project into a manager.
+  managerForProject: string | null = null;
+  async getManagerForProject(): Promise<string | null> { return this.managerForProject; }
+  // Active-load signal (EM v1 slice 1). Default empty (every agent idle); settable per agent so a unit
+  // test can drive the least-loaded pick. The directory fake reads activeCount independently here.
+  activeByAgent = new Map<string, number>();
+  async countActiveByAgent(): Promise<Map<string, number>> { return this.activeByAgent; }
+  // Per-PROJECT active load (EM v1 slice 1 — the dispatch gate). Keyed by repoRef; default 0 (repo idle).
+  // Settable so a unit test can drive the per-project gate independently of the per-agent count.
+  activeOnProject = new Map<string, number>();
+  async countActiveOnProject(_orgId: string, repoRef: string): Promise<number> { return this.activeOnProject.get(repoRef) ?? 0; }
   async getTask(_orgId: string, taskId: string) {
     return this.tasks.get(taskId) ?? null;
   }
@@ -914,6 +925,153 @@ describe('orchestrateTaskAssigned — preferred-agent routing (accepted PM propo
     if (outcome.kind !== 'dispatched') return;
     expect(outcome.agentId).toBe('agent-mona'); // preference wins over the label
     void taskId;
+  });
+});
+
+describe('orchestrateTaskAssigned — EM router pure decision logic (EM v1 slice 1, no DB)', () => {
+  // The slice's pure routing logic (least-loaded pick, deterministic tie-break, busy-vs-gap split, the
+  // per-AGENT and per-PROJECT gates) on the in-memory fake — no Postgres. The PG suite covers the same
+  // paths against real SQL; this is the fresh-clone unit guard so a no-DB run exercises them.
+  let store: FakeStore;
+  let execution: FakeExecution;
+  let status: FakeStatus;
+  let audit: FakeAudit;
+  beforeEach(() => {
+    store = new FakeStore();
+    execution = new FakeExecution();
+    status = new FakeStatus();
+    audit = new FakeAudit();
+    store.managerForProject = 'mgr_em'; // opt every project in this suite into an EM (router engages)
+  });
+
+  // A tier:medium label pins the estimate so eligibility is deterministic per agent maxTier (no classifier).
+  const tierMedium: TaskContentSource = {
+    async fetch() { return { title: 'Build it', body: 'task body', labels: ['tier:medium'] }; },
+  };
+  function profile(id: string, over: Partial<CapabilityProfile> = {}): CapabilityProfile {
+    return { ...elvisProfile({ agentId: id }), ...over };
+  }
+
+  it('(a) dispatches to the LEAST-LOADED eligible agent', async () => {
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-busy'), state: 'idle', activeCount: 2 },
+      { profile: profile('agent-idle'), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-idle');
+  });
+
+  it('(b) tie on active-count → higher successRate, then lower agent id', async () => {
+    // All idle (active 0). 'agent-hi' has the higher successRate → wins regardless of order.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-lo', { successRate: 0.5 }), state: 'idle', activeCount: 0 },
+      { profile: profile('agent-hi', { successRate: 0.95 }), state: 'idle', activeCount: 0 },
+    ];
+    const out1 = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(out1.kind === 'dispatched' && out1.agentId).toBe('agent-hi');
+
+    // Tie on successRate too → lowest agent id wins (final deterministic tie-break).
+    const store2 = new FakeStore();
+    store2.managerForProject = 'mgr_em';
+    const tie: MatchCandidate[] = [
+      { profile: profile('agent-b', { successRate: 0.9 }), state: 'idle', activeCount: 0 },
+      { profile: profile('agent-a', { successRate: 0.9 }), state: 'idle', activeCount: 0 },
+    ];
+    const out2 = await orchestrateTaskAssigned(EVENT, makeDeps({ store: store2, execution: new FakeExecution(), status: new FakeStatus(), audit: new FakeAudit(), candidates: tie, content: tierMedium }));
+    expect(out2.kind === 'dispatched' && out2.agentId).toBe('agent-a');
+  });
+
+  it('(c) no tier-eligible agent → no_em_match (visible gap, not silent no_candidate)', async () => {
+    // Both cap at basic; the task is medium → nobody reaches the tier.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-x', { maxTier: 'basic', tiersCovered: ['basic'] }), state: 'idle', activeCount: 0 },
+      { profile: profile('agent-y', { maxTier: 'basic', tiersCovered: ['basic'] }), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind).toBe('no_em_match');
+    if (outcome.kind !== 'no_em_match') return;
+    expect(store.tasks.get(outcome.taskId)!.status).toBe('needs_attention');
+  });
+
+  it('(d) tier-eligible but all at per-AGENT capacity → no_em_capacity, left routable', async () => {
+    // One eligible agent, concurrencyLimit 1 and already 1 active → at its per-agent limit. Transient busy,
+    // not a gap: must NOT park (no_em_match) and must NOT silently no_candidate.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-full', { concurrencyLimit: 1 }), state: 'idle', activeCount: 1 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind).toBe('no_em_capacity');
+    if (outcome.kind !== 'no_em_capacity') return;
+    expect(store.tasks.get(outcome.taskId)!.status).not.toBe('needs_attention'); // left routable
+  });
+
+  it('(e) per-PROJECT at capacity (repo busy, agent has slots) → no_em_capacity, left routable', async () => {
+    // The agent IS eligible and has per-agent headroom (limit 4, 0 active), but the REPO is at the
+    // per-project limit (default 1). The per-PROJECT gate must fire — VISIBLE as no_em_capacity, routable.
+    store.activeOnProject.set('/repos/demo', 1); // EVENT.repoHint resolves to repoRef '/repos/demo'
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-ok', { concurrencyLimit: 4 }), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind).toBe('no_em_capacity');
+    if (outcome.kind !== 'no_em_capacity') return;
+    expect(store.tasks.get(outcome.taskId)!.status).not.toBe('needs_attention'); // routable soft-wait
+    expect(execution.spawnCalls).toBe(0); // no claim ran
+  });
+
+  it('(e2) per-project gate is per-REPO: a busy OTHER repo does not block this repo', async () => {
+    store.activeOnProject.set('/repos/other', 5); // a different repo is saturated
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-ok', { concurrencyLimit: 4 }), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-ok');
+  });
+
+  it('(f) an explicit agent:<name> label OVERRIDES the EM (picks the named agent, not least-loaded)', async () => {
+    const labelled: TaskContentSource = {
+      async fetch() { return { title: 'Build it', body: 'task body', labels: ['tier:medium', 'agent:Busy'] }; },
+    };
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-idle'), state: 'idle', activeCount: 0 }, // least-loaded — the EM would pick this
+      { profile: profile('agent-busy'), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(
+      EVENT,
+      makeDeps({ store, execution, status, audit, candidates, content: labelled, names: { 'agent-busy': 'Busy' } })
+    );
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-busy'); // the label wins over the EM
+  });
+
+  it('(f2) an explicit preferredAgentId OVERRIDES the EM', async () => {
+    const id = randomUUID();
+    store.tasks.set(id, {
+      id, externalStoryId: 'sc-story-1', title: null, platform: 'shortcut', status: 'routable', version: 0,
+      claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
+      preferredAgentId: 'agent-busy', emCleared: false, emClarificationRound: 0,
+    });
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-idle'), state: 'idle', activeCount: 0 }, // the EM would pick this
+      { profile: profile('agent-busy'), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-busy'); // the preference wins over the EM
+  });
+
+  it('(headroom) NON-EM project: a now-live activeCount headroom term shifts the legacy rank', async () => {
+    // Finding #3 — making activeCount real makes match.ts headroom (1 - activeCount/concurrencyLimit) live.
+    // OFF an EM project the legacy SCORE decides. A LOADED higher-successRate agent (lower headroom) loses
+    // to an idle lower-successRate agent only because headroom is now real, not the old constant 1.0. Pins
+    // the cross-cut: a future score-weight change that flips this must be intentional, not silent.
+    store.managerForProject = null; // legacy path (no EM)
+    // history*0.7 + headroom*0.3. Loaded: 0.9*0.7 + (1-3/4)*0.3 = 0.63 + 0.075 = 0.705.
+    //                              Idle:  0.7*0.7 + 1*0.3       = 0.49 + 0.30  = 0.790 → idle wins.
+    const candidates: MatchCandidate[] = [
+      { profile: profile('agent-loaded', { successRate: 0.9, concurrencyLimit: 4 }), state: 'idle', activeCount: 3 },
+      { profile: profile('agent-fresh', { successRate: 0.7, concurrencyLimit: 4 }), state: 'idle', activeCount: 0 },
+    ];
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, candidates, content: tierMedium }));
+    expect(outcome.kind === 'dispatched' && outcome.agentId).toBe('agent-fresh'); // headroom tipped the legacy rank
   });
 });
 
