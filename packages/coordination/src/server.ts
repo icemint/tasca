@@ -27,6 +27,7 @@ import { agentApiHandler, type AgentApiDeps } from './agent-api';
 import { projectApiHandler, type ProjectApiDeps } from './project-api';
 import { vendorCredentialApiHandler, type VendorCredentialApiDeps } from './vendor-credential-api';
 import { agentIdentityApiHandler, type AgentIdentityApiDeps } from './agent-identity-api';
+import { agentCredentialApiHandler, type AgentCredentialApiDeps } from './agent-credential-api';
 import { proposalApiHandler, type ProposalApiDeps } from './proposal-api';
 import { inviteApiHandler, type InviteApiDeps } from './invite-api';
 import { githubConnectHandler, type GitHubConnectDeps } from './github-connect';
@@ -77,6 +78,13 @@ export interface CoordinationServerDeps extends OrchestrationDeps {
    * Absent → that path falls through to 404 (additive).
    */
   agentIdentityApi?: AgentIdentityApiDeps;
+  /**
+   * The per-agent platform-credential API (slice SC-3-B: GET/POST /api/orgs/:orgId/agents/:agentId/
+   * credentials, DELETE .../credentials/:provider, POST .../credentials/:provider/test). Session-gated;
+   * mutations + /test CSRF + admin-gated; write-only (never returns a token). Absent → those paths fall
+   * through to 404 (additive).
+   */
+  agentCredentialApi?: AgentCredentialApiDeps;
   /**
    * The PM-assistant API (slice W3-S1: GET /api/proposals, POST /api/proposals/generate +
    * .../:id/{accept,dismiss}). Session + CSRF + member-gated; advisory (accept routes through an
@@ -529,6 +537,12 @@ export function createRequestHandler(deps: CoordinationServerDeps) {
     // Per-agent identity API (only when wired). Handles POST /api/orgs/:orgId/agents/:agentId/identity/shortcut
     // before the generic read API's /api/* claim.
     if (deps.agentIdentityApi && (await agentIdentityApiHandler(req, res, deps.agentIdentityApi))) return;
+
+    // Per-agent platform-credential API (only when wired). Handles /api/orgs/:orgId/agents/:agentId/
+    // credentials (+ /:provider, /:provider/test) before the generic read API's /api/* claim. Its
+    // /credentials suffix is disjoint from agent-identity-api's /identity/shortcut, so either order is
+    // correct; both must precede the read API.
+    if (deps.agentCredentialApi && (await agentCredentialApiHandler(req, res, deps.agentCredentialApi))) return;
 
     // Connection set API (only when wired). Handles POST /api/orgs/:orgId/connections/shortcut before
     // the generic read API's /api/* claim.
