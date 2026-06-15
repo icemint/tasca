@@ -31,6 +31,7 @@ class FakeStore {
     const t: Task = {
       id: randomUUID(),
       externalStoryId: 'sc-77',
+      title: null,
       platform: 'shortcut',
       status: 'awaiting_clarification',
       version: 3,

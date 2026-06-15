@@ -129,9 +129,15 @@ describe('defaultTierForModel — client mirror of the backend model→tier tabl
 
 describe('monitoring', () => {
   /** A TaskSummary fixture for one status (covering the 5-column remap). */
-  const taskAt = (status: TaskSummary['status'], id: string, lastError: string | null = null): TaskSummary => ({
+  const taskAt = (
+    status: TaskSummary['status'],
+    id: string,
+    lastError: string | null = null,
+    title: string | null = null
+  ): TaskSummary => ({
     id,
     externalStoryId: `roadhero/agentic-playground#${id}`,
+    title,
     platform: 'github',
     status,
     tierEstimate: 'medium',
@@ -207,6 +213,20 @@ describe('monitoring', () => {
     expect(r.kind).toBe('empty');
     expect(htmlOf(r)).toContain('No tasks yet');
   });
+
+  it('shows the task TITLE on the card when present, the story ref when null, and never the raw UUID (QA item 325)', async () => {
+    const titled = taskAt('executing', 'tt', null, 'Wire up the LRU cache eviction');
+    const untitled = taskAt('routable', 'untitled'); // title null → falls back to the story ref
+    stubFetch({ '/api/tasks': { body: [titled, untitled] } });
+    const html = htmlOf(await loadMonitoring());
+    // the titled card shows its title as the card label
+    expect(html).toContain('Wire up the LRU cache eviction');
+    // the untitled card falls back to the story ref, never showing the raw task id
+    expect(html).toContain('roadhero/agentic-playground#untitled');
+    expect(html).not.toContain('>untitled<'); // the raw id is not the visible label
+    // the id stays in the href for navigation
+    expect(html).toContain('href="/tasks?id=untitled"');
+  });
 });
 
 describe('task inspector — the agent-authored PR actually shows', () => {
@@ -222,6 +242,19 @@ describe('task inspector — the agent-authored PR actually shows', () => {
     // the real agent-authored PR (#8) renders with its state
     expect(htmlOf(r)).toContain('github.com/roadhero/agentic-playground/pull/8');
     expect(htmlOf(r)).toContain('merged');
+  });
+
+  it('headers the inspector with the task TITLE when present, falling back to the story ref (QA item 325)', async () => {
+    // titled: TASK_LRU_DETAIL carries a title → it heads the inspector, not the raw UUID
+    withId('task-lru');
+    stubFetch({ '/api/tasks/task-lru': { body: TASK_LRU_DETAIL } });
+    let html = htmlOf(await loadTask());
+    expect(html).toContain('<div class="vh-name task">Wire up the LRU cache eviction</div>');
+    // title-less: falls back to the story ref in the same header slot
+    withId('task-nocap');
+    stubFetch({ '/api/tasks/task-nocap': { body: { ...TASK_NO_CAPACITY_DETAIL, title: null } } });
+    html = htmlOf(await loadTask());
+    expect(html).toContain('<div class="vh-name task">roadhero/agentic-playground#5</div>');
   });
 
   it('is an honest empty when no task is selected', async () => {
@@ -307,7 +340,16 @@ describe('agent detail — bindings, recent work, live + read-only controls', ()
     const r = await loadAgent();
     expect(r.kind).toBe('ok');
     expect(htmlOf(r)).toContain('tasca-elvis'); // github binding handle
-    expect(htmlOf(r)).toContain('roadhero/agentic-playground#5'); // recent work
+    // recent-work rows show the task TITLE (QA item 325) in the .rec-title label, falling back to the
+    // story ref when null — never the raw task UUID that previously led each row via a mono-ref span
+    // (the id stays only in the href for navigation).
+    const recentRows = htmlOf(r).match(/<a class="recrow"[^]*?<\/a>/g) ?? [];
+    expect(recentRows.length).toBe(2);
+    expect(recentRows[0]).toContain('<span class="rec-title">Wire up the LRU cache eviction</span>');
+    expect(recentRows[1]).toContain('<span class="rec-title">roadhero/agentic-playground#6</span>'); // title-null fallback
+    // the raw-UUID mono-ref span that used to lead each recent row is gone
+    expect(recentRows[0]).not.toContain('class="mono ref"');
+    expect(recentRows[1]).not.toContain('class="mono ref"');
     // Pause is now a LIVE control carrying the optimistic-concurrency version.
     expect(htmlOf(r)).toContain('class="ictl live-ctl"');
     expect(htmlOf(r)).toContain('data-action="pause"');

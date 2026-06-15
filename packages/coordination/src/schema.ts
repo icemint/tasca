@@ -80,6 +80,14 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS task_platform_story_uniq ON task (platform, external_story_id);`;
 
 /**
+ * The task's human-readable title (QA item 325). The title is fetched at orchestration for the
+ * routing prompt; persist it so the UI can show it instead of the raw task UUID. Nullable +
+ * no DEFAULT/CHECK so the ALTER is idempotent and never fails on existing rows (a task an
+ * agent hasn't worked yet simply has a null title, and the UI falls back to the story ref).
+ */
+export const TASK_TITLE_DDL = `ALTER TABLE task ADD COLUMN IF NOT EXISTS title text;`;
+
+/**
  * Workspace-level connection to a platform (Shortcut in Stage 1). Holds the
  * webhook secret REF (a pointer into the secret store — never the secret) used
  * to verify inbound signatures, plus a coarse health flag.
@@ -706,6 +714,7 @@ DO $$ BEGIN ALTER TABLE project ADD CONSTRAINT project_manager_fk FOREIGN KEY (m
 
 export const COORDINATION_SCHEMA_DDL: readonly string[] = [
   TASK_COORDINATION_COLUMNS_DDL,
+  TASK_TITLE_DDL, // QA item 325: task.title (after the base task columns exist)
   PLATFORM_CONNECTION_TABLE_DDL,
   WEBHOOK_EVENT_TABLE_DDL,
   ROUTING_DECISION_TABLE_DDL,

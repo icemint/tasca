@@ -109,6 +109,13 @@ export function taskRef(id: string): string {
   return `<span class="mono ref">${esc(id)}</span>`;
 }
 
+/** The human-readable label for a task (QA item 325): its story title, falling back to the story ref —
+ *  NEVER the raw task UUID. Used wherever a task is named to a user. The UUID stays in hrefs/ids for
+ *  navigation, never in the visible label. */
+export function taskLabel(t: { title: string | null; externalStoryId: string }): string {
+  return t.title?.trim() || t.externalStoryId;
+}
+
 /** A vendor-neutral state-glyph + label inline (used in compact rows). */
 export function stateGlyph(state: AgentState): string {
   const tok = STATE_TOKEN[state] ?? 'idle';

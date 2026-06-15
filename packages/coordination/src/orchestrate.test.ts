@@ -67,6 +67,7 @@ class FakeStore implements CoordinationStore {
     const task: Task = {
       id: randomUUID(),
       externalStoryId: input.externalStoryId,
+      title: null,
       platform: input.platform,
       status: 'routable',
       version: 0,
@@ -105,6 +106,14 @@ class FakeStore implements CoordinationStore {
   async setTierEstimate(_orgId: string, taskId: string, estimate: TierEstimate) {
     const t = this.tasks.get(taskId)!;
     t.tierEstimate = estimate;
+  }
+  titleWrites: Array<{ taskId: string; title: string }> = [];
+  setTaskTitleThrows = false;
+  async setTaskTitle(_orgId: string, taskId: string, title: string) {
+    if (this.setTaskTitleThrows) throw new Error('title write boom');
+    this.titleWrites.push({ taskId, title });
+    const t = this.tasks.get(taskId);
+    if (t) t.title = title;
   }
   async setStatus(_orgId: string, taskId: string, status: TaskStatus) {
     const t = this.tasks.get(taskId)!;
@@ -560,6 +569,42 @@ describe('orchestrateTaskAssigned — happy path (§6 forward)', () => {
     expect(actions).toContain('status.post');
   });
 
+  it('persists the fetched content title onto the task (QA item 325)', async () => {
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit }));
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    // the store received the fetched title and it landed on the task row
+    expect(store.titleWrites).toContainEqual({ taskId: outcome.taskId, title: 'Fix the thing' });
+    expect(store.tasks.get(outcome.taskId)!.title).toBe('Fix the thing');
+  });
+
+  it('truncates an over-long title to the persisted bound, never rejecting it (QA item 325)', async () => {
+    const longContent: TaskContentSource = {
+      async fetch() {
+        return { title: 'x'.repeat(500), body: 'a short task' };
+      },
+    };
+    const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution, status, audit, content: longContent }));
+    expect(outcome.kind).toBe('dispatched');
+    expect(store.titleWrites[0]!.title).toHaveLength(300); // truncated, not rejected
+  });
+
+  it('a title-write failure is NON-FATAL — the run still dispatches, the failure is logged not propagated', async () => {
+    store.setTaskTitleThrows = true;
+    const logs: Array<{ msg: string }> = [];
+    const logger = { error() {}, warn: (msg: string) => logs.push({ msg }) };
+    const outcome = await orchestrateTaskAssigned(EVENT, {
+      ...makeDeps({ store, execution, status, audit }),
+      logger,
+    });
+    // the run completes end-to-end despite the title write throwing
+    expect(outcome.kind).toBe('dispatched');
+    if (outcome.kind !== 'dispatched') return;
+    expect(outcome.prUrl).toBe('https://github.com/icemint/tasca/pull/42');
+    // the failure was surfaced (warn), not swallowed
+    expect(logs.some((l) => l.msg.includes('failed to persist task title'))).toBe(true);
+  });
+
   it('NO-CHANGES run → retired to needs_attention WITHOUT the breaker (no re-route, no retry-burn)', async () => {
     const noChangeExec = new FakeExecution({ commitChanged: false }); // agent ran, committed nothing
     const outcome = await orchestrateTaskAssigned(EVENT, makeDeps({ store, execution: noChangeExec, status, audit }));
@@ -790,6 +835,7 @@ describe('orchestrateTaskAssigned — preferred-agent routing (accepted PM propo
     store.tasks.set(id, {
       id,
       externalStoryId: 'sc-story-1',
+      title: null,
       platform: 'shortcut',
       status: 'routable',
       version: 0,
@@ -1031,7 +1077,7 @@ describe('orchestrateTaskAssigned — decomposition child (synthetic, W3-S1c)', 
   function seedChild(): string {
     const id = randomUUID();
     store.tasks.set(id, {
-      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      id, externalStoryId: 'sc-story-1', title: null, platform: 'shortcut', status: 'routable', version: 0,
       claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null, preferredAgentId: null,
       emCleared: false, emClarificationRound: 0,
     });
@@ -1688,7 +1734,7 @@ describe('orchestrateTaskAssigned — EM requirements gate (EM v1 slice 2)', () 
     // Seed a task already at round = CAP-1 (2): the next unclear verdict hits round 3 = the cap.
     const id = randomUUID();
     store.tasks.set(id, {
-      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      id, externalStoryId: 'sc-story-1', title: null, platform: 'shortcut', status: 'routable', version: 0,
       claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
       preferredAgentId: null, emCleared: false, emClarificationRound: 2,
     });
@@ -1704,7 +1750,7 @@ describe('orchestrateTaskAssigned — EM requirements gate (EM v1 slice 2)', () 
   it('em_cleared task → the gate is SKIPPED on a re-drive (proceeds straight to dispatch)', async () => {
     const id = randomUUID();
     store.tasks.set(id, {
-      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      id, externalStoryId: 'sc-story-1', title: null, platform: 'shortcut', status: 'routable', version: 0,
       claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
       preferredAgentId: null, emCleared: true, emClarificationRound: 0,
     });
@@ -1797,7 +1843,7 @@ describe('orchestrateTaskAssigned — EM block-explanation (EM v1 slice 4)', () 
     // Seed a task already at round = CAP-1: the next unclear verdict escalates at the cap.
     const id = randomUUID();
     store.tasks.set(id, {
-      id, externalStoryId: 'sc-story-1', platform: 'shortcut', status: 'routable', version: 0,
+      id, externalStoryId: 'sc-story-1', title: null, platform: 'shortcut', status: 'routable', version: 0,
       claimedBy: null, failureCount: 0, repoRef: '/repos/demo', tierEstimate: null, lastError: null,
       preferredAgentId: null, emCleared: false, emClarificationRound: 2,
     });

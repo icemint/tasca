@@ -24,6 +24,7 @@ function task(id: string, over: Partial<Task> = {}): Task {
   return {
     id,
     externalStoryId: `story-${id}`,
+    title: null,
     platform: 'shortcut',
     status: 'routable',
     version: 0,
@@ -43,6 +44,7 @@ function summary(t: Task): TaskSummary {
   return {
     id: t.id,
     externalStoryId: t.externalStoryId,
+    title: t.title,
     platform: t.platform,
     status: t.status,
     tierEstimate: t.tierEstimate,

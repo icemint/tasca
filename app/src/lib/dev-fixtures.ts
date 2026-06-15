@@ -26,11 +26,11 @@ const SESSION: SessionResponse = {
 };
 
 const TASKS: TaskSummary[] = [
-  { id: 'tas-241', externalStoryId: 'sc-241', platform: 'shortcut', status: 'executing', tierEstimate: 'hard', repoRef: 'acme/api', claimedBy: 'nova', failureCount: 0, lastError: null },
-  { id: 'tas-219', externalStoryId: 'lin-219', platform: 'linear', status: 'executing', tierEstimate: 'medium', repoRef: 'acme/edge', claimedBy: 'juno', failureCount: 0, lastError: null },
-  { id: 'bill-77', externalStoryId: 'sc-77', platform: 'shortcut', status: 'needs_attention', tierEstimate: 'ultra', repoRef: 'acme/billing', claimedBy: 'sable', failureCount: 3, lastError: 'no execution capacity: no agent-runner claimed within 30000ms' },
-  { id: 'tas-271', externalStoryId: 'lin-271', platform: 'linear', status: 'routable', tierEstimate: 'medium', repoRef: 'acme/api', claimedBy: null, failureCount: 0, lastError: null },
-  { id: 'tas-205', externalStoryId: 'gh-205', platform: 'github', status: 'done', tierEstimate: 'hard', repoRef: 'acme/api', claimedBy: 'pike', failureCount: 0, lastError: null },
+  { id: 'tas-241', externalStoryId: 'sc-241', title: 'Add rate limiting to the auth endpoints', platform: 'shortcut', status: 'executing', tierEstimate: 'hard', repoRef: 'acme/api', claimedBy: 'nova', failureCount: 0, lastError: null },
+  { id: 'tas-219', externalStoryId: 'lin-219', title: 'Cache the edge config lookups', platform: 'linear', status: 'executing', tierEstimate: 'medium', repoRef: 'acme/edge', claimedBy: 'juno', failureCount: 0, lastError: null },
+  { id: 'bill-77', externalStoryId: 'sc-77', title: 'Reconcile invoice line items on refund', platform: 'shortcut', status: 'needs_attention', tierEstimate: 'ultra', repoRef: 'acme/billing', claimedBy: 'sable', failureCount: 3, lastError: 'no execution capacity: no agent-runner claimed within 30000ms' },
+  { id: 'tas-271', externalStoryId: 'lin-271', title: null, platform: 'linear', status: 'routable', tierEstimate: 'medium', repoRef: 'acme/api', claimedBy: null, failureCount: 0, lastError: null },
+  { id: 'tas-205', externalStoryId: 'gh-205', title: 'Migrate the search index to v2', platform: 'github', status: 'done', tierEstimate: 'hard', repoRef: 'acme/api', claimedBy: 'pike', failureCount: 0, lastError: null },
 ];
 
 const AGENTS: Agent[] = [

@@ -7,7 +7,7 @@ import { getTask, reassignTask, interruptTask, forceResetTask, type WriteResult,
 import { fromResult, queryId, type LoadResult } from '../mount';
 import { empty } from '../states';
 import { liveAction, describeFailure } from '../live';
-import { I, tierTag, taskRef, platTag, esc, roControl } from '../ui';
+import { I, tierTag, taskRef, taskLabel, platTag, esc, roControl } from '../ui';
 import type { PullRequest, RoutingCandidate, RoutingDecision, TaskDetail } from '../contract';
 
 /** The cancel-coupled controls. Interrupt only renders while a run is live (executing); Reassign
@@ -120,7 +120,7 @@ export async function loadTask(): Promise<LoadResult> {
         <div class="vh-main">
           <div class="vh-id"><div>
             <div class="vh-eyebrow">${platTag(t.platform)}${taskRef(t.id)}${tierTag(t.tierEstimate)}</div>
-            <div class="vh-name task">${esc(t.externalStoryId)}</div>
+            <div class="vh-name task">${esc(taskLabel(t))}</div>
             <div class="vh-meta"><span class="mono dim">${t.repoRef ? esc(t.repoRef) : '—'}</span><span class="branch-tag">${esc(t.status)}</span>${t.claimedBy ? `<span class="mono dim">claimed by ${esc(t.claimedBy)}</span>` : ''}</div>
           </div></div>
           <div class="vh-actions">

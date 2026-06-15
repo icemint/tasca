@@ -161,6 +161,7 @@ function taskSummaryJson(t: TaskSummary) {
   return {
     id: t.id,
     externalStoryId: t.externalStoryId,
+    title: t.title,
     platform: t.platform,
     status: t.status,
     tierEstimate: t.tierEstimate ? t.tierEstimate.tier : null,

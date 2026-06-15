@@ -77,6 +77,7 @@ export const AGENT_ELVIS: Agent = {
 export const TASK_LRU: TaskSummary = {
   id: 'task-lru',
   externalStoryId: 'roadhero/agentic-playground#5',
+  title: 'Wire up the LRU cache eviction',
   platform: 'github',
   status: 'done',
   tierEstimate: 'medium',
@@ -89,6 +90,7 @@ export const TASK_LRU: TaskSummary = {
 export const TASK_RETRY_ATTN: TaskSummary = {
   id: 'task-retry',
   externalStoryId: 'roadhero/agentic-playground#6',
+  title: null,
   platform: 'github',
   status: 'needs_attention',
   tierEstimate: 'hard',
