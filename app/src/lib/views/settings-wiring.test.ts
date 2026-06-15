@@ -10,6 +10,9 @@ import {
   stubFetch,
   VENDOR_CREDS_ACTIVE,
   CREDENTIAL_AUDIT_OK,
+  CONNECTIONS_OK,
+  SHORTCUT_CONN_ACTIVE,
+  SHORTCUT_CONN_NONE,
   ORG_INFO_OWNER,
   MEMBERS_OK,
   INVITES_OK,
@@ -234,5 +237,133 @@ describe('settings wiring — Invites (slice 3.5-B.3.2)', () => {
 
     expect(deletedPath).toBe('/api/invites/inv1'); // wired to DELETE the right invite
     expect(reruns).toBeGreaterThan(0); // reconciled from server truth
+  });
+});
+
+describe('settings wiring — Shortcut connection (Connections & credentials)', () => {
+  const SC_PATH = '/api/orgs/o1/connections/shortcut';
+  const FULL = {
+    ...WS_ROUTES,
+    '/api/orgs': { body: ADMIN_ORGS },
+    '/api/orgs/credentials': { body: VENDOR_CREDS_ACTIVE },
+    '/api/orgs/credentials/audit': { body: CREDENTIAL_AUDIT_OK },
+    '/api/connections': { body: CONNECTIONS_OK },
+    '/api/csrf': { body: { token: 'tok-1' } },
+  };
+
+  it('Test fires a POST to the /test route with the read token and drives the pass state', async () => {
+    _resetCsrfForTest();
+    const posts: Array<{ path: string; body: unknown }> = [];
+    const routes: Record<string, { status?: number; body?: unknown }> = {
+      ...FULL,
+      [SC_PATH]: { body: SHORTCUT_CONN_NONE },
+      [`${SC_PATH}/test`]: { body: { ok: true } },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0]!;
+        if (init?.method === 'POST') posts.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+        const r = routes[path];
+        if (!r) return new Response('not found', { status: 404 });
+        return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
+      })
+    );
+    const el = document.createElement('div');
+    el.innerHTML = htmlOf(await loadSettings());
+    wireSettings(el, async () => {});
+
+    el.querySelector<HTMLButtonElement>('[data-act="sc-edit"]')!.click();
+    el.querySelector<HTMLInputElement>('[data-sc-input="readToken"]')!.value = 'sc-read-probe-do-not-leak';
+    el.querySelector<HTMLButtonElement>('[data-act="sc-test"]')!.click();
+
+    await new Promise((res) => setTimeout(res, 0));
+    await new Promise((res) => setTimeout(res, 0));
+
+    const testPost = posts.find((p) => p.path === `${SC_PATH}/test`);
+    expect(testPost).toBeDefined();
+    expect(testPost!.body).toEqual({ readToken: 'sc-read-probe-do-not-leak' });
+    expect(el.querySelector('[data-sc-result]')!.className).toContain('pass');
+  });
+
+  it('SECURITY: Save POSTs both secrets but NEVER echoes them into the rendered DOM, and clears the inputs', async () => {
+    _resetCsrfForTest();
+    const HOOK = 'sc-webhook-secret-render-never-0xCAFE';
+    const READ = 'sc-read-token-render-never-0xBABE';
+    const posts: Array<{ path: string; body: unknown }> = [];
+    const routes: Record<string, { status?: number; body?: unknown }> = {
+      ...FULL,
+      [SC_PATH]: { body: SHORTCUT_CONN_NONE },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0]!;
+        if (init?.method === 'POST') {
+          posts.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+          if (path === SC_PATH) return new Response(JSON.stringify({ ok: true, connectionId: 'conn_1', webhookUrl: '/webhooks/shortcut/conn_1' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        const r = routes[path];
+        if (!r) return new Response('not found', { status: 404 });
+        return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
+      })
+    );
+    const el = document.createElement('div');
+    el.innerHTML = htmlOf(await loadSettings());
+    let reruns = 0;
+    wireSettings(el, async () => {
+      reruns++;
+      el.innerHTML = htmlOf(await loadSettings());
+    });
+
+    el.querySelector<HTMLButtonElement>('[data-act="sc-edit"]')!.click();
+    el.querySelector<HTMLInputElement>('input[name="workspaceId"]')!.value = 'ws-eltexsoft';
+    el.querySelector<HTMLInputElement>('input[name="projectId"]')!.value = 'proj_1';
+    el.querySelector<HTMLInputElement>('[data-sc-input="webhookSecret"]')!.value = HOOK;
+    el.querySelector<HTMLInputElement>('[data-sc-input="readToken"]')!.value = READ;
+    el.querySelector<HTMLFormElement>('[data-sc-form]')!.dispatchEvent(new Event('submit'));
+
+    await new Promise((res) => setTimeout(res, 0));
+    await new Promise((res) => setTimeout(res, 0));
+
+    const savePost = posts.find((p) => p.path === SC_PATH);
+    expect(savePost!.body).toEqual({ workspaceId: 'ws-eltexsoft', projectId: 'proj_1', webhookSecret: HOOK, readToken: READ });
+    expect(reruns).toBeGreaterThan(0); // reconciled from server truth
+    expect(el.innerHTML).not.toContain(HOOK); // neither secret is ever rendered
+    expect(el.innerHTML).not.toContain(READ);
+  });
+
+  it('Disconnect is two-step and fires a DELETE on the Shortcut connection route', async () => {
+    _resetCsrfForTest();
+    let deletedPath: string | null = null;
+    const routes: Record<string, { status?: number; body?: unknown }> = {
+      ...FULL,
+      [SC_PATH]: { body: SHORTCUT_CONN_ACTIVE },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0]!;
+        if (init?.method === 'DELETE') { deletedPath = path; return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }); }
+        const r = routes[path];
+        if (!r) return new Response('not found', { status: 404 });
+        return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
+      })
+    );
+    const el = document.createElement('div');
+    el.innerHTML = htmlOf(await loadSettings());
+    wireSettings(el, async () => { el.innerHTML = htmlOf(await loadSettings()); });
+
+    const confirm = el.querySelector<HTMLElement>('[data-sc-confirm]')!;
+    expect(confirm.hidden).toBe(true); // hidden until the first Disconnect click
+    el.querySelector<HTMLButtonElement>('[data-act="sc-remove"]')!.click();
+    expect(confirm.hidden).toBe(false); // revealed, awaiting confirmation
+    expect(deletedPath).toBeNull(); // no write yet
+
+    el.querySelector<HTMLButtonElement>('[data-act="sc-remove-confirm"]')!.click();
+    await new Promise((res) => setTimeout(res, 0));
+    await new Promise((res) => setTimeout(res, 0));
+
+    expect(deletedPath).toBe(SC_PATH); // wired to DELETE the connection
   });
 });

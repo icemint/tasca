@@ -78,6 +78,9 @@ export interface CreateCoordinationDeps {
   connectionCredential?: {
     masterKey: Buffer | null;
     resolver: ConnectionCredentialResolver;
+    /** Live per-platform probe — the same validator the agent credentials use; the connection API's
+     *  /test route probes the SUBMITTED read token against Shortcut's member endpoint. */
+    validator: AgentCredentialValidator;
     registeredShortcutIds: ReadonlySet<string>;
   };
   /** Engineering Manager admin API (EM v1 slice 1): the env-held master key (null → the identity/seal
@@ -444,6 +447,7 @@ export function createCoordination(
           connectionApi: {
             store,
             resolver: input.connectionCredential.resolver,
+            validator: input.connectionCredential.validator,
             masterKey: input.connectionCredential.masterKey,
             membership,
             // Governance audit trail: the same store implements GovernanceAuditSink.

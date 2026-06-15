@@ -192,6 +192,12 @@ class FakeStore implements CoordinationStore {
   async getShortcutConnectionById() {
     return null;
   }
+  async getShortcutConnectionForOrg() {
+    return null;
+  }
+  async deleteShortcutConnection() {
+    return false;
+  }
   async projectExistsInOrg() {
     return true;
   }

@@ -787,7 +787,7 @@ describe('settings — Workspace panel (slice 3.5-B.2: name + members/roles)', (
     expect(r.kind).toBe('ok');
     const html = htmlOf(r);
     expect(html).toContain('Could not load the workspace');
-    expect(html).toContain('Vendor keys'); // the rest of settings unaffected
+    expect(html).toContain('Anthropic vendor key'); // the rest of settings unaffected
   });
 });
 
@@ -869,7 +869,7 @@ describe('settings — Invites section (slice 3.5-B.3.2: invite by email + role)
     expect(r.kind).toBe('ok'); // the page still renders
     const html = htmlOf(r);
     expect(html).toContain('Could not load invites');
-    expect(html).toContain('Vendor keys'); // the rest of settings unaffected
+    expect(html).toContain('Anthropic vendor key'); // the rest of settings unaffected
   });
 });
 

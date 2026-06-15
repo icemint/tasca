@@ -8,10 +8,12 @@ import {
 } from './connection-api';
 import {
   ConnectionCredentialResolver,
+  fingerprintConnectionKey,
   openVendorKey,
   type SealedCredential,
   type ConnectionCredentialKind,
   type ConnectionCredentialStore,
+  type AgentCredentialValidator,
 } from './vendor-credential';
 import type { GovernanceAuditEvent, GovernanceAuditSink } from './governance-audit';
 import type { OrgRole } from './membership';
@@ -49,6 +51,36 @@ class FakeStore implements ConnectionCredentialStore, ShortcutConnectionWriter {
   async getSealedConnectionCredential(org: string, conn: string, kind: ConnectionCredentialKind) {
     return this.rows.get(this.key(org, conn, kind))?.sealed ?? null;
   }
+  async getConnectionCredentialStatuses(org: string, conn: string) {
+    // Status read: fingerprint + status ONLY (NEVER the sealed ciphertext) — mirrors the PG method.
+    return (['webhook_secret', 'read_token'] as ConnectionCredentialKind[]).flatMap((kind) => {
+      const row = this.rows.get(this.key(org, conn, kind));
+      return row ? [{ kind, status: 'active' as const, fingerprint: row.fingerprint, lastValidatedAt: null }] : [];
+    });
+  }
+  async getShortcutConnectionForOrg(orgId: string) {
+    const c = this.connections.find((x) => x.orgId === orgId);
+    return c ? { connectionId: this.nextConnectionId, workspaceId: c.workspaceId, projectId: c.projectId } : null;
+  }
+  async deleteShortcutConnection(orgId: string, connectionId: string) {
+    const before = this.connections.length;
+    this.connections = this.connections.filter((x) => x.orgId !== orgId);
+    // Cascade the connection's credential rows (the FK ON DELETE CASCADE in PG).
+    for (const k of [...this.rows.keys()]) {
+      if (k.startsWith(`${orgId}:${connectionId}:`)) this.rows.delete(k);
+    }
+    return this.connections.length < before;
+  }
+}
+
+/** A hand-rolled validator fake (real state) — records the probe + returns a scripted verdict. */
+class FakeValidator implements AgentCredentialValidator {
+  calls: Array<{ provider: string; token: string }> = [];
+  verdict: { ok: true } | { ok: false; reason: string } = { ok: true };
+  async validate(provider: 'shortcut' | 'github', token: string) {
+    this.calls.push({ provider, token });
+    return this.verdict;
+  }
 }
 
 class FakeAudit implements GovernanceAuditSink {
@@ -77,6 +109,7 @@ function deps(
   return {
     store,
     resolver: over.resolver ?? new ConnectionCredentialResolver(store, over.masterKey === undefined ? MASTER : over.masterKey),
+    validator: over.validator ?? new FakeValidator(),
     masterKey: over.masterKey === undefined ? MASTER : over.masterKey,
     membership: {
       getActiveOrg: async () => (over.activeOrg === undefined ? ORG : over.activeOrg),
@@ -254,5 +287,123 @@ describe('connection API — write-only, admin-gated, fail-closed (slice SC-1)',
   it('does not claim non-matching routes (returns false → falls through)', async () => {
     const r = await run(deps(), fakeReq('GET', '/api/projects'));
     expect(r.owned).toBe(false);
+  });
+});
+
+// ── GET status / POST test / DELETE — the consolidated four-verb surface ─────────
+// Seed a configured connection (workspace→project + both secrets) so the status/delete reads have a
+// connection to resolve.
+async function seedConfigured(d: ConnectionApiDeps): Promise<void> {
+  await run(d, fakeReq('POST', PATH, { headers: csrf({ 'content-type': 'application/json' }), body: goodBody }));
+}
+
+describe('connection API — GET status (member+), POST /test + DELETE (admin+)', () => {
+  it('GET (member) returns the connection status with FINGERPRINTS, never a secret', async () => {
+    const d = deps();
+    await seedConfigured(d);
+    const r = await run(deps({ store: d.store, role: 'member' }), fakeReq('GET', PATH));
+    expect(r.statusCode).toBe(200);
+    expect(r.json).toMatchObject({ connected: true, workspaceId: 'ws-eltexsoft', projectId: PROJECT, webhookUrl: '/webhooks/shortcut/conn_eltexsoft' });
+    // per-kind fingerprints present, but NEITHER secret is ever echoed
+    const kinds = (r.json.credentials as Array<{ kind: string; fingerprint: string }>).map((c) => c.kind).sort();
+    expect(kinds).toEqual(['read_token', 'webhook_secret']);
+    expect(r.json.credentials).toContainEqual(expect.objectContaining({ kind: 'webhook_secret', status: 'active', fingerprint: fingerprintConnectionKey('webhook_secret', WEBHOOK_SECRET) }));
+    expect(r.body).not.toContain(WEBHOOK_SECRET);
+    expect(r.body).not.toContain(READ_TOKEN);
+  });
+
+  it('GET when NOTHING is configured returns a not-configured shape (connected:false)', async () => {
+    const r = await run(deps(), fakeReq('GET', PATH));
+    expect(r.statusCode).toBe(200);
+    expect(r.json).toEqual({ connected: false });
+  });
+
+  it('GET succeeds (200) even with the master key UNSET — it reads fingerprint/status, never unseals', async () => {
+    // Seed under a real key, then read with the same store but no master key in deps (status read needs none).
+    const seeded = deps();
+    await seedConfigured(seeded);
+    const r = await run(deps({ store: seeded.store, masterKey: null }), fakeReq('GET', PATH));
+    expect(r.statusCode).toBe(200);
+    expect(r.json).toMatchObject({ connected: true });
+  });
+
+  it('GET allowed for a member; POST /test + DELETE are admin-only (member → 403)', async () => {
+    const member = deps({ role: 'member' });
+    expect((await run(member, fakeReq('GET', PATH))).statusCode).toBe(200);
+    const t = await run(deps({ role: 'member' }), fakeReq('POST', `${PATH}/test`, { headers: csrf(), body: JSON.stringify({ readToken: READ_TOKEN }) }));
+    expect(t.statusCode).toBe(403);
+    const del = await run(deps({ role: 'member' }), fakeReq('DELETE', PATH, { headers: csrf() }));
+    expect(del.statusCode).toBe(403);
+  });
+
+  it('POST /test maps a passing validator verdict → {ok:true} and probes the SUBMITTED read token', async () => {
+    const validator = new FakeValidator();
+    const r = await run(deps({ validator }), fakeReq('POST', `${PATH}/test`, { headers: csrf({ 'content-type': 'application/json' }), body: JSON.stringify({ readToken: READ_TOKEN }) }));
+    expect(r.statusCode).toBe(200);
+    expect(r.json).toEqual({ ok: true });
+    expect(validator.calls).toEqual([{ provider: 'shortcut', token: READ_TOKEN }]);
+  });
+
+  it('POST /test maps a failing verdict → {ok:false, reason} (a curated reason, never the token)', async () => {
+    const validator = new FakeValidator();
+    validator.verdict = { ok: false, reason: 'the token was rejected by the platform (invalid or revoked)' };
+    const r = await run(deps({ validator }), fakeReq('POST', `${PATH}/test`, { headers: csrf(), body: JSON.stringify({ readToken: READ_TOKEN }) }));
+    expect(r.statusCode).toBe(200);
+    expect(r.json).toEqual({ ok: false, reason: 'the token was rejected by the platform (invalid or revoked)' });
+    expect(r.body).not.toContain(READ_TOKEN);
+  });
+
+  it('POST /test rejects a missing/blank readToken → 400 (never probes)', async () => {
+    const validator = new FakeValidator();
+    const r = await run(deps({ validator }), fakeReq('POST', `${PATH}/test`, { headers: csrf(), body: JSON.stringify({ readToken: '' }) }));
+    expect(r.statusCode).toBe(400);
+    expect(validator.calls).toHaveLength(0);
+  });
+
+  it('POST /test with no master key → 503 (the write surface is disabled)', async () => {
+    const r = await run(deps({ masterKey: null }), fakeReq('POST', `${PATH}/test`, { headers: csrf(), body: JSON.stringify({ readToken: READ_TOKEN }) }));
+    expect(r.statusCode).toBe(503);
+  });
+
+  it('DELETE removes the connection AND cascades both credential rows AND invalidates the resolver', async () => {
+    const store = new FakeStore();
+    const invalidated: string[] = [];
+    const resolver = { invalidate: (_o: string, conn: string, kind: ConnectionCredentialKind) => invalidated.push(`${conn}:${kind}`) };
+    const d = deps({ store, resolver: resolver as unknown as ConnectionApiDeps['resolver'] });
+    await seedConfigured(d);
+    expect(store.rows.size).toBe(2);
+    invalidated.length = 0; // ignore the POST's cache-bust; assert only the DELETE's
+
+    const r = await run(d, fakeReq('DELETE', PATH, { headers: csrf() }));
+    expect(r.statusCode).toBe(200);
+    expect(r.json).toEqual({ ok: true });
+    expect(store.connections).toHaveLength(0);
+    expect(store.rows.size).toBe(0); // both credential rows cascaded
+    expect(invalidated.sort()).toEqual(['conn_eltexsoft:read_token', 'conn_eltexsoft:webhook_secret']);
+
+    // the delete is audited with the connectionId, never a secret
+    const audit = (d.audit as FakeAudit).rows;
+    expect(audit.some((e) => e.action === 'connection.shortcut.delete' && e.target === 'conn_eltexsoft')).toBe(true);
+  });
+
+  it('DELETE when NOTHING is configured → 404 (honest no-op)', async () => {
+    const r = await run(deps(), fakeReq('DELETE', PATH, { headers: csrf() }));
+    expect(r.statusCode).toBe(404);
+  });
+
+  it('DELETE without CSRF → 403, nothing removed', async () => {
+    const d = deps();
+    await seedConfigured(d);
+    const r = await run(deps({ store: d.store }), fakeReq('DELETE', PATH));
+    expect(r.statusCode).toBe(403);
+    expect((d.store as FakeStore).connections).toHaveLength(1);
+  });
+
+  it('DELETE with no master key → 503 (the write surface is disabled)', async () => {
+    const d = deps();
+    await seedConfigured(d);
+    const r = await run(deps({ store: d.store, masterKey: null }), fakeReq('DELETE', PATH, { headers: csrf() }));
+    expect(r.statusCode).toBe(503);
+    expect((d.store as FakeStore).connections).toHaveLength(1);
   });
 });

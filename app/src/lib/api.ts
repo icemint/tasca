@@ -33,6 +33,7 @@ import type {
   ProposalSummary,
   StandupSummary,
   SessionResponse,
+  ShortcutConnectionStatus,
   TaskDetail,
   TaskSummary,
   VendorCredentialsResponse,
@@ -591,6 +592,101 @@ export async function testAgentCredential(
   }
   return classify<{ ok: true } | { ok: false; reason: string }>(res);
 }
+
+// ── Shortcut connection (Settings → Connections & credentials) ─────────────────
+// The workspace-level Shortcut connection (its webhook secret + read token + workspace→project binding).
+// Org-scoped in the PATH (/api/orgs/:orgId/connections/shortcut) — the orgId here must be the caller's
+// active org (the server fails closed on a path-org ≠ active-org mismatch). The status read is member+;
+// set/test/delete are admin+ (the server enforces it — the UI gate is UX, not the boundary). WRITE-ONLY
+// for the secrets: the read carries only status + fingerprint, never a secret.
+
+/** Read the Shortcut connection status (the bound workspace/project + webhook URL + per-secret status).
+ *  No secret — status + fingerprint only. */
+export const getShortcutConnection = (orgId: string) =>
+  get<ShortcutConnectionStatus>(`/api/orgs/${encodeURIComponent(orgId)}/connections/shortcut`);
+
+type ShortcutConnectionSetBody = { ok: true; connectionId: string; webhookUrl: string } | { error: string };
+
+/**
+ * Set (or replace) the Shortcut connection: both secrets + the workspace→project binding, sealed
+ * together (per-kind replace is out of scope — the POST takes everything at once). Mirrors
+ * `setAgentCredential` (CSRF + one self-healing 403 retry + the parseable-400→conflict lift). The
+ * secrets are WRITE-ONLY: sent once, never echoed back.
+ */
+export async function setShortcutConnection(
+  orgId: string,
+  body: { workspaceId: string; projectId: string; webhookSecret: string; readToken: string }
+): Promise<WriteResult<ShortcutConnectionSetBody>> {
+  const csrf = await ensureCsrf();
+  if (csrf === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const path = `/api/orgs/${encodeURIComponent(orgId)}/connections/shortcut`;
+  const send = (t: string): Promise<Response> =>
+    fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify(body),
+    });
+  let res: Response;
+  try {
+    res = await send(csrf);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  if (res.status === 400) {
+    try {
+      return { kind: 'conflict', data: (await res.json()) as ShortcutConnectionSetBody };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  return classify<ShortcutConnectionSetBody>(res);
+}
+
+/**
+ * Live-probe a SUBMITTED (just-entered) Shortcut read token, pre-save. Never unseals a stored secret;
+ * never persists. The 200 body is `{ok:true}` or `{ok:false, reason}` (a curated reason — never the
+ * token). Mirrors `testAgentCredential` (CSRF + one self-healing 403 retry + the 400-lift).
+ */
+export async function testShortcutConnection(
+  orgId: string,
+  readToken: string
+): Promise<WriteResult<{ ok: true } | { ok: false; reason: string } | { error: string }>> {
+  const csrf = await ensureCsrf();
+  if (csrf === null) return { kind: 'error', message: 'Could not obtain a security token' };
+  const path = `/api/orgs/${encodeURIComponent(orgId)}/connections/shortcut/test`;
+  const send = (t: string): Promise<Response> =>
+    fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify({ readToken }),
+    });
+  let res: Response;
+  try {
+    res = await send(csrf);
+    if (res.status === 403) {
+      const fresh = await ensureCsrf(true);
+      if (fresh) res = await send(fresh);
+    }
+  } catch {
+    return { kind: 'error', message: 'Network unreachable' };
+  }
+  if (res.status === 400) {
+    try {
+      return { kind: 'conflict', data: (await res.json()) as { error: string } };
+    } catch {
+      return { kind: 'error', message: 'Malformed response' };
+    }
+  }
+  return classify<{ ok: true } | { ok: false; reason: string }>(res);
+}
+
+/** Disconnect the Shortcut connection (removes it + cascades its secrets). Intake stops until reconnect. */
+export const deleteShortcutConnection = (orgId: string) =>
+  del<{ ok: true } | { error: string }>(`/api/orgs/${encodeURIComponent(orgId)}/connections/shortcut`);
 
 /** Begin the GitHub App install/connect flow (slice 5c). A REDIRECT-OUT (session+admin gated
  *  server-side), NOT an in-page write — the browser leaves to GitHub and returns via the Setup URL. */

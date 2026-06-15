@@ -17,6 +17,7 @@ import type {
   AgentCredentialStatus,
   AgentCredentialStore,
   ConnectionCredentialKind,
+  ConnectionCredentialStatus,
   ConnectionCredentialStore,
   ManagerCredentialProvider,
   ManagerCredentialStore,
@@ -650,6 +651,22 @@ export interface CoordinationStore {
     connectionId: string
   ): Promise<{ orgId: string; repoRef: string | null } | null>;
 
+  /**
+   * The org's single LIVE Shortcut connection (drives the Settings connection-status read, slice
+   * connection-credentials): its id + bound workspace + project, or null when none is configured.
+   * org-scoped — only THIS org's connection surfaces; a revoked one does not.
+   */
+  getShortcutConnectionForOrg(
+    orgId: string
+  ): Promise<{ connectionId: string; workspaceId: string; projectId: string | null } | null>;
+
+  /**
+   * Remove the org's Shortcut connection by id (the Settings two-step disconnect). Its
+   * connection_credential rows cascade via the FK ON DELETE CASCADE. org-scoped — a delete can only
+   * land on THIS org's connection. Returns true when a row was removed.
+   */
+  deleteShortcutConnection(orgId: string, connectionId: string): Promise<boolean>;
+
   // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────
   // These DISCOVER which org a request/job belongs to, so they cannot themselves be
   // org-scoped. Each returns null when nothing matches; the EDGE (orchestrate / reaper /
@@ -1059,6 +1076,21 @@ export class PgCoordinationStore
     );
     const row = res.rows[0];
     return row ? { ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag } : null;
+  }
+
+  async getConnectionCredentialStatuses(orgId: string, connectionId: string): Promise<ConnectionCredentialStatus[]> {
+    // ORG+connection-SCOPED; returns status + fingerprint ONLY (never the ciphertext/secret).
+    const res = await this.db.query<{ kind: string; status: string; key_fingerprint: string; last_validated_at: Date | null }>(
+      `SELECT kind, status, key_fingerprint, last_validated_at
+         FROM connection_credential WHERE org_id = $1 AND connection_id = $2 ORDER BY kind`,
+      [orgId, connectionId]
+    );
+    return res.rows.map((r) => ({
+      kind: r.kind as ConnectionCredentialKind,
+      status: r.status as 'active' | 'invalid',
+      fingerprint: r.key_fingerprint,
+      lastValidatedAt: r.last_validated_at ? toIso(r.last_validated_at) : null,
+    }));
   }
 
   async recordWebhookEvent(
@@ -2195,6 +2227,34 @@ export class PgCoordinationStore
     );
     const row = res.rows[0];
     return row ? { orgId: row.org_id, repoRef: row.repo_ref } : null;
+  }
+
+  async getShortcutConnectionForOrg(
+    orgId: string
+  ): Promise<{ connectionId: string; workspaceId: string; projectId: string | null } | null> {
+    // The org's single LIVE Shortcut connection (drives the Settings status read). ORG-SCOPED — a
+    // revoked connection does not surface (it is being removed/reconnected). One row per org by the
+    // UNIQUE(org_id, platform, workspace_id) + one Shortcut workspace per org in practice; LIMIT 1
+    // keeps the read deterministic regardless.
+    const res = await this.db.query<{ id: string; workspace_id: string; project_id: string | null }>(
+      `SELECT id, workspace_id, project_id
+         FROM platform_connection
+        WHERE org_id = $1 AND platform = 'shortcut' AND health <> 'revoked'
+        ORDER BY workspace_id LIMIT 1`,
+      [orgId]
+    );
+    const row = res.rows[0];
+    return row ? { connectionId: row.id, workspaceId: row.workspace_id, projectId: row.project_id } : null;
+  }
+
+  async deleteShortcutConnection(orgId: string, connectionId: string): Promise<boolean> {
+    // Remove the connection row; its connection_credential rows cascade via the FK ON DELETE CASCADE.
+    // ORG-SCOPED — a delete can only land on THIS org's connection (no cross-tenant removal).
+    const res = await this.db.query(
+      `DELETE FROM platform_connection WHERE org_id = $1 AND id = $2 AND platform = 'shortcut'`,
+      [orgId, connectionId]
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   // ── Cross-org resolvers (the ONLY unscoped tenant reads — slice 3b-2) ──────────

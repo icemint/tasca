@@ -579,6 +579,7 @@ async function main(): Promise<void> {
           connectionCredential: {
             masterKey: agentMasterKey,
             resolver: connectionCredentialResolver,
+            validator: liveAgentCredentialValidator(),
             registeredShortcutIds,
           },
         }

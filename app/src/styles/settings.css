@@ -103,3 +103,13 @@
 .audit-target { font-size: var(--fs-xs); color: var(--fg-3); }
 .audit-actor { font-size: var(--fs-xs); color: var(--fg-faint); margin-left: auto; }
 .audit-when { font-size: var(--fs-2xs); color: var(--fg-faint); flex: none; }
+
+/* ── Connections & credentials section ─────────────────────────────────────── */
+/* A lightweight group heading above the three credential cards (vendor / Shortcut / GitHub). */
+.pc-section-head { font-family: var(--font-display); font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-3); margin: 8px 0 -6px; }
+
+/* The Shortcut card: the bound secrets stack vertically; the webhook URL block + the action row reuse
+   the .vk-* treatment. The Test control (.conn-test / .conn-test-result) is shared from agent.css. */
+.sc-webhook { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.sc-actions { margin-top: 12px; }
+.vk-row + .vk-row { margin-top: 8px; }
