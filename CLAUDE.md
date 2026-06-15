@@ -733,43 +733,58 @@ The discipline: if a use case doesn't fit any of these, the architecture has a g
 - **One-paragraph description:** 
   - Tasca is the control plane for an **AI development workforce**. A user assembles a standing roster of named AI "employees" — *Elvis* on Claude, *Mona* on OpenAI, *Qwen-1* on a self-hosted local model — each with a **persistent native identity** inside the tools the team already uses (**Shortcut** first, then **GitHub Issues**, then **Linear**), governed by Tasca's **tier/capability routing engine** that matches task complexity to agent capability. Agents receive assigned tickets natively, work code in isolated git worktrees, open PRs, respond to review/webhooks, and run across projects 24/7. The three defensible wedges: persistent named multi-vendor identities, capability/tier routing, and the roster / "team of employees" model.
 - **Source of truth:** [`docs/Tasca-PRD-v1.0-FINAL.md`](docs/Tasca-PRD-v1.0-FINAL.md) (product) and [`docs/Tasca-Design-Brief-v1.0.md`](docs/Tasca-Design-Brief-v1.0.md) (design). The README is the elevator pitch.
-- **Pivot note:** Tasca was previously a project-delivery/kanban tool (a Vibe-Kanban fork). It pivoted to the agent-workforce platform — the kanban UI is dropped. Conceptual carry-over: the tier/capability routing engine, agent-as-member concept, cloud coordination layer, OAuth infra. The repo was reset to a clean slate for the pivot; implementation is **greenfield** (no code ported yet). 
+- **Build state:** the core engine, GitHub adapter (reference, end-to-end), Engineering Manager router, agent-detail surface, and multi-tenancy/RBAC are built and running in production at EltexSoft. See §19.4 for what's live vs. in-flight.
+- **History note:** Tasca was previously a project-delivery/kanban tool (a Vibe-Kanban fork). It pivoted to the agent-workforce platform — the kanban UI is dropped. The repo was reset to a clean slate for the pivot; carry-over was conceptual only (tier routing, agent-as-member model, OAuth infra).
 
 ### 19.2 Stack
 
 State versions specifically. "Latest" rots; pinned versions document reality.
 
-**Greenfield — not yet scaffolded.** The direction below comes from the PRD; treat it as *planned*, not built, until the Stage-1 scaffold lands. Pin exact versions here once it does.
+The core engine and GitHub adapter are built and running in production. Pin exact versions below as they stabilize; entries marked *planned* are not yet scaffolded.
 
-- **Execution layer:** fork of **Emdash**'s service layer (Apache-2.0) into a headless module — TypeScript/Node, PTY-based CLI-agent spawning, SQLite/Drizzle storage, SSH/SFTP remote execution. The de-Electron spike is Stage-1 work (PRD §4).
-- **Routing engine:** in-house (the crown jewel) — tier heuristics + a lightweight LLM classifier + atomic single-claim (PRD §3.2).
-- **Agent-identity primitive:** service-user + RBAC + capability profile + delegation, modeled on Devin's service-user RBAC (PRD §3.1).
-- **Platform adapters:** Shortcut (Agent API) → GitHub (per-customer GitHub App) → Linear (`actor=app`). **Jira is out of scope.**
-- **Frontend + design system:** delivered separately, token-driven, light+dark, WCAG-AA — see the design brief. Do not hand-roll the design system; it arrives as its own deliverable.
-- **CI:** GitHub Actions (planned).
+- **Language:** TypeScript / Node.js. pnpm monorepo with Turborepo.
+- **Backend packages:** `packages/domain`, `packages/routing`, `packages/identity`, `packages/coordination`, `packages/execution` (headless Emdash fork over `vendor/emdash` submodule — Apache-2.0), `packages/agent-runner`, `packages/broker`, `packages/anthropic-proxy`, `packages/adapters`, `packages/db`, `packages/auth`, `packages/contracts`.
+- **Storage:** PostgreSQL (primary, via Drizzle); the Emdash submodule uses SQLite internally.
+- **Frontend:** Astro app (`app/`) — token-driven design system, light + dark, WCAG-AA.
+- **Routing engine:** built in-house — heuristic tier estimation (`packages/routing/src/tier.ts`) + optional LLM classifier port (heuristics carry the no-key path) + atomic CAS claim.
+- **Agent-identity primitive:** `packages/identity` — `service_user`, `rbac_role`, `capability_profile`, `identity_binding`, delegation, append-only `audit_event`.
+- **Credential vault:** AES-256-GCM at rest, env-held master key (`TASCA_SECRET_STORE_KEY`), write-only API (fingerprint-only reads). Covers both org vendor keys (BYOK) and per-agent platform tokens.
+- **Platform adapters (built):** GitHub — reference adapter, end-to-end (intake, write-back, native App identity, connect). Shortcut — intake + webhook self-register done; write-back deferred.
+- **Platform adapters (planned):** Linear (`actor=app`) — reserved enum value only; not built.
+- **Engineering Manager:** distinct entity (not an agent) with its own sealed credential; requirements gate + routing dispatch + block-explanation. Shipped.
+- **Deploy:** Docker Compose + Coolify autodeploy; worker + non-root runner + egress allowlist proxy.
+- **CI:** GitHub Actions.
 
 ### 19.3 Local quality gate
 
 Concrete commands a fresh clone can run. Order matches §7.1 (fail fast on cheap steps).
 
-**Pending — no code yet.** Populate when the Stage-1 scaffold lands. Beyond the standard formatter → lint → typecheck → test → build chain, the design brief makes these CI gates **mandatory**:
+```bash
+pnpm install
+pnpm format:check          # prettier
+pnpm lint                  # eslint
+pnpm typecheck             # tsc --noEmit across all packages
+pnpm test                  # vitest unit tests (DATABASE_URL optional; DB-backed tests self-skip without it)
+pnpm build                 # production build
+```
 
-- **WCAG-AA contrast assertion** on every token pairing, both light and dark (rounding can cross the AA boundary — assert it, don't eyeball it).
-- **Hardcoded-color guard** — token-driven only; fail on any raw hex/rgb outside the token definitions.
-- **No-AI-mention guard** (§2) — banned-words grep over commits / PRs / comments.
+Integration tests that need Postgres require `DATABASE_URL` pointing at a local instance (or a Docker container). The CI no-AI-mention guard is a banned-words grep; see §2.
+
+The design brief adds these mandatory CI gates (partially wired; confirm before W4-S6 close):
+- **WCAG-AA contrast assertion** on every token pairing, both light and dark.
+- **Hardcoded-color guard** — token-driven only; fail on any raw hex/rgb outside token definitions.
 - **Status/tier-not-by-color-alone** — color-blind-safe pairing with label or shape.
-
-Principle: every command must be runnable from a fresh clone without further setup beyond the package install. If a step needs Docker, scaffolded fixtures, or env vars, document the prerequisite explicitly.
 
 ### 19.4 Current release pointers
 
-- **Live version:** none — pre-release (no tagged version yet; substantial build complete — engine + GitHub adapter + Wave-2 multi-tenancy shipped).
-- **In flight:** Wave 3 — remaining PRD surfaces (PM-assistant, Shortcut parity, Linear adapter, usage metering/billing, audit/keys). Stages 1–2 shipped (GitHub is the reference adapter, end-to-end); Waves 1–2 complete (security gate + multi-tenancy through #258). Stage-1 advance benchmark (Story → reviewed PR under native identity) met on GitHub.
+- **Live version:** none — pre-release (no tagged version yet). In production at EltexSoft. Shipped through PR #372 (2026-06-15 session).
+- **What's built (as of #372):** engine + GitHub adapter (end-to-end, reference) + Engineering Manager router + agent-detail page (capability editor, per-agent platform credentials, editable identity + agent.md, live Pause/Resume) + task titles on all surfaces + board + BYOK vault + multi-tenancy/RBAC (Waves 1–2) + Shortcut intake + Coolify autodeploy.
+- **In flight / next:** Wave 3 remaining surfaces — Shortcut write-back (#321), Linear adapter (W3-S3), usage metering (#336 / W3-S4), cost ceilings (W3-S5), billing (W3-S6), audit surfacing (W3-S7), API-key management (W3-S8). See the gap analysis Part C + `docs/Execution-Roadmap-v3-OSS.md` for sequencing.
 - **PRD:** ./docs/Tasca-PRD-v1.0-FINAL.md *(canonical — what the product does)*
 - **Design brief:** ./docs/Tasca-Design-Brief-v1.0.md *(canonical — how it looks/feels)*
-- **Definition of done:** ./docs/PRD-Completion-Gap-Analysis.md *(the full-completion checklist + Wave 3/4 slice plan, signed off 2026-06-10)*
-- **Roadmap:** the gap analysis Part C is the de-facto wave roadmap; PRD §8 holds the original Stages 1–5.
-- **CHANGELOG:** ./CHANGELOG.md *(not yet created)*
+- **Definition of done:** ./docs/PRD-Completion-Gap-Analysis.md *(the full-completion checklist + Wave 3/4 slice plan, signed off 2026-06-10, annotations below current as of 2026-06-15)*
+- **Roadmap (sequencing):** ./docs/Execution-Roadmap-v3-OSS.md *(single-tenant OSS first; v2 is the deferred multi-tenant/hosted-tier spec)*
+- **CHANGELOG:** ./CHANGELOG.md
 - **WIP file:** ./WIP.md
   - *Only exists when a session ended mid-task; deleted on next merge. See §17.1.*
 

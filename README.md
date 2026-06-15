@@ -13,15 +13,17 @@ has a name, a capability profile, a work history, and its own first-class presen
 Shortcut, GitHub, and Linear. You manage them like people — pause, reassign, escalate,
 review — with full visibility into what each one is doing and why it was routed there.
 
-> **Status: build in progress, pre-release.** The engine is built and tested — routing,
-> agent-identity, multi-tenancy + RBAC, coordination, credential isolation, agent-runner —
-> and **GitHub is a complete end-to-end adapter** (Stages 1–2 shipped). Wave 3 is adding the
-> remaining PRD surfaces (PM-assistant, Shortcut/Linear parity, usage/billing, audit/keys);
-> Wave 4 the deepest isolation + design-surface completion. The source of truth for *what
-> we're building* is [`docs/Tasca-PRD-v1.0-FINAL.md`](docs/Tasca-PRD-v1.0-FINAL.md); for *how
-> it looks and feels*, [`docs/Tasca-Design-Brief-v1.0.md`](docs/Tasca-Design-Brief-v1.0.md);
-> for *what's done vs. remaining*, the
-> [completion gap analysis](docs/PRD-Completion-Gap-Analysis.md).
+> **Status: build in progress, pre-release — production deployment for EltexSoft is live.**
+> The core engine, agent-detail surface, and Engineering Manager router are built. What works today:
+> capability-profile editing (tier range, structured specialties, concurrency limit, cost ceiling),
+> per-agent platform credentials sealed at rest, editable agent identity + `agent.md` description,
+> task titles surfaced on board cards and in agent recent-work, and EM-as-router (assign to the EM →
+> it routes by tier + specialty + load to the least-loaded qualified agent). **GitHub is the reference
+> adapter, end-to-end.** Shortcut intake is live; write-back, Linear, usage metering, billing, and the
+> per-agent namespace sandbox remain in progress. For the precise done / partial / not-built state of
+> every surface, see the [completion gap analysis](docs/PRD-Completion-Gap-Analysis.md). For *what
+> we're building*, [`docs/Tasca-PRD-v1.0-FINAL.md`](docs/Tasca-PRD-v1.0-FINAL.md); for *how it looks
+> and feels*, [`docs/Tasca-Design-Brief-v1.0.md`](docs/Tasca-Design-Brief-v1.0.md).
 
 ---
 
@@ -54,31 +56,36 @@ calm. The credibility is in the restraint.
 
 ## How it works
 
-The end-to-end loop, proven first on Shortcut + Claude:
+The end-to-end loop, proven on GitHub (reference adapter):
 
 ```
-  Story assigned to "Elvis" in Shortcut
-            │  (outgoing webhook, HMAC-SHA-256)
+  Issue assigned to the Engineering Manager (EM)
+            │  (GitHub webhook, HMAC-SHA-256)
+            ▼
+  EM requirements gate
+    reviews the task → clarifies if vague → approves for routing
+            │
             ▼
   Tasca routing engine
-    estimate tier  ──►  match capability profile  ──►  atomic claim (one agent)
+    estimate tier  ──►  match capability profile + specialty  ──►  atomic claim (one agent)
+    (least-loaded qualified agent wins; both per-agent and per-repo concurrency limits apply)
             │
             ▼
   Execution (isolated git worktree)
-    Claude Code runs  ──►  commits  ──►  opens PR  ──►  CI checks
+    agent's agent.md shapes the run ──►  commits  ──►  opens PR  ──►  CI checks
             │
             ▼
-  Status back to Shortcut as the agent
-    comment + state update + PR link
+  Status back via the agent's native platform identity
+    PR link + state update  (board column derived from platform reality — Tasca never owns issue state)
             │
             ▼
-  Escalation if it fails (breaker → re-tier or human review)
+  Escalation if it fails (breaker → needs_attention → operator reviews)
 ```
 
-The routing decision is always **inspectable** — estimated tier, eligible agents, and
-the match are shown for every task. The deterministic engine and atomic claim are the
-binding source of truth; the optional PM-assistant only ever *advises*, so it can never
-irreversibly mis-assign work.
+The routing decision is always **inspectable** — estimated tier, eligible agents, the
+winning match, and the "Assigned by EM" attribution are shown for every task. The
+deterministic engine and atomic claim are the binding source of truth; the optional
+PM-assistant (planned) will only ever *advise*, so it can never irreversibly mis-assign work.
 
 ---
 
@@ -114,27 +121,47 @@ offsets the API's relative freshness. **Jira is out of scope** (no adapter, no c
 
 ---
 
+## What works today
+
+These surfaces are built and running in production:
+
+- **Routing + execution engine** — tier estimation, capability-profile matching, atomic single-claim, per-agent and per-repo concurrency limits, breaker/escalation to `needs_attention`. GitHub is the reference adapter, end-to-end (intake, write-back, native identity, connection).
+- **Engineering Manager (EM) router** — assign work to the EM; it gates on a requirements review, routes by tier + specialty + load, dispatches to the least-loaded qualified agent, surfaces staffing-gap and busy blocks with explanations. "Assigned by EM" is visible on every task.
+- **Agent-detail page** — capability editor (tier range, structured taxonomy specialties, concurrency limit, cost ceiling), per-agent platform credentials (GitHub + Shortcut; sealed at rest, fingerprint-only reads, connection-test-on-entry), editable agent identity (name/vendor/model/avatar), `agent.md` description that shapes the agent's run, live Pause/Resume.
+- **Task titles** — persisted and surfaced on board cards, task inspector, and agent recent-work. Raw UUIDs no longer appear on those surfaces.
+- **Board** — 5 operator columns (Backlog, Blocked, In Progress, PR Opened, Completed); GitHub-merge triggers auto-complete. Board is a read-only projection of platform reality; Tasca never owns issue state.
+- **Shortcut intake** — assignment webhook received + verified; write-back (status/PR link) is deferred pending token-model confirmation.
+- **Multi-tenancy + RBAC** — org scoping, three roles (owner-admin / admin / user), BYOK credential vault (AES-256-GCM, env-held master key), Coolify autodeploy.
+- **Operator controls** — sole-owner removal guard, stuck-task force-reset, collapsible nav.
+
+## What is not yet built
+
+The following are in-flight or planned — do not treat them as done:
+
+- Model is a free-text field, not a validated vendor-model dropdown (#322).
+- Local-model / Ollama execution is not proven end-to-end (#335).
+- Per-agent success rate is stored but not yet computed from task history (#326).
+- Shortcut identity handle display only — not auto-fetched (#321).
+- Roster "Add agent" is an inline form, not the full hire wizard (#323).
+- Usage metering, billing, cost-ceiling enforcement, and budget alerts are not built (#336).
+- Agent-page current-task display and roster tile still show the task UUID in some paths (#325, partial).
+- Settings vendor-keys card is Anthropic-only (#333, partial).
+- LLM-derived specialty routing and capacity-freed re-drive are filed fast-follows (#370, #368).
+- Linear adapter does not exist (reserved enum value only).
+- PM-assistant advisory engine and view are not built.
+- Per-agent OS namespace sandbox (the gate for untrusted multi-tenant) is not built.
+
 ## Roadmap
 
 Delivery is staged so each stage stands on its own and proves the next.
 
-- **Stage 1 — Foundation + Shortcut + Claude.** Headless Emdash fork (de-Electron spike),
-  the Devin-modeled identity primitive, the Shortcut adapter, one Claude-backed agent, and
-  tier routing v1. *Wedge proof: a Story assigned to Elvis reliably yields a reviewed PR
-  under the agent's native identity, end-to-end, in one project.*
-- **Stage 2 — GitHub adapter + PR/review loop + escalation.** Per-customer GitHub App,
-  issue/PR/review/check webhooks, the escalation breaker, multi-agent-per-project with
-  same-repo serialization.
-- **Stage 3 — Linear + multi-vendor + BYO-local.** Linear `actor=app` sessions, OpenAI
-  agents, self-hosted local models, capability profiles driven by measured success rate.
-- **Stage 4 — Roster management + multi-project + 24/7 ops.** Roster CRUD, capability-profile
-  editor, deploy one agent across many repos/tools, cloud scheduler/monitor, the monitoring
-  dashboard.
-- **Stage 5 — PM-assistant.** Advisory triage, decomposition, distribution, and reporting.
+- **Stage 1 — Foundation + Shortcut + Claude.** Headless Emdash fork, the identity primitive, the Shortcut adapter, one Claude-backed agent, and tier routing v1. *Shipped* (Shortcut write-back is the one open residual).
+- **Stage 2 — GitHub adapter + PR/review loop + escalation.** Per-customer GitHub App, issue/PR/review/check webhooks, the escalation breaker, multi-agent-per-project with same-repo serialization. *Shipped* (reference adapter, end-to-end).
+- **Stage 3 — Linear + multi-vendor + BYO-local.** Linear `actor=app` sessions, OpenAI agents, self-hosted local models. *Partial* — routing and identity are vendor-agnostic, but no OpenAI or local-model agent is proven end-to-end; Linear does not exist yet.
+- **Stage 4 — Roster management + multi-project + 24/7 ops.** Roster dashboard is done (real data). Roster CRUD, capability-profile editor (hire wizard), cross-repo deploy, cloud scheduler/health-monitor are not yet built.
+- **Stage 5 — PM-assistant.** Advisory triage, decomposition, distribution, and reporting. *Not built.*
 
-Stages 1–2 are shipped (GitHub is the reference adapter, end-to-end); Stages 3–5 are in
-progress across Waves 3–4. The product, docs, and site represent unshipped work honestly as
-such. See the [completion gap analysis](docs/PRD-Completion-Gap-Analysis.md) for the precise
+See the [completion gap analysis](docs/PRD-Completion-Gap-Analysis.md) for the precise
 done / partial / not-built state of every surface.
 
 ---

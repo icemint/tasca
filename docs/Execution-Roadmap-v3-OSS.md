@@ -2,7 +2,7 @@
 
 > **Status:** decided 2026-06-12. The canonical **sequencing** source of truth.
 > **Supersedes the sequencing** of [`Execution-Roadmap-v2.md`](Execution-Roadmap-v2.md). **v2 is retained** as the **spec for the deferred multi-tenant / hosted tier** (the quarantined layer). [`PRD-Completion-Gap-Analysis.md`](PRD-Completion-Gap-Analysis.md) (#259) stays the **engine definition-of-done**.
-> **Build nothing from this doc until the maintainer confirms the restructured shape.**
+> **Updated 2026-06-15:** items marked ✅ below reflect PRs #354–#372 (agent-detail + EM-as-router session).
 
 ---
 
@@ -74,6 +74,7 @@ The "org" concept **collapses to "the instance"** in OSS. 3.5-B becomes:
 > Build order. Each: architect → slice → adversarial panel → merge on green. Org = the instance throughout.
 
 - [x] **3.5-A — BYOK vault** (shipped #279) — reframed as **self-hosted config**: the operator's own vendor keys for their instance. (Not custodial-customer-credentials; the custodial threat framing moves to the hosted tier.)
+- [x] **Per-agent platform credentials** (shipped #354–#372) — per-agent sealed tokens (GitHub + Shortcut) stored in the same vault pattern; write-only API, fingerprint-only reads, connection-test-on-entry. Extensible provider schema (one new file per additional platform).
 - [ ] **3.5-A.2 — BYOK consumer wiring** (in progress) — single-tenant: per-instance classifier + agent resolve **the instance's** vault key per-task; delete the server-key fallback; no-key → fail-closed with the honest "no API key configured — ask an admin" UX. `Closes #N` shipped (#281). DoD: metering re-test populates `usage_event` (classifier + agent).
 - [ ] **3.5-B — Instance identity + roles** — instance config (name/team) + 3 roles + the single-org cut (resolveOrg→instance; unwire multi-org routes). **No** vanity/slug/multi-org.
 - [ ] **3.5-B.2 — Project abstraction** — `org→project` becomes **instance→project**. Central to OSS: one team, many projects, each a platform workflow. Defines the project entity, project-scoped tasks/agents/connections, the project switcher (within the instance).
@@ -82,9 +83,12 @@ The "org" concept **collapses to "the instance"** in OSS. 3.5-B becomes:
 - [ ] **3.5-E — Metering (instance BYOK key)** — agent + classifier on the instance key → `usage_event`; the operator's own cost/usage visibility (no billing).
 
 Then:
-- [ ] **Platform breadth** — Shortcut, Linear via the **projection model** + **workflow-as-strategy** adapters + **manual-agent-token-in-vault** (the operator stores the platform agent token in the same vault; no custodial concern — it's their token). Each adapter projects native state, links work via native PR/branch mechanisms, no parallel state machine.
-- [ ] **Dockerization (first-class deliverable, §5)**.
-- [ ] **OSS readiness** — README/quickstart, LICENSE, clean default config, `docker run` story, contribution docs.
+- [x] **Engineering Manager (EM) as router** (shipped #354–#372) — assign to the EM; requirements gate → routes by tier + specialty + load to the least-loaded qualified agent; dual concurrency limits (per-agent + per-repo); block explanations (staffing-gap / transient-busy / repo-at-capacity); "Assigned by EM" attribution; operator override. Specialty derivation is a deterministic heuristic today; LLM-derived specialty is fast-follow #370.
+- [x] **Agent-detail page** (shipped #354–#372) — capability editor (tier range, structured taxonomy specialties, concurrency limit, cost ceiling, version-CAS), per-agent platform credentials (sealed at rest, write-only, connection-test), editable identity + agent.md. Agent.md passed as `--append-system-prompt` at dispatch.
+- [x] **Task titles persisted** (shipped #354–#372) — stored at intake, surfaced on board cards, task inspector, and agent recent-work.
+- [ ] **Platform breadth** — Shortcut, Linear via the **projection model** + **workflow-as-strategy** adapters + **manual-agent-token-in-vault** (the operator stores the platform agent token in the same vault; no custodial concern — it's their token). Each adapter projects native state, links work via native PR/branch mechanisms, no parallel state machine. Shortcut intake done; write-back deferred (#321).
+- [ ] **Dockerization (first-class deliverable, §5)** — shipped (`make up`, `SELF_HOST.md`). ✅
+- [ ] **OSS readiness** — README/quickstart updated; CHANGELOG created; ongoing.
 
 ---
 
