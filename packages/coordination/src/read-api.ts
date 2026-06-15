@@ -363,6 +363,7 @@ async function dispatch(
       sendJson(res, 200, {
         id: task.id,
         externalStoryId: task.externalStoryId,
+        title: task.title,
         platform: task.platform,
         status: task.status,
         tierEstimate: task.tierEstimate ? task.tierEstimate.tier : null,
