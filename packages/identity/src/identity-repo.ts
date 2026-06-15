@@ -32,8 +32,8 @@ export interface AgentRecord {
   avatarUrl: string | null;
   vendor: string;
   model: string;
-  /** Instructions/definition (Anthropic agent.md markdown). Stored; not yet wired
-   *  into the run — see issue 362. */
+  /** Instructions/definition (Anthropic agent.md markdown). Threaded into the run as the
+   *  agent's `--append-system-prompt` persona by coordination's dispatch path (issue 362). */
   description: string | null;
   status: AgentStatus;
   rbacRoleId: string | null;
@@ -68,8 +68,8 @@ export type AgentWriteOutcome =
  *  the SAME agent-version CAS, atomically with the capability columns. Preserve-if-absent: an omitted
  *  field is left unchanged. The NOT-NULL columns (name/vendor/model) can only be set, never cleared;
  *  the nullable ones (avatarUrl/description) accept an explicit null/'' to CLEAR vs omission to preserve.
- *  `description` is the agent's instructions/definition (agent.md markdown) — stored, not yet wired
- *  into the run (see issue 362). */
+ *  `description` is the agent's instructions/definition (agent.md markdown) — threaded into the run
+ *  as the agent's `--append-system-prompt` persona by coordination's dispatch path (issue 362). */
 export interface CapabilityProfilePatch {
   maxTier: CapabilityProfile['maxTier'];
   concurrencyLimit: number | null;

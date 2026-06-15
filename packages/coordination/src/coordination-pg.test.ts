@@ -131,6 +131,10 @@ run('coordination (Postgres) — persistence + exactly-one dispatch', () => {
         const su = await identity.getServiceUser(id);
         return su?.principalId ?? null;
       },
+      async descriptionFor(id: string) {
+        const found = await identity.getAgentWithProfile(id);
+        return found?.agent.description ?? null;
+      },
     };
   }
 

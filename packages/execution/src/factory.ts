@@ -271,6 +271,7 @@ export function createExecution(options: CreateExecutionOptions = {}): Execution
         command = buildClaudeCommand({
           prompt: input.prompt,
           ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
+          ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
         });
       } else if (input.command !== undefined) {
         command = input.command;

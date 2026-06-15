@@ -37,6 +37,14 @@ const MAX_PROMPT_CHARS = 60000;
 const TRUNCATION_MARKER = '\n\n[...truncated]';
 
 /**
+ * Cap the agent's standing persona (the operator-authored agent.md `description`)
+ * passed via `--append-system-prompt`. Smaller than the prompt cap — a persona is a
+ * paragraph or two, not a whole task body — but still bounded so a pathological
+ * description can't bloat the command line past ARG_MAX.
+ */
+const MAX_SYSTEM_PROMPT_CHARS = 20000;
+
+/**
  * Build the shell command line that runs `claude` non-interactively (`-p` prints
  * and exits) over a single prompt. Permission handling is explicit: by default
  * the run is restricted to an allowlist of tools; `skipPermissions` opts into the
@@ -49,6 +57,16 @@ export function buildClaudeCommand(opts: {
   prompt: string;
   allowedTools?: string;
   skipPermissions?: boolean;
+  /**
+   * The agent's standing persona (its agent.md `description`), passed through as
+   * `--append-system-prompt`. This is ADDITIVE to `-p`: the agent gets BOTH its
+   * persona (system prompt) AND the specific task (`-p`), and STILL auto-loads the
+   * repo's own CLAUDE.md/AGENTS.md. Unlike the prompt — which is built from the
+   * attacker-controlled issue title/body — this value is OPERATOR-authored (the
+   * roster owner writes it), so it is lower risk; it is still capped + shellQuote'd.
+   * Omitted entirely (no flag) when absent or empty/whitespace.
+   */
+  appendSystemPrompt?: string;
 }): string {
   let prompt = opts.prompt;
   if (prompt.length > MAX_PROMPT_CHARS) {
@@ -56,6 +74,19 @@ export function buildClaudeCommand(opts: {
   }
 
   const argv = ['claude', '-p', prompt, '--output-format', 'text'];
+
+  // Standing persona — emitted only when present so a null/empty description leaves
+  // the command byte-identical to the no-persona run. Capped (truncate, not reject)
+  // like the prompt; shellQuote at the end keeps it a single literal token.
+  const persona = opts.appendSystemPrompt?.trim();
+  if (persona) {
+    const capped =
+      persona.length > MAX_SYSTEM_PROMPT_CHARS
+        ? persona.slice(0, MAX_SYSTEM_PROMPT_CHARS) + TRUNCATION_MARKER
+        : persona;
+    argv.push('--append-system-prompt', capped);
+  }
+
   if (opts.skipPermissions) {
     argv.push('--dangerously-skip-permissions');
   } else {

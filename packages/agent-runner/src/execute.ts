@@ -62,7 +62,7 @@ export function makeRunnerExecute(deps: RunnerExecuteDeps): ExecuteJob {
       //    socket). The prompt is the only attacker-influenced value; the factory
       //    POSIX-quotes it into the claude command.
       try {
-        await spawnAndAwait(deps.execution, { id: payload.taskId, prompt: payload.prompt, cwd: worktree.worktreePath }, timeoutMs, control.signal);
+        await spawnAndAwait(deps.execution, { id: payload.taskId, prompt: payload.prompt, ...(payload.appendSystemPrompt ? { appendSystemPrompt: payload.appendSystemPrompt } : {}), cwd: worktree.worktreePath }, timeoutMs, control.signal);
       } catch (err) {
         // An operator cancel aborts the run (the heartbeat trips control.signal). That's a
         // clean interrupt — NOT a retryable failure — so the breaker isn't driven and no PR

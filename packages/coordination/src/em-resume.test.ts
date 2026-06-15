@@ -125,6 +125,7 @@ function makeDeps(store: FakeStore, gateSeen?: TaskAssignedEvent[]): Orchestrati
       async listCandidates(): Promise<MatchCandidate[]> { return []; },
       async findHiredAgentByName() { return null; },
       async principalIdFor() { return null; },
+      async descriptionFor() { return null; },
     },
     audit: { async record() {} },
     content: { async fetch() { return STUB_CONTENT; } },

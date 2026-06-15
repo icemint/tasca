@@ -158,6 +158,11 @@ class IdentityAgentDirectory implements AgentDirectory {
     const su = await this.identity.getServiceUser(agentId);
     return su?.principalId ?? null;
   }
+
+  async descriptionFor(agentId: string): Promise<string | null> {
+    const found = await this.identity.getAgentWithProfile(agentId);
+    return found?.agent.description ?? null;
+  }
 }
 
 /** An AuditSink backed by the @tasca/identity append-only audit trail. */
